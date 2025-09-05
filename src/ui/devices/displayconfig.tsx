@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { ReactNode } from "react"
-import { COLOR_MODE, colorToName } from "../../common/utility"
+import { COLOR_MODE } from "../../common/utility"
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome"
 import {
   faDisplay,
@@ -23,8 +23,8 @@ export const DisplayConfig = (props: { updateDisplay: UpdateDisplay }) => {
   }
 
   const getColorName = (mode: number): string => {
-    const colorNames = ['color', 'green', 'amber', 'white', 'nofringe', 'inverse']
-    const colorKey = colorNames[mode] || 'color'
+    const colorNames = ["color", "green", "amber", "white", "nofringe", "inverse"]
+    const colorKey = colorNames[mode] || "color"
     return t(`colors.${colorKey}`)
   }
 

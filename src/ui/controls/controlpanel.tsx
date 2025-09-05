@@ -4,6 +4,7 @@ import ConfigButtons from "./configbuttons"
 import ControlButtons from "./controlbuttons"
 import DebugButtons from "./debugbuttons"
 import FullScreenButton from "./fullscreenbutton"
+import LanguageSwitch from "./languageswitch"
 import KeyboardButtons from "./keyboardbuttons"
 import { useState } from "react"
 import { getPreferenceFirstRunMinimal, setPreferenceFirstRunMinimal } from "../localstorage"
@@ -35,6 +36,7 @@ const ControlPanel = (props: DisplayProps) => {
           <ControlButtons {...props} />
           <DebugButtons {...props} />
           <FullScreenButton />
+          <LanguageSwitch />
         </span>
         <ConfigButtons {...props} />
         <KeyboardButtons {...props} />

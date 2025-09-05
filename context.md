@@ -366,3 +366,33 @@ export const useTranslation = () => {
 本專案成功為 Apple2TS 實作了完整的繁體中文支援，不僅解決了中文使用者的語言障礙，也建立了一個可擴展的多語言架構。透過系統性的分析、設計和實作，達成了高品質的國際化解決方案，為專案的國際化發展奠定了堅實基礎。
 
 這個實作展示了如何在大型 React/TypeScript 專案中有效實施國際化，提供了完整的技術解決方案和實作經驗，對類似專案具有重要的參考價值。
+
+---
+
+## 🎯 Tour 導覽系統國際化（補充說明）
+
+本階段已將引導式導覽（Guided Tour：Main、Settings、Debug）全面改為使用 i18n 動態翻譯，並支援即時語言切換。
+
+### 主要變更
+- 重構導覽檔案：
+  - `src/ui/tours/tourmain.tsx` 以 `getTourMain()` 動態產生翻譯內容
+  - `src/ui/tours/toursettings.tsx` 以 `getTourSettings()` 動態產生翻譯內容（新）
+  - `src/ui/tours/tourdebug.tsx` 以 `getTourDebug()` 動態產生翻譯內容（新）
+  - `src/ui/tours/runtour.tsx` 整合 i18n，導覽選單與按鈕文案可隨語言切換
+- 語言檔擴充：新增 27 筆以上與導覽相關的字串（含介面按鈕 Back/Next/Finish/Close 與導覽選單項目）
+  - `src/i18n/languages/en.ts`
+  - `src/i18n/languages/zh-TW.ts`
+
+### 功能與體驗
+- 導覽步驟內容改為以 `i18n.t()` 取得字串；切換語言後重新讀取步驟即可生效
+- 文字內插入平台鍵位說明（{modKey}）會自動以 ⌘（Mac）或 Alt（Windows/Linux）呈現
+- 觸控裝置情境自動調整部分內容顯示（如鍵盤與箭頭鍵提示）
+
+### 品質驗證
+- 全專案測試通過（347 測試）
+- ESLint 全數通過，修正型別與未使用變數問題
+- 生產建置（vite build）成功
+
+### 維護建議
+- 未來新增語言時，只需擴充 `tour` 區段的鍵值與介面按鈕字串
+- 若需要新增導覽類型，建議依既有模式新增 `getTourXxx()` 並在 `runtour.tsx` 加入選單與切換邏輯

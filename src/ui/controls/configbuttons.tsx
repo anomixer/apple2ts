@@ -21,7 +21,6 @@ import { audioEnable, isAudioEnabled } from "../devices/audio/speaker"
 import { SerialPortSelect } from "../devices/serial/serialselect"
 import { SpeedDropdown } from "./speeddropdown"
 import { getCapsLock, getArrowKeysAsJoystick, getUseOpenAppleKey, setUseOpenAppleKey, setArrowKeysAsJoystick, getTheme } from "../ui_settings"
-import LanguageSwitch from "./languageswitch"
 import { useTranslation } from "../../i18n/useTranslation"
 
 const isTouchDevice = "ontouchstart" in document.documentElement
@@ -90,9 +89,6 @@ const ConfigButtons = (props: DisplayProps) => {
 
     <MachineConfig updateDisplay={props.updateDisplay} />
 
-    {/* 語言切換按鈕 */}
-    <LanguageSwitch />
-
     <button className="push-button"
       id="tour-theme-button"
       title={`${themeToName(getTheme())} ${t("config.theme")}`}
@@ -126,7 +122,7 @@ const ConfigButtons = (props: DisplayProps) => {
       title={t("config.resetSettings")}
       onClick={() => { 
         if (window.confirm(t("messages.confirmReset"))) {
-          resetPreferences(); 
+          resetPreferences() 
           props.updateDisplay() 
         }
       }}>

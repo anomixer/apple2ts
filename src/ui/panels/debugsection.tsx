@@ -58,7 +58,7 @@ const DebugSection = (props: { updateDisplay: UpdateDisplay }) => {
   useMemo(() => {
     forceRefresh()
     setHelpTextCrc(newHelpTextCrc)
-  }, [isFlyoutOpen])
+  }, [newHelpTextCrc])
 
   return (
     <Flyout

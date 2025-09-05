@@ -1,15 +1,17 @@
 import Joyride, { ACTIONS, CallBackProps, EVENTS, Step } from "react-joyride"
 import { useGlobalContext } from "../globalcontext"
-import { tourMain } from "./tourmain"
-import { tourSettings } from "./toursettings"
-import { tourDebug } from "./tourdebug"
+import { getTourMain } from "./tourmain"
+import { getTourSettings } from "./toursettings"
+import { getTourDebug } from "./tourdebug"
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome"
 import { faGlobe } from "@fortawesome/free-solid-svg-icons"
 import { DropdownButton } from "../controls/dropdownbutton"
+import { useTranslation } from "../../i18n/useTranslation"
 
 const RunTour = () => {
   const { runTour: runTour, setRunTour: setRunTour,
     tourIndex: tourIndex, setTourIndex: setTourIndex } = useGlobalContext()
+  const { t } = useTranslation()
 
   const handleJoyrideCallback = (data: CallBackProps) => {
     const stepCallbackFunction = data.step.data as StepCallbackFunction
@@ -43,13 +45,13 @@ const RunTour = () => {
 
   switch (runTour.toLowerCase()) {
     case "main":
-      tour = tourMain
+      tour = getTourMain()
       break
     case "debug":
-      tour = tourDebug
+      tour = getTourDebug()
       break
     case "settings":
-      tour = tourSettings
+      tour = getTourSettings()
       break
     default:
       break
@@ -75,11 +77,11 @@ const RunTour = () => {
   }
 
   const locale = {
-    back: "Back",
-    close: "Close",
-    last: "Finish",
-    next: "Next",
-    skip: "Close",
+    back: t("tour.back"),
+    close: t("tour.close"),
+    last: t("tour.last"),
+    next: t("tour.next"),
+    skip: t("tour.skip"),
   }
 
   return (
@@ -112,10 +114,10 @@ const RunTour = () => {
       }
       <DropdownButton 
         currentIndex = {-1}
-        itemNames = {["Guided Tour: Main", "Guided Tour: Settings", "Guided Tour: Debug"]}
+        itemNames = {[t("tour.mainTour"), t("tour.settingsTour"), t("tour.debugTour")]}
         closeCallback = {selectGuidedTour}
         icon = {<FontAwesomeIcon icon={faGlobe}/>}
-        tooltip = "Guided Tour"
+        tooltip = {t("tour.guidedTour")}
       />
     </span>
   )

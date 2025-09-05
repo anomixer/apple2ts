@@ -8,7 +8,7 @@ import { getTheme } from "./ui_settings"
 import { useTranslation } from "../i18n/useTranslation"
 
 const App = () => {
-  const { language } = useTranslation() // 確保語言變更時重新渲染
+  useTranslation() // 確保語言變更時重新渲染
   const [updateHgr, setUpdateHgr] = useState(false)
   const [hgrMagnifier, setHgrMagnifier] = useState([-1, -1])
   const [updateBreakpoint, setUpdateBreakpoint] = useState(0)

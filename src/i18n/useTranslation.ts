@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { i18n, Language } from './index'
+import { useState, useEffect } from "react"
+import { i18n, Language } from "./index"
 
 export const useTranslation = () => {
   const [language, setLanguage] = useState<Language>(i18n.getLanguage())
@@ -9,10 +9,10 @@ export const useTranslation = () => {
       setLanguage(event.detail)
     }
     
-    window.addEventListener('languageChanged', handleLanguageChange as EventListener)
+    window.addEventListener("languageChanged", handleLanguageChange as EventListener)
     
     return () => {
-      window.removeEventListener('languageChanged', handleLanguageChange as EventListener)
+      window.removeEventListener("languageChanged", handleLanguageChange as EventListener)
     }
   }, [])
   

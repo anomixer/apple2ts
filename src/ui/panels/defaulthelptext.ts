@@ -18,7 +18,7 @@ ${t("help.startTour")} <a href="/?tour=main">${tourSVG}</a> ${t("help.startTourA
 `
 
   if (isTouchDevice) {
-    if (i18n.getLanguage() === 'zh-TW') {
+    if (i18n.getLanguage() === "zh-TW") {
       helpText += `\n行動平台：
 點擊螢幕以顯示鍵盤。
 按方向鍵、ESC 或 Tab 按鈕將這些按鍵發送到模擬器。
@@ -34,7 +34,7 @@ ${t("help.ctrlLock")}
 ${t("help.appleKeys")}`
     }
   } else {
-    if (i18n.getLanguage() === 'zh-TW') {
+    if (i18n.getLanguage() === "zh-TW") {
       helpText += `\n<b>${t("help.keyboardShortcuts")}</b>
 ${keyMod}B 啟動              ${arrowMod}1 1 MHz (正常速度)
 ${keyMod}C 複製螢幕         ${arrowMod}2 2 MHz
@@ -63,7 +63,7 @@ Closed Apple: press Right Alt/Option`
     }
   }
 
-  if (i18n.getLanguage() === 'zh-TW') {
+  if (i18n.getLanguage() === "zh-TW") {
     helpText += `
 
 <b>${t("help.diskImages")}</b> hdv, 2mg, dsk, woz, po, do, bin, bas
@@ -125,6 +125,6 @@ tour=main|debug|settings
 export let defaultHelpText = getDefaultHelpText()
 
 // 監聽語言變更事件，更新幫助文字
-window.addEventListener('languageChanged', () => {
+window.addEventListener("languageChanged", () => {
   defaultHelpText = getDefaultHelpText()
 })
