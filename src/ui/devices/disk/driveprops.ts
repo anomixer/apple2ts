@@ -282,6 +282,8 @@ export const handleSetDiskFromURL = async (url: string,
     }
 
     if (buffer) {
+      // Reset all disk drives before loading new disk (same as handleSetDiskFromFile)
+      resetAllDiskDrives()
       handleSetDiskOrFileFromBuffer(index, buffer, name, cloudData || null, null)
     } else {
       // $TODO: Add error handling
