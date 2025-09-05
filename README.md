@@ -4,7 +4,7 @@ Created by Chris Torrence (chris<at>ct6502<dot>org), with significant contributi
 
 ## 🌐 多語言支援 (Multilingual Support)
 
-**[📖 中文化說明 (Chinese Internationalization Guide)](readme-i18n.md)**
+**[📖 中文化說明 (Chinese Internationalization Guide)](README-I18N.md)**
 
 Apple2TS now supports multiple languages including Traditional Chinese (繁體中文)! Click the link above for detailed information about internationalization features and usage.
 
