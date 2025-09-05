@@ -365,8 +365,13 @@ const resetAllDiskDrives = () => {
 export const handleSetDiskFromFile = async (disk: string,
   updateDisplay: UpdateDisplay, driveIndex: number = 0) => {
   let data: ArrayBuffer
+  
+  // Get the base URL for the application
+  const base = import.meta.env.BASE_URL || '/'
+  const diskUrl = base + 'disks/' + disk
+  
   try {
-    const res = await fetch("/disks/" + disk)
+    const res = await fetch(diskUrl)
     data = await res.arrayBuffer()
   } catch {
    return
@@ -375,8 +380,9 @@ export const handleSetDiskFromFile = async (disk: string,
   handleSetDiskData(driveIndex, new Uint8Array(data), disk, null, null, -1)
   passSetRunMode(RUN_MODE.NEED_BOOT)
   const helpFile = replaceSuffix(disk, "txt")
+  const helpUrl = base + 'disks/' + helpFile
   try {
-    const help = await fetch("/disks/" + helpFile, { credentials: "include", redirect: "error" })
+    const help = await fetch(helpUrl, { credentials: "include", redirect: "error" })
     let helptext = "<Default>"
     if (help.ok) {
       helptext = await help.text()
