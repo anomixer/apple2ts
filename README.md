@@ -1,6 +1,12 @@
 # Apple2TS - Apple II Emulator in Typescript
 
-Created by Chris Torrence (chris&lt;at&gt;ct6502&lt;dot&gt;org), with significant contributions from Michael Morrison (codebythepound&lt;at&gt;gmail&lt;dot&gt;com). Thanks also to the Apple II community for feedback, bug reports, and feature requests.
+Created by Chris Torrence (chris<at>ct6502<dot>org), with significant contributions from Michael Morrison (codebythepound<at>gmail<dot>com). Thanks also to the Apple II community for feedback, bug reports, and feature requests.
+
+## 🌐 多語言支援 (Multilingual Support)
+
+**[📖 中文化說明 (Chinese Internationalization Guide)](readme-i18n.md)**
+
+Apple2TS now supports multiple languages including Traditional Chinese (繁體中文)! Click the link above for detailed information about internationalization features and usage.
 
 ![node.js CI](https://github.com/ct6502/apple2ts/actions/workflows/main-build-deploy.yml/badge.svg)
 ![build/deploy](https://github.com/chris-torrence/apple2ts/actions/workflows/pages/pages-build-deployment/badge.svg)
