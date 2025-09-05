@@ -535,3 +535,144 @@ npm run deploy
 3. **功能擴展**
    - 新增功能時確保相容 GitHub Pages 環境
    - 避免使用需要伺服器端支援的功能
+
+---
+
+## 🚀 GitHub Pages 部署問題排除實戰（2025/01/05）
+
+### 問題 1：資源路徑 404 錯誤
+
+**現象：** 部署成功但磁碟預覽圖片破圖、小磁碟圖示不顯示
+
+**根本原因：** 硬編碼的絕對路徑在 GitHub Pages 子路徑環境下失效
+- 原始路徑：`/disks/Aztec.png` → 變成 `https://anomixer.github.io/disks/Aztec.png`（404）
+- 正確路徑：需要基礎路徑 → `https://anomixer.github.io/apple2ts/disks/Aztec.png`
+
+**修復方案：**
+1. **磁碟映像預覽圖**（`src/ui/devices/disk/diskimages.ts`）：
+   ```typescript
+   const getImageUrl = (path: string) => {
+     const base = import.meta.env.BASE_URL || '/'
+     return new URL(base + path, window.location.origin)
+   }
+   
+   imageUrl: getImageUrl("disks/Aztec.png")  // 動態基礎路徑
+   ```
+
+2. **Internet Archive 集合圖片**（`src/ui/devices/disk/internetarchivedialog.tsx`）：
+   ```typescript
+   const getCollectionImageUrl = (filename: string) => {
+     const base = import.meta.env.BASE_URL || '/'
+     return base + 'collections/' + filename
+   }
+   ```
+
+3. **小磁碟圖示**（`src/ui/panels/diskcollectionpanel.tsx`）：
+   ```typescript
+   const getAssetUrl = (filename: string) => {
+     const base = import.meta.env.BASE_URL || '/'
+     return base + filename
+   }
+   
+   <img src={getAssetUrl("floppy.png")} />  // 修復硬編碼路徑
+   ```
+
+### 問題 2：磁碟檔案載入失敗
+
+**現象：** 圖片修復後，點擊磁碟仍無法載入
+
+**根本原因：** `handleSetDiskFromFile` 中的硬編碼路徑
+```typescript
+// 錯誤：硬編碼絕對路徑
+const res = await fetch("/disks/" + disk)
+
+// 修復：使用動態基礎路徑
+const base = import.meta.env.BASE_URL || '/'
+const diskUrl = base + 'disks/' + disk
+const res = await fetch(diskUrl)
+```
+
+**設計原則教訓：**
+- `diskUrl` 應該保持文件名（如 `"Aztec.po"`），不是完整路徑
+- `handleSetDiskFromFile` 負責添加路徑前綴
+- 保持原有架構，只修復路徑處理邏輯
+
+### 問題 3："Show new releases" 磁碟啟動錯誤
+
+**現象：** 載入新磁碟後仍啟動到上一個磁碟映像
+
+**根本原因：** Apple ][ 開機順序問題
+- 開機順序：S7（硬碟）→ S6（軟碟）
+- 如果 S7 有舊的硬碟映像，新的軟碟映像不會啟動
+
+**代碼差異分析：**
+```typescript
+// handleSetDiskFromFile (Apple2TS collection) ✅
+resetAllDiskDrives()  // 清空所有磁碟機
+handleSetDiskData(...)
+
+// handleSetDiskFromURL (New releases) ❌
+// 缺少 resetAllDiskDrives() 調用
+handleSetDiskOrFileFromBuffer(...)
+```
+
+**修復方案：**
+在 `handleSetDiskFromURL` 中添加磁碟清空邏輯：
+```typescript
+if (buffer) {
+  resetAllDiskDrives()  // 新增：載入前清空所有磁碟機
+  handleSetDiskOrFileFromBuffer(index, buffer, name, cloudData || null, null)
+}
+```
+
+### GitHub Actions 工作流程優化
+
+**原始問題：** 複雜的 GitHub Pages API 權限問題
+
+**解決方案：** 回歸簡單可靠的 gh-pages 套件
+```yaml
+# 修復後的工作流程
+- name: Configure Git
+  run: |
+    git config --global user.name "github-actions[bot]"
+    git config --global user.email "github-actions[bot]@users.noreply.github.com"
+    git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+
+- name: Deploy to GitHub Pages
+  run: npx gh-pages -d dist --repo https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+```
+
+### 關鍵學習點
+
+1. **路徑處理一致性**
+   - 所有靜態資源都需要考慮基礎路徑
+   - 使用 `import.meta.env.BASE_URL` 進行動態路徑處理
+   - 避免硬編碼絕對路徑
+
+2. **架構理解的重要性**
+   - 需要理解原有設計意圖
+   - 保持設計一致性比重寫更安全
+   - 小幅修復勝過大幅重構
+
+3. **系統性問題排除**
+   - 逐步隔離問題（圖片 → 磁碟載入 → 啟動邏輯）
+   - 對比不同代碼路徑的行為差異
+   - 詳細的問題描述有助於精確修復
+
+4. **部署環境差異**
+   - 開發環境（localhost）vs 生產環境（GitHub Pages）
+   - 基礎路徑差異（`/` vs `/apple2ts/`）
+   - 靜態資源 CDN 行為差異
+
+### 成功部署驗證
+
+部署完成後的功能驗證：
+- ✅ 網站可通過 https://anomixer.github.io/apple2ts 訪問
+- ✅ 磁碟預覽圖片正確顯示
+- ✅ 小磁碟圖示正確顯示
+- ✅ 磁碟映像文件正常載入
+- ✅ Apple2TS collection 和 New releases 行為一致
+- ✅ 多語言功能完全正常
+- ✅ Internet Archive 集合圖片正確載入
+
+這次部署過程展示了如何系統性地解決複雜的路徑和架構問題，最終實現完美的 GitHub Pages 部署。

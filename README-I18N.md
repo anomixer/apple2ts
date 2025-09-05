@@ -265,20 +265,77 @@ Apple2TS 現已部署到 GitHub Pages，可通過以下網址訪問：
 - **基礎路徑：** 配置 `/apple2ts/` 子路徑支援
 
 ### 更新日誌
-1. **配置更新：**
+
+#### 初期配置（第一階段）
+1. **基礎配置更新：**
    - 修改 `package.json` homepage 為 GitHub Pages URL
-   - 配置 `vite.config.ts` 基礎路徑
-   - 更新 GitHub Actions 工作流程
+   - 配置 `vite.config.ts` 基礎路徑 `/apple2ts/`
+   - 更新 GitHub Actions 工作流程到 anomixer 倉庫
+   - 移除不需要的 CNAME 文件（子域名不需要）
 
 2. **URL 修正：**
-   - 更新所有幫助文檔中的範例 URL
-   - 修正 GitHub 倉庫引用
-   - 移除不需要的 CNAME 文件
+   - 更新所有幫助文檔中的範例 URL 從 `apple2ts.com` 到 GitHub Pages
+   - 修正 GitHub 倉庫引用從 `ct6502/apple2ts` 到 `anomixer/apple2ts`
+   - 更新註釋中的範例 URL
 
-3. **功能驗證：**
-   - 確保所有靜態資源正確載入
-   - 驗證多語言切換功能
-   - 測試模擬器所有功能正常
+#### 問題修復（第二階段）
+3. **資源路徑問題修復：**
+   - **問題：** 磁碟預覽圖片破圖（404 錯誤）
+   - **原因：** 硬編碼絕對路徑 `/disks/...` 在子路徑環境下失效
+   - **修復：** 新增 `getImageUrl()` 輔助函數使用 `import.meta.env.BASE_URL`
+   - **文件：** `src/ui/devices/disk/diskimages.ts`
+
+4. **Internet Archive 集合圖片修復：**
+   - **問題：** 集合縮圖無法載入
+   - **修復：** 新增 `getCollectionImageUrl()` 輔助函數
+   - **文件：** `src/ui/devices/disk/internetarchivedialog.tsx`
+
+5. **小磁碟圖示修復：**
+   - **問題：** 左上角小磁碟圖示破圖
+   - **原因：** 硬編碼路徑 `/floppy.png`
+   - **修復：** 新增 `getAssetUrl()` 輔助函數
+   - **文件：** `src/ui/panels/diskcollectionpanel.tsx`
+
+6. **磁碟檔案載入修復：**
+   - **問題：** 圖片正常但點擊磁碟無法載入
+   - **原因：** `handleSetDiskFromFile` 中的硬編碼路徑 `/disks/`
+   - **修復：** 使用動態基礎路徑構建磁碟 URL
+   - **文件：** `src/ui/devices/disk/driveprops.ts`
+
+7. **"Show new releases" 磁碟啟動修復：**
+   - **問題：** 載入新磁碟後仍啟動到上一個磁碟映像
+   - **原因：** Apple ][ 開機順序 S7（硬碟）→ S6（軟碟），缺少磁碟清空
+   - **修復：** 在 `handleSetDiskFromURL` 中添加 `resetAllDiskDrives()` 調用
+   - **文件：** `src/ui/devices/disk/driveprops.ts`
+
+#### GitHub Actions 工作流程優化
+8. **部署流程修復：**
+   - **問題：** 複雜的 GitHub Pages API 權限問題
+   - **解決：** 回歸簡單可靠的 gh-pages 套件部署
+   - **优化：** 使用 `GITHUB_TOKEN` 而非自定義 `GH_SECRET`
+
+### 技術解決方案總結
+
+#### 路徑處理模式
+```typescript
+// 統一的路徑處理模式
+const getResourceUrl = (path: string) => {
+  const base = import.meta.env.BASE_URL || '/'
+  return base + path
+}
+
+// 應用於所有靜態資源
+- 磁碟圖片: getImageUrl("disks/Aztec.png")
+- 集合圖片: getCollectionImageUrl("collection.jpg")
+- 靜態檔案: getAssetUrl("floppy.png")
+```
+
+#### 磁碟載入一致性
+```typescript
+// 確保所有磁碟載入都清空舊磁碟
+resetAllDiskDrives()  // 在載入新磁碟前清空
+handleSetDiskData(...)  // 載入新磁碟
+```
 
 ### 使用方式
 1. 直接訪問 https://anomixer.github.io/apple2ts
