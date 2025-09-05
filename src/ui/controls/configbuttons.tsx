@@ -21,13 +21,14 @@ import { audioEnable, isAudioEnabled } from "../devices/audio/speaker"
 import { SerialPortSelect } from "../devices/serial/serialselect"
 import { SpeedDropdown } from "./speeddropdown"
 import { getCapsLock, getArrowKeysAsJoystick, getUseOpenAppleKey, setUseOpenAppleKey, setArrowKeysAsJoystick, getTheme } from "../ui_settings"
+import LanguageSwitch from "./languageswitch"
+import { useTranslation } from "../../i18n/useTranslation"
 
-// import VideogameAssetIcon from '@mui/icons-material/VideogameAsset';
-// import VideogameAssetOffIcon from '@mui/icons-material/VideogameAssetOff';
 const isTouchDevice = "ontouchstart" in document.documentElement
 const isMac = navigator.platform.startsWith("Mac")
 
 const ConfigButtons = (props: DisplayProps) => {
+  const { t } = useTranslation()
   const capsLock = getCapsLock()
   const arrowKeysAsJoystick = getArrowKeysAsJoystick()
   const useOpenAppleKey = getUseOpenAppleKey()
@@ -38,6 +39,7 @@ const ConfigButtons = (props: DisplayProps) => {
   const handleClick = (event: React.MouseEvent) => {
     setPopupLocation([event.clientX, event.clientY])
   }
+  
   return <div className="flex-row">
     <div className="flex-row" id="tour-configbuttons">
 
@@ -46,7 +48,7 @@ const ConfigButtons = (props: DisplayProps) => {
       <DisplayConfig updateDisplay={props.updateDisplay} />
 
       <button className="push-button"
-        title={"Toggle Sound"}
+        title={t("controls.toggleSound")}
         style={{ display: typeof AudioContext !== "undefined" ? "" : "none" }}
         onClick={() => { audioEnable(!isAudioEnabled()); props.updateDisplay() }}>
         <FontAwesomeIcon icon={isAudioEnabled() ? faVolumeHigh : faVolumeXmark} />
@@ -55,14 +57,14 @@ const ConfigButtons = (props: DisplayProps) => {
 
     <div className="flex-row" id="tour-keyboardbuttons">
       <button className={lockedKeyStyle(capsLock ? 2 : 0)}
-        title={`Caps Lock (${capsLock ? "on" : "off"})`}
+        title={`${t("config.capsLock")} (${capsLock ? t("messages.on") : t("messages.off")})`}
         onClick={() => { setPreferenceCapsLock(!capsLock); props.updateDisplay() }}>
         <span className="text-key" style={{ fontSize: "18pt" }}>{capsLock ? "A" : "a"}</span>
       </button>
 
       {!isTouchDevice &&
         <button className="push-button"
-          title={useOpenAppleKey ? `Use ${modKey} as Open Apple key` : `Use ${modKey} for keyboard shortcuts`}
+          title={useOpenAppleKey ? `${t("config.useOpenApple")} ${modKey}` : `${t("config.useShortcuts")} ${modKey}`}
           onClick={() => { setUseOpenAppleKey(!useOpenAppleKey); props.updateDisplay() }}>
           {useOpenAppleKey ?
             <svg width="28" height="28" className="fill-color">{appleOutline}</svg> :
@@ -72,7 +74,7 @@ const ConfigButtons = (props: DisplayProps) => {
 
       {!isTouchDevice &&
         <button className="push-button" style={{ position: "relative" }}
-          title={`Use Arrow Keys as Joystick (${arrowKeysAsJoystick ? "on" : "off"})`}
+          title={`${t("config.useArrowKeys")} (${arrowKeysAsJoystick ? t("messages.on") : t("messages.off")})`}
           onClick={() => { setArrowKeysAsJoystick(!arrowKeysAsJoystick); props.updateDisplay() }}>
           <FontAwesomeIcon icon={faUpDownLeftRight} style={arrowKeysAsJoystick ? {} : { transform: "translateX(50%)" }} />
           {!arrowKeysAsJoystick && <FontAwesomeIcon style={{ transform: "translateX(-50%)", width: "80%" }} icon={faSlash} />}
@@ -88,9 +90,12 @@ const ConfigButtons = (props: DisplayProps) => {
 
     <MachineConfig updateDisplay={props.updateDisplay} />
 
+    {/* 語言切換按鈕 */}
+    <LanguageSwitch />
+
     <button className="push-button"
       id="tour-theme-button"
-      title={`${themeToName(getTheme())} Theme`}
+      title={`${themeToName(getTheme())} ${t("config.theme")}`}
       onClick={handleClick}>
       <FontAwesomeIcon icon={faPalette} />
     </button>
@@ -100,11 +105,11 @@ const ConfigButtons = (props: DisplayProps) => {
       onClose={() => { setPopupLocation(undefined) }}
       menuItems={[Object.values(UI_THEME).filter(value => typeof value === "number").map((value, i) => {
         return {
-          label: themeToName(i),
+          label: t(`themes.${themeToName(i).toLowerCase()}`),
           isSelected: () => { return i == getTheme() },
           onClick: () => {
             if (i >= 0 && i != getTheme()) {
-              if (window.confirm("Reload the emulator and apply this theme now?")) {
+              if (window.confirm(t("messages.confirmTheme"))) {
                 setPreferenceTheme(i)
                 const url = new URL(window.location.href)
                 url.searchParams.delete("theme")
@@ -118,8 +123,13 @@ const ConfigButtons = (props: DisplayProps) => {
     />
 
     <button className="push-button" id="tour-clearcookies"
-      title="Reset All Settings"
-      onClick={() => { resetPreferences(); props.updateDisplay() }}>
+      title={t("config.resetSettings")}
+      onClick={() => { 
+        if (window.confirm(t("messages.confirmReset"))) {
+          resetPreferences(); 
+          props.updateDisplay() 
+        }
+      }}>
       <FontAwesomeIcon icon={faSync} />
     </button>
 

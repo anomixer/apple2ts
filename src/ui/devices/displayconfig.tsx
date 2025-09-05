@@ -9,9 +9,10 @@ import { setPreferenceColorMode, setPreferenceShowScanlines } from "../localstor
 import { getColorModeSVG, getShowScanlinesSVG } from "../img/iconfunctions"
 import PopupMenu from "../controls/popupmenu"
 import { getColorMode, getShowScanlines } from "../ui_settings"
+import { useTranslation } from "../../i18n/useTranslation"
 
 export const DisplayConfig = (props: { updateDisplay: UpdateDisplay }) => {
-
+  const { t } = useTranslation()
   const colorMode = getColorMode()
   const showScanlines = getShowScanlines()
 
@@ -21,12 +22,18 @@ export const DisplayConfig = (props: { updateDisplay: UpdateDisplay }) => {
     setPopupLocation([event.clientX, event.clientY])
   }
 
+  const getColorName = (mode: number): string => {
+    const colorNames = ['color', 'green', 'amber', 'white', 'nofringe', 'inverse']
+    const colorKey = colorNames[mode] || 'color'
+    return t(`colors.${colorKey}`)
+  }
+
   return (
     <span>
       <button
         id="basic-button"
         className="push-button"
-        title="Display Settings"
+        title={t("config.display")}
         onClick={handleClick}
       >
         <span className="fa-layers fa-fw">
@@ -44,7 +51,7 @@ export const DisplayConfig = (props: { updateDisplay: UpdateDisplay }) => {
         menuItems={[[
           ...Object.values(COLOR_MODE).filter(value => typeof value === "number").map((i) => (
             {
-              label: colorToName(i),
+              label: getColorName(i),
               isSelected: () => { return i == colorMode },
               onClick: () => {
                 setPreferenceColorMode(i)
@@ -55,7 +62,7 @@ export const DisplayConfig = (props: { updateDisplay: UpdateDisplay }) => {
           ...[{ label: "-" }],
           ...[0].map(() => (
             {
-              label: "CRT Scanlines",
+              label: t("config.scanlines"),
               isSelected: () => { return showScanlines },
               onClick: () => {
                 document.body.style.setProperty("--scanlines-display", showScanlines ? "none" : "block")

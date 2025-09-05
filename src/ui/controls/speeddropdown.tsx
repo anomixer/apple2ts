@@ -11,12 +11,22 @@ import { handleGetSpeedMode } from "../main2worker"
 import { setPreferenceSpeedMode } from "../localstorage"
 import { snailIcon } from "../img/icon_snail"
 import { turtleIcon } from "../img/icon_turtle"
-
-const speedNames = ["0.1 MHz (Snail)", "0.5 MHz (Slow)", "1 MHz", "2 MHz",
-  "3 MHz", "4 MHz (Fast)", "Ludicrous"]
+import { useTranslation } from "../../i18n/useTranslation"
 
 export const SpeedDropdown = (props: { updateDisplay: UpdateDisplay }) => {
+  const { t } = useTranslation()
   const speedMode = handleGetSpeedMode()
+  
+  const speedNames = [
+    t("speed.snail"),    // "0.1 MHz (Snail)"
+    t("speed.slow"),     // "0.5 MHz (Slow)"
+    t("speed.normal"),  // "1 MHz (Normal)"
+    t("speed.two"),     // "2 MHz"
+    t("speed.three"),   // "3 MHz"
+    t("speed.fast"),    // "4 MHz (Fast)"
+    t("speed.warp")     // "Ludicrous/Warp Speed"
+  ]
+  
   const iconSize = 22
   const icons = [
     <svg key="-2" width="27" height="27" className="fill-color">{snailIcon}</svg>,
@@ -36,7 +46,7 @@ export const SpeedDropdown = (props: { updateDisplay: UpdateDisplay }) => {
       closeCallback = {(index: number) => {setPreferenceSpeedMode(index - 2); props.updateDisplay()}}
       icon ={icon}
       icons = {icons}
-      tooltip = "Emulator Speed"
+      tooltip = {t("config.speed")}
     />
   )
 }

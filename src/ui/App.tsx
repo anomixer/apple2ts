@@ -5,8 +5,10 @@ import { GlobalContext } from "./globalcontext"
 import { UI_THEME } from "../common/utility"
 import runningGuy from "./img/runningGuy.gif"
 import { getTheme } from "./ui_settings"
+import { useTranslation } from "../i18n/useTranslation"
 
 const App = () => {
+  const { language } = useTranslation() // 確保語言變更時重新渲染
   const [updateHgr, setUpdateHgr] = useState(false)
   const [hgrMagnifier, setHgrMagnifier] = useState([-1, -1])
   const [updateBreakpoint, setUpdateBreakpoint] = useState(0)

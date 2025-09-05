@@ -1,36 +1,32 @@
-import React, { } from "react"
+import React, { useEffect, useState } from "react"
 import "./helppanel.css"
-import { defaultHelpText } from "./defaulthelptext"
+import { getDefaultHelpText } from "./defaulthelptext"
 import { UI_THEME } from "../../common/utility"
 import { getTheme } from "../ui_settings"
+import { useTranslation } from "../../i18n/useTranslation"
 
 type HelpPanelProps = {
   helptext: string,
 }
 
-//const defaultHelpTextCrc = crc32(new TextEncoder().encode(defaultHelpText))
-
-// Use the React.memo() function to optimize the HelpPanel component.
-// It was re-rendering on every machine state update, which was ridiculous.
-// Now it only re-renders when the help text changes.
 const HelpTab = React.memo((props: HelpPanelProps) => {
-  //  const [setHelpTextCrc] = useState(defaultHelpTextCrc)
+  const { language } = useTranslation()
+  const [helpText, setHelpText] = useState("")
+
+  useEffect(() => {
+    // 當語言變更時更新幫助文字
+    const defaultText = getDefaultHelpText()
+    const currentText = (props.helptext.length > 1 && props.helptext !== "<Default>") ? props.helptext : defaultText
+    setHelpText(currentText)
+  }, [language, props.helptext])
 
   const paperheight = window.innerHeight ? window.innerHeight - 170 : (window.outerHeight - 170)
-  const helpText = (props.helptext.length > 1 && props.helptext !== "<Default>") ? props.helptext : defaultHelpText
   const isDarkMode = getTheme() == UI_THEME.DARK
   const isMinimalTheme = getTheme() == UI_THEME.MINIMAL
 
   if (isMinimalTheme) {
     import("./helppanel.minimal.css")
   }
-
-  //  const newHelpTextCrc = crc32(new TextEncoder().encode(helpText))
-
-  // useMemo(() => {
-  //   setHelpTextCrc(newHelpTextCrc)
-  // // eslint-disable-next-line react-hooks/exhaustive-deps
-  // }, [])
 
   const isTouchDevice = "ontouchstart" in document.documentElement
   const height = window.innerHeight ? window.innerHeight : (window.outerHeight - 120)
@@ -40,8 +36,8 @@ const HelpTab = React.memo((props: HelpPanelProps) => {
   return (
     <div className="help-parent"
       style={{
-        width: narrow || isMinimalTheme ? "687px" : 500, height:
-          narrow || isMinimalTheme ? "" : paperheight,
+        width: narrow || isMinimalTheme ? "687px" : 500, 
+        height: narrow || isMinimalTheme ? "" : paperheight,
         overflow: (narrow ? "visible" : "auto")
       }}>
       <div className={isDarkMode ? "" : "help-paper"}>
@@ -55,9 +51,6 @@ const HelpTab = React.memo((props: HelpPanelProps) => {
   return prevProps.helptext === nextProps.helptext
 })
 
-// Avoid a lint error "Component definition is missing display name".
-// Presumably this is because this component is wrapped in a React.memo
-// so the displayName cannot be inferred from the TSX.
 HelpTab.displayName = "HelpPanel"
 
 export default HelpTab

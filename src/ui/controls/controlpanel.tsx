@@ -7,8 +7,10 @@ import FullScreenButton from "./fullscreenbutton"
 import KeyboardButtons from "./keyboardbuttons"
 import { useState } from "react"
 import { getPreferenceFirstRunMinimal, setPreferenceFirstRunMinimal } from "../localstorage"
+import { useTranslation } from "../../i18n/useTranslation"
 
 const ControlPanel = (props: DisplayProps) => {
+  const { t } = useTranslation()
   const [isFlyoutOpen, setIsFlyoutOpen] = useState(false)
   const showHighlight = getPreferenceFirstRunMinimal()
 
@@ -23,7 +25,7 @@ const ControlPanel = (props: DisplayProps) => {
   return (
     <Flyout
       icon={faWrench}
-      title="settings"
+      title={t("controls.settings")}
       highlight={showHighlight}
       isOpen={() => { return isFlyoutOpen }}
       onClick={handleFlyoutClick}
