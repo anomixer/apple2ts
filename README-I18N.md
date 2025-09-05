@@ -83,7 +83,6 @@ src/
 
 ### 啟動專案
 ```bash
-cd C:\Users\Administrator\cursor\apple2ts
 npm install
 npm start
 ```
