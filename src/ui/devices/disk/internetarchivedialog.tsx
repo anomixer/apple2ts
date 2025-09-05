@@ -32,26 +32,32 @@ interface SoftwareCollection {
   title: string,
   imageUrl: string
 }
+// Get the base URL for the application
+const getCollectionImageUrl = (filename: string) => {
+  const base = import.meta.env.BASE_URL || '/'
+  return base + 'collections/' + filename
+}
+
 const softwareCollections: SoftwareCollection[] = [
   {
     id: "softwarelibrary_apple",
     title: "The Software Library: Apple Computer",
-    imageUrl: "/collections/softwarelibrary_apple_itemimage.jpg"
+    imageUrl: getCollectionImageUrl("softwarelibrary_apple_itemimage.jpg")
   },
   {
     id: "softwarelibrary_apple_games",
     title: "The Apple II Library: Games",
-    imageUrl: "/collections/softwarelibrary_apple_games_itemimage.jpg"
+    imageUrl: getCollectionImageUrl("softwarelibrary_apple_games_itemimage.jpg")
   },
   {
     id: "softwarelibrary_apple_woz_educational",
     title: "Software Library: Apple Educational",
-    imageUrl: "/collections/softwarelibrary_apple_woz_educational_itemimage.jpg"
+    imageUrl: getCollectionImageUrl("softwarelibrary_apple_woz_educational_itemimage.jpg")
   },
   {
     id: "apple_ii_library_4am",
     title: "Apple II Library: The 4am Collection",
-    imageUrl: "/collections/apple_ii_library_4am_itemimage.jpg"
+    imageUrl: getCollectionImageUrl("apple_ii_library_4am_itemimage.jpg")
   }
 ]
 
