@@ -2,7 +2,7 @@
   "name": "apple2ts",
   "private": true,
   "version": "1.1.0",
-  "homepage": "https://apple2ts.com",
+  "homepage": "https://anomixer.github.io/apple2ts",
   "type": "module",
   "scripts": {
     "predeploy": "npm run build",

@@ -10,9 +10,9 @@ on:
 jobs:
   build:
     env:
-      MY_EMAIL: 5461379+ct6502@users.noreply.github.com
-      MY_NAME: Chris Torrence
-      MY_USERNAME: ct6502
+      MY_EMAIL: anomixer@mail.com
+      MY_NAME: anomixer
+      MY_USERNAME: anomixer
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -33,6 +33,6 @@ jobs:
     - run: git config --global user.email $MY_EMAIL
     - run: git config --global user.name "$MY_NAME"
     # authenticate with GitHub so we can do subsequent git operations
-    - run: git remote set-url origin https://$MY_USERNAME:${{ secrets.GH_SECRET }}@github.com/ct6502/apple2ts.git
+    - run: git remote set-url origin https://$MY_USERNAME:${{ secrets.GH_SECRET }}@github.com/anomixer/apple2ts.git
     # push the build (within the dist directory) to the gh-pages branch
     - run: npm run deploy

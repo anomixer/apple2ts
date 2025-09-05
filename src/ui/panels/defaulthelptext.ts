@@ -84,11 +84,11 @@ tour=main|debug|settings
 #磁碟映像檔的URL
 
 <b>${t("help.examples")}</b>
-<a href="https://apple2ts.com/?debug=on#Replay" target="_blank">Total Replay 含除錯功能</a>
-<a href="https://apple2ts.com/?text=chop#Replay" target="_blank">Total Replay，載入 Choplifter</a>
-<a href="https://apple2ts.com/?color=white&speed=fast#https://a2desktop.s3.amazonaws.com/A2DeskTop-1.4-en_800k.2mg" target="_blank">A2Desktop 2MG 快速白色模式</a>
-<a href="https://apple2ts.com/?color=green&text=10%3F%22Welcome%20to%20Apple2TS%21%22%3AGOTO10" target="_blank">內嵌 Applesoft BASIC 程式</a>
-<a href="https://apple2ts.com/?address=07FD#https://github.com/ct6502/apple2ts/raw/refs/heads/main/public/disks/snoggle_0x7FD.bin" target="_blank">含十六進位位址的二進位檔案</a>
+<a href="https://anomixer.github.io/apple2ts/?debug=on#Replay" target="_blank">Total Replay 含除錯功能</a>
+<a href="https://anomixer.github.io/apple2ts/?text=chop#Replay" target="_blank">Total Replay，載入 Choplifter</a>
+<a href="https://anomixer.github.io/apple2ts/?color=white&speed=fast#https://a2desktop.s3.amazonaws.com/A2DeskTop-1.4-en_800k.2mg" target="_blank">A2Desktop 2MG 快速白色模式</a>
+<a href="https://anomixer.github.io/apple2ts/?color=green&text=10%3F%22Welcome%20to%20Apple2TS%21%22%3AGOTO10" target="_blank">內嵌 Applesoft BASIC 程式</a>
+<a href="https://anomixer.github.io/apple2ts/?address=07FD#https://github.com/anomixer/apple2ts/raw/refs/heads/main/public/disks/snoggle_0x7FD.bin" target="_blank">含十六進位位址的二進位檔案</a>
 `
   } else {
     helpText += `
@@ -111,11 +111,11 @@ tour=main|debug|settings
 #urltodiskimage
 
 <b>${t("help.examples")}</b>
-<a href="https://apple2ts.com/?debug=on#Replay" target="_blank">Total Replay with debugging</a>
-<a href="https://apple2ts.com/?text=chop#Replay" target="_blank">Total Replay, load Choplifter</a>
-<a href="https://apple2ts.com/?color=white&speed=fast#https://a2desktop.s3.amazonaws.com/A2DeskTop-1.4-en_800k.2mg" target="_blank">A2Desktop 2MG with fast speed and white color</a>
-<a href="https://apple2ts.com/?color=green&text=10%3F%22Welcome%20to%20Apple2TS%21%22%3AGOTO10" target="_blank">Embedded Applesoft BASIC Program</a>
-<a href="https://apple2ts.com/?address=07FD#https://github.com/ct6502/apple2ts/raw/refs/heads/main/public/disks/snoggle_0x7FD.bin" target="_blank">Binary File with Hex Address</a>
+<a href="https://anomixer.github.io/apple2ts/?debug=on#Replay" target="_blank">Total Replay with debugging</a>
+<a href="https://anomixer.github.io/apple2ts/?text=chop#Replay" target="_blank">Total Replay, load Choplifter</a>
+<a href="https://anomixer.github.io/apple2ts/?color=white&speed=fast#https://a2desktop.s3.amazonaws.com/A2DeskTop-1.4-en_800k.2mg" target="_blank">A2Desktop 2MG with fast speed and white color</a>
+<a href="https://anomixer.github.io/apple2ts/?color=green&text=10%3F%22Welcome%20to%20Apple2TS%21%22%3AGOTO10" target="_blank">Embedded Applesoft BASIC Program</a>
+<a href="https://anomixer.github.io/apple2ts/?address=07FD#https://github.com/anomixer/apple2ts/raw/refs/heads/main/public/disks/snoggle_0x7FD.bin" target="_blank">Binary File with Hex Address</a>
 `
   }
 

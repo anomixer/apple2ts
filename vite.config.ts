@@ -5,6 +5,7 @@ import basicSsl from "@vitejs/plugin-basic-ssl"
 // https://vitejs.dev/config/
 // The define 'process.env' is a hack so that process.env.<env var> works properly.
 export default defineConfig({
+  base: '/apple2ts/',
   plugins: [react(),
     basicSsl({
       /** name of certification */
