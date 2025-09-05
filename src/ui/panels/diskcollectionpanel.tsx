@@ -16,6 +16,12 @@ import { getTheme } from "../ui_settings"
 import { handleInputParams } from "../inputparams"
 import { passSetRunMode } from "../main2worker"
 
+// Get the base URL for static assets
+const getAssetUrl = (filename: string) => {
+  const base = import.meta.env.BASE_URL || '/'
+  return base + filename
+}
+
 export enum DISK_COLLECTION_ITEM_TYPE {
   A2TS_ARCHIVE,
   INTERNET_ARCHIVE,
@@ -216,7 +222,7 @@ const DiskCollectionPanel = (props: DisplayProps) => {
             >
               <img className="dcp-item-image" src={diskCollectionItem.imageUrl?.toString()} />
             </div>
-            <img className="dcp-item-disk" src="/floppy.png" />
+            <img className="dcp-item-disk" src={getAssetUrl("floppy.png")} />
             {diskCollectionItem.type == DISK_COLLECTION_ITEM_TYPE.NEW_RELEASE &&
               <div className="dcp-item-new" title="Disk is a new release">
                 <FontAwesomeIcon icon={faClock} size="lg" className="dcp-item-new-icon" onClick={(event) => event.stopPropagation()} />
