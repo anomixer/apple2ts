@@ -239,3 +239,57 @@ t(key: string): string {
 ---
 
 **總結：** Apple2TS 現在擁有完整的繁體中文支援，提供了專業級的多語言用戶體驗。所有核心功能都已翻譯，語言切換流暢，是一個成功的國際化實作範例。
+
+---
+
+## 🌐 線上部署
+
+### GitHub Pages 部署 (2025/01/05)
+
+Apple2TS 現已部署到 GitHub Pages，可通過以下網址訪問：
+
+**🔗 線上體驗：https://anomixer.github.io/apple2ts**
+
+### 部署特色
+- ✅ 完整多語言支援（中文/英文切換）
+- ✅ 所有模擬器功能正常運作
+- ✅ 自動化 CI/CD 部署流程
+- ✅ 全球 CDN 加速訪問
+- ✅ HTTPS 安全連線
+
+### 技術實現
+- **構建工具：** Vite 6.0.6 with TypeScript
+- **部署平台：** GitHub Pages
+- **自動化：** GitHub Actions workflow
+- **資源優化：** 自動壓縮和 Tree Shaking
+- **基礎路徑：** 配置 `/apple2ts/` 子路徑支援
+
+### 更新日誌
+1. **配置更新：**
+   - 修改 `package.json` homepage 為 GitHub Pages URL
+   - 配置 `vite.config.ts` 基礎路徑
+   - 更新 GitHub Actions 工作流程
+
+2. **URL 修正：**
+   - 更新所有幫助文檔中的範例 URL
+   - 修正 GitHub 倉庫引用
+   - 移除不需要的 CNAME 文件
+
+3. **功能驗證：**
+   - 確保所有靜態資源正確載入
+   - 驗證多語言切換功能
+   - 測試模擬器所有功能正常
+
+### 使用方式
+1. 直接訪問 https://anomixer.github.io/apple2ts
+2. 使用右上角地球儀圖示切換中英文
+3. 點擊 Tour 按鈕開始新手導覽
+4. 選擇磁碟映像開始體驗 Apple IIe 模擬
+
+### 開發者資訊
+- **原始專案：** ct6502/apple2ts
+- **中文化版本：** anomixer/apple2ts  
+- **維護狀態：** 積極維護中
+- **問題回報：** GitHub Issues
+
+**🎉 現在全世界的用戶都可以通過網頁瀏覽器直接體驗支援繁體中文的 Apple IIe 模擬器！**

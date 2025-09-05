@@ -10,7 +10,7 @@ on:
 jobs:
   build:
     env:
-      MY_EMAIL: anomixer@mail.com
+      MY_EMAIL: anomy@mail.com
       MY_NAME: anomixer
       MY_USERNAME: anomixer
     runs-on: ubuntu-latest
