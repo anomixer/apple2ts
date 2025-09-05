@@ -39,11 +39,11 @@ export const zhTW = {
   // 顏色模式
   colors: {
     color: "彩色",
+    nofringe: "彩色 (無邊緣)",
     green: "綠色",
     amber: "琥珀色",
-    white: "白色",
-    nofringe: "無邊緣",
-    inverse: "反色"
+    white: "黑白",
+    inverse: "黑白 (反色)"
   },
   
   // 主題

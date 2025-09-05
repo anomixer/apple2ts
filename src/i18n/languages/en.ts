@@ -39,11 +39,11 @@ export const en = {
   // 顏色模式
   colors: {
     color: "Color",
+    nofringe: "Color (no fringe)",
     green: "Green",
     amber: "Amber",
-    white: "White",
-    nofringe: "No Fringe",
-    inverse: "Inverse"
+    white: "Black and White",
+    inverse: "Black and White (inverse)"
   },
   
   // 主題

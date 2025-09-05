@@ -23,7 +23,7 @@ export const DisplayConfig = (props: { updateDisplay: UpdateDisplay }) => {
   }
 
   const getColorName = (mode: number): string => {
-    const colorNames = ["color", "green", "amber", "white", "nofringe", "inverse"]
+    const colorNames = ["color", "nofringe", "green", "amber", "white", "inverse"]
     const colorKey = colorNames[mode] || "color"
     return t(`colors.${colorKey}`)
   }
