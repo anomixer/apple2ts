@@ -32,6 +32,8 @@ jobs:
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          # Configure remote URL with token for gh-pages
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
       
       - name: Install dependencies
         run: npm ci
@@ -44,7 +46,7 @@ jobs:
       
       - name: Deploy to GitHub Pages
         run: |
-          npm run deploy
+          # Use gh-pages with explicit token and user configuration
+          npx gh-pages -d dist --user "github-actions[bot] <github-actions[bot]@users.noreply.github.com>" --repo https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
         env:
-          # Use GITHUB_TOKEN for authentication
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
