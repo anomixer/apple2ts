@@ -46,7 +46,7 @@ jobs:
       
       - name: Deploy to GitHub Pages
         run: |
-          # Use gh-pages with explicit token and user configuration
-          npx gh-pages -d dist --user "GitHub Actions <github-actions[bot]@users.noreply.github.com>" --repo https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+          # Use gh-pages with explicit token - rely on git config for user info
+          npx gh-pages -d dist --repo https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
