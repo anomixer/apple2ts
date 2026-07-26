@@ -1118,7 +1118,8 @@ If it declares any Font Awesome CSS pseudo-elements, they will not be rendered a
 {{keyMod}}V Paste Text        {{arrowMod}}0 Snail Speed (0.1 MHz)
 {{keyMod}}← Back in Time      {{keyMod}}→ Forward in Time
 Open Apple:   press Left Alt/Option
-Closed Apple: press Right Alt/Option`,urlParametersBody:`address=1234 (hex load address for hex data)
+Closed Apple: press Right Alt/Option
+Joystick:     press Numpad 8/2/4/6 (7/9/1/3), 0/.`,urlParametersBody:`address=1234 (hex load address for hex data)
 appmode=game|embed
 capslock=off
 color=color|nofringe|green|amber|white|inverse
@@ -1148,7 +1149,8 @@ tour=main|debug|settings
 {{keyMod}}V 貼上文字          {{arrowMod}}0 蝸牛速度 (0.1 MHz)
 {{keyMod}}← 回到過去        {{keyMod}}→ 向前跳躍
 Open Apple:   按左側 Alt/Option
-Closed Apple: 按右側 Alt/Option`,urlParametersBody:`address=1234 (十六進位資料的十六進位載入位址)
+Closed Apple: 按右側 Alt/Option
+搖桿:         按右側數字鍵 8/2/4/6 (7/9/1/3), 0/.`,urlParametersBody:`address=1234 (十六進位資料的十六進位載入位址)
 appmode=game|embed (應用程式模式：遊戲|嵌入)
 capslock=off (大寫鎖定：關閉)
 color=color|nofringe|green|amber|white|inverse (顏色模式)
@@ -1178,7 +1180,8 @@ tour=main|debug|settings (導覽)
 {{keyMod}}V 粘贴文字          {{arrowMod}}0 蜗牛速度 (0.1 MHz)
 {{keyMod}}← 回到过去        {{keyMod}}→ 向前跳跃
 Open Apple:   按左侧 Alt/Option
-Closed Apple: 按右侧 Alt/Option`,urlParametersBody:`address=1234 (十六进制数据的十六进制加载地址)
+Closed Apple: 按右侧 Alt/Option
+摇杆:         按右侧数字键 8/2/4/6 (7/9/1/3), 0/.`,urlParametersBody:`address=1234 (十六进制数据的十六进制加载地址)
 appmode=game|embed (应用程序模式：游戏|嵌入)
 capslock=off (大写锁定：关闭)
 color=color|nofringe|green|amber|white|inverse (颜色模式)
@@ -1210,7 +1213,8 @@ tour=main|debug|settings (导览)
 {{keyMod}}← Retroceder Tiempo
 {{keyMod}}→ Avanzar Tiempo
 Open Apple:   presiona Alt/Opción Izq
-Closed Apple: presiona Alt/Opción Der`,urlParametersBody:`address=1234 (dirección de carga hexadecimal para datos hex)
+Closed Apple: presiona Alt/Opción Der
+Joystick:     presiona Teclado Num 8/2/4/6 (7/9/1/3), 0/.`,urlParametersBody:`address=1234 (dirección de carga hexadecimal para datos hex)
 appmode=game|embed (juego|incrustado)
 capslock=off (bloqueo mayúsculas apagado)
 color=color|nofringe|green|amber|white|inverse (modo de color)
@@ -1240,7 +1244,8 @@ tour=main|debug|settings (recorrido)
 {{keyMod}}V Text einfügen       {{arrowMod}}0 Schneckentempo (0.1 MHz)
 {{keyMod}}← Zeit zurück      {{keyMod}}→ Zeit vorwärts
 Open Apple:   Linke Alt/Option drücken
-Closed Apple: Rechte Alt/Option drücken`,urlParametersBody:`address=1234 (Hex-Ladeadresse für Hex-Daten)
+Closed Apple: Rechte Alt/Option drücken
+Joystick:     Ziffernblock 8/2/4/6 (7/9/1/3), 0/. drücken`,urlParametersBody:`address=1234 (Hex-Ladeadresse für Hex-Daten)
 appmode=game|embed (Spiel|Eingebettet)
 capslock=off (Feststelltaste aus)
 color=color|nofringe|green|amber|white|inverse (Farbmodus)
@@ -1272,7 +1277,8 @@ tour=main|debug|settings (Tour)
 {{keyMod}}← Remonter Temps
 {{keyMod}}→ Avancer Temps
 Open Apple:   Alt/Option Gauche
-Closed Apple: Alt/Option Droite`,urlParametersBody:`address=1234 (adresse de chargement hexadécimale pour données hexa)
+Closed Apple: Alt/Option Droite
+Joystick:     Pavé numérique 8/2/4/6 (7/9/1/3), 0/.`,urlParametersBody:`address=1234 (adresse de chargement hexadécimale pour données hexa)
 appmode=game|embed
 capslock=off (verr. maj. désactivé)
 color=color|nofringe|green|amber|white|inverse (mode couleur)
@@ -1304,7 +1310,8 @@ tour=main|debug|settings
 {{keyMod}}\\u2190 Indietro nel Tempo
 {{keyMod}}\\u2192 Avanti nel Tempo
 Open Apple:   premi Alt/Opzione Sin
-Closed Apple: premi Alt/Opzione Des`,urlParametersBody:`address=1234 (indirizzo di caricamento esadecimale per dati hex)
+Closed Apple: premi Alt/Opzione Des
+Joystick:     premi Tastierino 8/2/4/6 (7/9/1/3), 0/.`,urlParametersBody:`address=1234 (indirizzo di caricamento esadecimale per dati hex)
 appmode=game|embed (gioco|integrato)
 capslock=off (blocco maiuscole spento)
 color=color|nofringe|green|amber|white|inverse (modalità colore)
@@ -1334,7 +1341,8 @@ tour=main|debug|settings (tour)
 {{keyMod}}V Colar Texto         {{arrowMod}}0 Velocidade de Caracol (0.1 MHz)
 {{keyMod}}← Voltar no Tempo  {{keyMod}}→ Avançar no Tempo
 Open Apple:   pressionar Alt/Option Esquerdo
-Closed Apple: Alt/Option Direito`,urlParametersBody:`address=1234 (endereço de carregamento hexadecimal para dados hex)
+Closed Apple: Alt/Option Direito
+Joystick:     Teclado numérico 8/2/4/6 (7/9/1/3), 0/.`,urlParametersBody:`address=1234 (endereço de carregamento hexadecimal para dados hex)
 appmode=game|embed (jogo|integrado)
 capslock=off (caps lock desligado)
 color=color|nofringe|green|amber|white|inverse (modo de cor)
@@ -1364,7 +1372,8 @@ tour=main|debug|settings (tour)
 {{keyMod}}V テキストを貼り付け   {{arrowMod}}0 蝸牛速度 (0.1 MHz)
 {{keyMod}}← 時間を戻す      {{keyMod}}→ 時間を進める
 Open Apple:   左Alt/Optionを押す
-Closed Apple: 右Alt/Optionを押す`,urlParametersBody:`address=1234 (16進データの16進ロードアドレス)
+Closed Apple: 右Alt/Optionを押す
+Joystick:     テンキー 8/2/4/6 (7/9/1/3), 0/.を押す`,urlParametersBody:`address=1234 (16進データの16進ロードアドレス)
 appmode=game|embed (ゲーム|埋め込み)
 capslock=off (caps lock オフ)
 color=color|nofringe|green|amber|white|inverse (カラーモード)
@@ -1394,7 +1403,8 @@ tour=main|debug|settings (ツアー)
 {{keyMod}}V 텍스트 붙여넣기       {{arrowMod}}0 달팽이 속도 (0.1 MHz)
 {{keyMod}}← 시간 뒤로      {{keyMod}}→ 시간 앞으로
 Open Apple:   왼쪽 Alt/Option 누름
-Closed Apple: 오른쪽 Alt/Option 누름`,urlParametersBody:`address=1234 (16진수 데이터의 16진수 로드 주소)
+Closed Apple: 오른쪽 Alt/Option 누름
+Joystick:     숫자 패드 8/2/4/6 (7/9/1/3), 0/. 누름`,urlParametersBody:`address=1234 (16진수 데이터의 16진수 로드 주소)
 appmode=game|embed (게임|임베디드)
 capslock=off (capslock 끄기)
 color=color|nofringe|green|amber|white|inverse (컬러 모드)
@@ -1424,7 +1434,8 @@ tour=main|debug|settings (투어)
 {{keyMod}}V Plakken           {{arrowMod}}0 Slakkengang (0.1 MHz)
 {{keyMod}}← Tijd Terug      {{keyMod}}→ Tijd Vooruit
 Open Apple:   druk op Linker Alt/Option
-Closed Apple: Druk Rechter Alt/Option`,urlParametersBody:`address=1234 (hex-laadadres voor hex-data)
+Closed Apple: Druk Rechter Alt/Option
+Joystick:     Numeriek toetsenbord 8/2/4/6 (7/9/1/3), 0/.`,urlParametersBody:`address=1234 (hex-laadadres voor hex-data)
 appmode=game|embed (game|ingesloten)
 capslock=off (caps lock uit)
 color=color|nofringe|green|amber|white|inverse (kleurmodus)
@@ -1454,7 +1465,8 @@ tour=main|debug|settings (rondleiding)
 {{keyMod}}V Klistra in text     {{arrowMod}}0 Snigelfart (0.1 MHz)
 {{keyMod}}← Tid bakåt      {{keyMod}}→ Tid framåt
 Open Apple:   tryck på Vänster Alt/Option
-Closed Apple: Höger Alt/Option`,urlParametersBody:`address=1234 (hexladdningsadress för hexdata)
+Closed Apple: Höger Alt/Option
+Joystick:     tryck på Numeriska 8/2/4/6 (7/9/1/3), 0/.`,urlParametersBody:`address=1234 (hexladdningsadress för hexdata)
 appmode=game|embed (spel|inbäddad)
 capslock=off (caps lock av)
 color=color|nofringe|green|amber|white|inverse (färgläge)
@@ -1484,7 +1496,8 @@ tour=main|debug|settings (tur)
 {{keyMod}}V Вставить текст      {{arrowMod}}0 Улитка (0.1 МГц)
 {{keyMod}}← Назад во времени  {{keyMod}}→ Вперед во времени
 Open Apple:   нажмите левый Alt/Option
-Closed Apple: Правый Alt/Option`,urlParametersBody:`address=1234 (шестнадцатеричный адрес загрузки для шестнадцатеричных данных)
+Closed Apple: Правый Alt/Option
+Joystick:     нажмите Цифровую клавиатуру 8/2/4/6 (7/9/1/3), 0/.`,urlParametersBody:`address=1234 (шестнадцатеричный адрес загрузки для шестнадцатеричных данных)
 appmode=game|embed (игра|встроенный)
 capslock=off (capslock выкл)
 color=color|nofringe|green|amber|white|inverse (цветовой режим)
@@ -1671,7 +1684,8 @@ ${e2}S Save State        ${t2}5 Ludicrous/Warp Speed
 ${e2}V Paste Text        ${t2}0 Snail Speed (0.1 MHz)
 ${e2}← Back in Time      ${e2}→ Forward in Time
 Open Apple:   press Left Alt/Option
-Closed Apple: press Right Alt/Option`,Q0+=`
+Closed Apple: press Right Alt/Option
+Joystick:     press Numpad 8/2/4/6 (7/9/1/3), 0/.`,Q0+=`
 
 <b>Disk images:</b> hdv, 2mg, dsk, woz, po, do, bin, bas
 
@@ -1913,4 +1927,4 @@ You may show the code in your reply for reference, but the send_text calls are m
 RUN
 `:`
 `}return uD(r),{status:v6()}}case`ejectDisk`:return Ky(Number(t.driveIndex)),{status:v6()};default:throw Error(`Unsupported action '${e}'`)}},P6=async e=>{let t=JSON.parse(e.data);try{let e=await N6(t.action,t.payload||{});await O6(t.commandId,!0,e),await D6()}catch(e){await O6(t.commandId,!1,null,e instanceof Error?e.message:String(e))}},F6=()=>{i6||l6()&&(i6=!0,M6())},I6=()=>{let[e,t]=(0,v.useState)(!1),[n,r]=(0,v.useState)(0),[i,a]=(0,v.useState)(1.02),[o,s]=(0,v.useState)(0),[c,l]=(0,v.useState)(0),[u,d]=(0,v.useState)(0),[f,p]=(0,v.useState)(0),[m,h]=(0,v.useState)({show:!1,index:0}),[g,_]=(0,v.useState)(null);if(!g){let e=new Worker(new URL(``+new URL(`worker2main-QNJA4ylK.js`,import.meta.url).href,``+import.meta.url),{type:`module`});e.onmessage=e=>{let t=MD(e);t&&y(t.speed,t.helptext)},_(e),RE(e)}let y=(e=0,t=``)=>{t.length>0&&De(t),e&&e!==i&&a(e),r(e=>e+1)};e||(t(!0),`launchQueue`in window&&window.launchQueue.setConsumer(async e=>{let t=e.files;t&&t.length&&vk(await(await t[0].getFile()).text())}),$E(0),_g(),F6(),E_(y,w_()),zE(()=>{let e=document.getElementById(`apple2canvas`);if(e){let t=e.getContext(`2d`);t&&hk(t,Re())}}),window.addEventListener(`message`,t6));let b={speed:i,renderCount:n,setAvgFPS:s,ctrlKeyMode:c,openAppleKeyMode:u,closedAppleKeyMode:f,showFileOpenDialog:m,updateDisplay:y,handleCtrlDown:e=>{l(e)},handleOpenAppleDown:e=>{u===0&&e>0?dD(!0):u>0&&e===0&&window.setTimeout(()=>fD(!0),100),d(e)},handleClosedAppleDown:e=>{f===0&&e>0?dD(!1):f>0&&e===0&&window.setTimeout(()=>fD(!1),100),p(e)},setShowFileOpenDialog:(e,t)=>{h({show:e,index:t})}};Nl(Ke());let x=`ontouchstart`in document.documentElement,S=window.innerHeight?window.innerHeight:window.outerHeight-120,C=window.innerWidth?window.innerWidth:window.outerWidth-20,w=x||C<1.1*S,T=x&&C>S;(0,v.useEffect)(()=>{x&&(document.body.style.marginLeft=`0`,document.body.style.marginRight=`0`,document.body.style.marginTop=T?`10px`:`0`)},[x,T]);let E=cO()+64,D=(0,G.jsxs)(`div`,{className:`default-font footer-item`,children:[(0,G.jsxs)(G.Fragment,{children:[i,` MHz, `,E>1100?(E/1024).toFixed()+` MB`:E+` KB`,`, FPS: `,o.toFixed(1)]}),(0,G.jsx)(`br`,{}),(0,G.jsxs)(G.Fragment,{children:[`Apple2TS ©`,new Date().getFullYear(),`\xA0Chris Torrence\xA0`,(0,G.jsx)(`a`,{id:`reportIssue`,href:`https://github.com/ct6502/apple2ts/issues`,children:`Report an Issue`})]})]});return Me()?(0,G.jsx)(Nk,{...b}):(0,G.jsxs)(G.Fragment,{children:[(0,G.jsxs)(`div`,{className:w?`flex-column-gap`:`flex-row-gap`,style:{alignItems:`inherit`},children:[(0,G.jsxs)(`div`,{className:T?`flex-row`:`flex-column`,children:[(0,G.jsx)(Nk,{...b}),(0,G.jsxs)(`div`,{className:`flex-row-gap flexwrap`,style:{paddingLeft:`2px`},children:[(0,G.jsx)(BF,{...b}),!Ne()&&(0,G.jsx)(q3,{...b})]}),!T&&!Ne()&&D]}),T&&!Ne()&&D,w&&!qe()&&!Ne()&&(0,G.jsx)(`div`,{className:`divider`}),!Ne()&&(0,G.jsx)(d3,{updateDisplay:y,narrow:w})]}),qe()&&(0,G.jsx)(k3,{...b}),qe()&&x&&(0,G.jsx)(e6,{}),(0,G.jsx)(p3,{...b})]})};(0,y.createRoot)(document.getElementById(`root`)).render((0,G.jsx)(()=>{let[e,t]=(0,v.useState)(!1),[n,r]=(0,v.useState)([-1,-1]),[i,a]=(0,v.useState)(!1),[o,s]=(0,v.useState)(0),[c,l]=(0,v.useState)(``),[u,d]=(0,v.useState)(0);return window.setTimeout(()=>{qe()&&wk(()=>Promise.resolve({}),__vite__mapDeps([5]),import.meta.url)},1),(0,G.jsxs)(yf.Provider,{value:{runTour:c,setRunTour:l,tourIndex:u,setTourIndex:d,updateHgrMagnifier:e,setUpdateHgrMagnifier:t,hgrMagnifierLoc:n,setHgrMagnifierLoc:r,lockHgrMagnifier:i,setLockHgrMagnifier:a,updateBreakpoint:o,setUpdateBreakpoint:s},children:[(0,G.jsx)(I6,{}),(0,G.jsxs)(`div`,{className:`global-progress-modal-overlay`,children:[(0,G.jsx)(`img`,{src:window.assetRegistry.runningGuy,alt:`Loading...`,className:`global-progress-spinner2`}),(0,G.jsx)(`div`,{className:`global-progress-message`})]})]})},{}));
-//# sourceMappingURL=index-CMZd4jBp.js.map
+//# sourceMappingURL=index-CRw1CsBN.js.map
