@@ -66,9 +66,17 @@ const handleTimerT1 = (slot: number, chip: number, cycleDelta: number) => {
     if (t1high < 0) {
       t1high += 256
       memSetSlotROM(slot, T1CH[chip], t1high)
-      if (T1started(slot, chip) && (!T1fired(slot, chip) || T1continuous(slot, chip))) {
-        const fired = memGetSlotROM(slot, TIMER_FIRED[chip])
-        memSetSlotROM(slot, TIMER_FIRED[chip], fired | TIMER1)
+      if (T1started(slot, chip) && !T1fired(slot, chip)) {
+        // "fired" is the armed-latch: it's set when a one-shot timer underflows
+        // (so it fires exactly once) but left clear in continuous (free-running)
+        // mode, where the timer auto-reloads and must keep firing. This mirrors
+        // the real W65C22 / emu6502 "loaded" flag, and is what lets a timer that
+        // ran in continuous mode still interrupt once after switching to one-shot
+        // (mb-audit T6522_1 / 11:01:01).
+        if (!T1continuous(slot, chip)) {
+          const fired = memGetSlotROM(slot, TIMER_FIRED[chip])
+          memSetSlotROM(slot, TIMER_FIRED[chip], fired | TIMER1)
+        }
         const ifr = memGetSlotROM(slot, IFR[chip])
         memSetSlotROM(slot, IFR[chip], ifr | TIMER1)
         if (T1enabled(slot, chip)) {
@@ -179,6 +187,18 @@ const handleCommand = (slot: number, chip: number) => {
     }
     case 4:   // Inactive
       // Do I need to do something here?
+      break
+    case 5:   // READ command: latch the selected AY register's value into ORA
+      // so that a subsequent LDA ORA (Port-A read) returns the register contents.
+      // This is how Mockingboard software (and mb-audit) read AY-3-8910/2/3
+      // registers back. Without this, ORA reads return the stale port value and
+      // the card is reported as "unknown (no AYs)".
+      {
+        const r = memGetSlotROM(slot, REG_LATCH[chip])
+        if (r >= 0 && r <= 15) {
+          memSetSlotROM(slot, ORA[chip], memGetSlotROM(slot, REG[chip] + r))
+        }
+      }
       break
     default:
       break

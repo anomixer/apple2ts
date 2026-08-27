@@ -1,9 +1,10 @@
 import { runAssemblyTest } from "../instructions.test"
-import { interruptRequest } from "../cpu6502"
-import { s6502 } from "../instructions"
-import { memory } from "../memory"
+import { interruptRequest, processInstruction } from "../cpu6502"
+import { s6502, setPC } from "../instructions"
+import { memory, memGetSlotROM, updateAddressTables } from "../memory"
 import { ROMmemoryStart } from "../../common/utility"
-import { disablePassRegisters, resetMockingboard } from "./mockingboard"
+import { parseAssembly } from "../utility/assembler"
+import { disablePassRegisters, resetMockingboard, handleMockingboard, enableMockingboard } from "./mockingboard"
 
 test("temp", () => {})
 
@@ -255,3 +256,79 @@ for (let chip = 0; chip <= 1; chip++) {
     })
   }
 }
+
+// --- mb-audit regression tests (upstream issue #364) ---
+// Drive the timers directly via handleMockingboard + a few NOPs so the
+// cycle-count callback decrements the counters. No CPU IRQ needed.
+
+const slot4 = (reg: number, val: number) => handleMockingboard(0xC400 + reg, val)
+const get4 = (reg: number) => memGetSlotROM(slot, reg)
+
+// Run `n` NOPs at $1000 so the per-instruction cycle-count callback runs.
+const runNops = (n: number) => {
+  const code = parseAssembly(0x1000, Array(n).fill(" NOP"))
+  memory.set(code, 0x1000)
+  setPC(0x1000)
+  for (let i = 0; i < n; i++) processInstruction()
+}
+
+test("mb-audit 11:01:01: continuous->one-shot T1 re-fires", () => {
+  disablePassRegisters()
+  enableMockingboard(true, slot)
+  updateAddressTables()
+  resetMockingboard(slot)
+  interruptRequest(slot, false)
+  s6502.flagIRQ = 0
+
+  const ifrT1 = () => (get4(0xD) & 0x40) !== 0
+  const fired = () => (get4(0x12) & 0x40) !== 0
+
+  // Setup: T1C=$0404, free-running, IER=T1
+  slot4(4, 0x04); slot4(5, 0x04)
+  slot4(0xB, 0x40)
+  slot4(0xE, 0xC0); slot4(0xE, 0x3F)
+
+  // Wait for the first free-running underflow to set IFR.T1.
+  let guard = 0
+  while (!ifrT1() && guard++ < 600) runNops(1)
+  expect(ifrT1()).toBe(true)
+  // In continuous mode the "fired" latch must stay clear so it can re-fire.
+  expect(fired()).toBe(false)
+
+  // Switch to one-shot and clear the flag.
+  slot4(0xB, 0x00)
+  slot4(0xD, 0x40)
+  expect(ifrT1()).toBe(false)
+
+  // The one-shot underflow must now fire (this was the mb-audit failure).
+  guard = 0
+  while (!ifrT1() && guard++ < 600) runNops(1)
+  expect(ifrT1()).toBe(true)    // re-fired
+  expect(fired()).toBe(true)    // one-shot latch set
+
+  // One-shot fires exactly once: clear the flag, wait, confirm no re-fire.
+  slot4(0xD, 0x40)
+  runNops(300)
+  expect(ifrT1()).toBe(false)   // did NOT re-fire
+  interruptRequest(slot, false)
+})
+
+test("mb-audit: AY register read-back via ORA (no 'unknown card')", () => {
+  disablePassRegisters()
+  enableMockingboard(true, slot)
+  updateAddressTables()
+  resetMockingboard(slot)
+
+  // Init: DDRB/DDRA, AY reset + inactive
+  slot4(2, 0x07); slot4(3, 0xFF)
+  slot4(0, 0x00); slot4(0, 0x04)
+  // Write AY_AFINE (reg 0) = 0xAA: LATCH(reg), INACTIVE, WRITE(data)
+  slot4(1, 0x00); slot4(0, 0x07); slot4(0, 0x04)
+  slot4(1, 0xAA); slot4(0, 0x06); slot4(0, 0x04)
+  expect(memGetSlotROM(slot, 0x20)).toBe(0xAA)   // internal register holds 0xAA
+
+  // Read AY_AFINE (reg 0) back: LATCH(reg), INACTIVE, READ, then read ORA.
+  slot4(1, 0x00); slot4(0, 0x07); slot4(0, 0x04)
+  slot4(1, 0x00); slot4(0, 0x05)                  // READ latches the value into ORA
+  expect(memGetSlotROM(slot, 0x01)).toBe(0xAA)     // ORA now = 0xAA
+})
