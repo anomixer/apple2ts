@@ -332,3 +332,58 @@ test("mb-audit: AY register read-back via ORA (no 'unknown card')", () => {
   slot4(1, 0x00); slot4(0, 0x05)                  // READ latches the value into ORA
   expect(memGetSlotROM(slot, 0x01)).toBe(0xAA)     // ORA now = 0xAA
 })
+
+// --- mb-audit T6522_3 (11:03:00) & T6522_4: 6522 timer-counter load timing ---
+// chip-6522.a @readT1C expects T1C_L == $F1 after exactly:
+//   lda #$FF / sta T1CL / sta T1H   (latch=$FFFF, counter loaded, start)
+//   ldy #$00 / sty T1H              (reload counter from latch)
+//   jsr @readT1C (6cy)
+//   ldy zpTmp2 (3cy) / dey (2cy) / lda CARD_BASE,y (4cy)  -> read T1C_L
+//   cmp #$F1
+// That is 6+3+2+4 = 15 CPU cycles between the load write and the read. The real
+// W65C22 loads the counter as (latch + 1) and decrements once per cycle, so the
+// read returns (0x0100 - 15) = $00F1. emu6502 (a passing reference) does exactly
+// this (t1c = latch + 1). Loading the plain latch value read one cycle short
+// ($F0) -- the mb-audit 11:03:00 failure.
+
+// Run the exact mb-audit subTest #0 sequence against T1 (hOffset=5) or T2
+// (hOffset=9) and return the counter-low byte the CPU reads.
+const readTimerCounterLow = (hOffset: number) => {
+  const lo = (hOffset === 5) ? 4 : 8        // T1CL / T2CL
+  disablePassRegisters()
+  enableMockingboard(true, slot)
+  updateAddressTables()
+  resetMockingboard(slot)
+  s6502.flagIRQ = 0
+  memory[0x00] = hOffset                    // zpTmp2 = H offset; DEY -> counter low
+
+  const main = [
+    " LDA #$FF",
+    ` STA $C${slot}0${lo}`,                 // T1CL/T2CL = $FF (latch low)
+    ` STA $C${slot}0${hOffset}`,            // T1CH/T2CH = $FF (latch high) => latch=$FFFF
+    " LDY #$00",
+    ` STY $C${slot}0${hOffset}`,            // reload counter from latch
+    " JSR $2000",                           // @readT1C
+    " RTS",
+  ]
+  const read = [
+    " LDY $00",                            // 3cy: Y = H offset
+    " DEY",                                // 2cy: Y = counter low offset
+    " LDA $C400,Y",                        // 4cy: read T1C_L / T2C_L
+    " RTS",
+  ]
+  memory.set(parseAssembly(0x1000, main), 0x1000)
+  memory.set(parseAssembly(0x2000, read), 0x2000)
+  setPC(0x1000)
+  for (let i = 0; i < 10; i++) processInstruction()
+  return s6502.Accum & 0xff
+}
+
+test("mb-audit T6522_3 (11:03:00): T1 counter read == $F1", () => {
+  expect(readTimerCounterLow(5)).toBe(0xF1)
+})
+
+test("mb-audit T6522_4: T2 counter read == $F1", () => {
+  expect(readTimerCounterLow(9)).toBe(0xF1)
+})
+

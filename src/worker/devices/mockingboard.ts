@@ -284,8 +284,14 @@ export const handleMockingboard: AddressCallback = (addr: number, value = -1) =>
     case T1CH[chip]: // Timer 1 high-order counter, fall thru
       if (value >= 0) {
         memSetSlotROM(slot, T1LH[chip], value)
-        memSetSlotROM(slot, T1CL[chip], memGetSlotROM(slot, T1LL[chip]))
-        memSetSlotROM(slot, T1CH[chip], value)
+        // The W65C22 timer counter loads as (latch + 1), not the latch value:
+        // it counts latch+1 cycles before underflowing. This is what emu6502
+        // does (t1c = latch + 1) and what mb-audit T6522_3/11:03:00 requires
+        // (reads T1C_L == $F1, i.e. 16 - 15 elapsed cycles). Loading the plain
+        // latch value reads one cycle short ($F0).
+        const latchLow = memGetSlotROM(slot, T1LL[chip])
+        memSetSlotROM(slot, T1CL[chip], (latchLow + 1) & 0xFF)
+        memSetSlotROM(slot, T1CH[chip], (value + (latchLow === 0xFF ? 1 : 0)) & 0xFF)
         // Reset T1 interrupt flag
         const fired = memGetSlotROM(slot, TIMER_FIRED[chip])
         memSetSlotROM(slot, TIMER_FIRED[chip], fired & ~TIMER1)
@@ -318,8 +324,10 @@ export const handleMockingboard: AddressCallback = (addr: number, value = -1) =>
       break
     case T2CH[chip]: // Timer 2 high-order counter
       if (value >= 0) {
-        memSetSlotROM(slot, T2CH[chip], value)
-        memSetSlotROM(slot, T2CL[chip], memGetSlotROM(slot, T2LL[chip]))
+        // Same (latch + 1) load model as Timer 1 (see T1CH above).
+        const t2latchLow = memGetSlotROM(slot, T2LL[chip])
+        memSetSlotROM(slot, T2CH[chip], (value + (t2latchLow === 0xFF ? 1 : 0)) & 0xFF)
+        memSetSlotROM(slot, T2CL[chip], (t2latchLow + 1) & 0xFF)
         // Reset T2 interrupt flag
         const fired = memGetSlotROM(slot, TIMER_FIRED[chip])
         memSetSlotROM(slot, TIMER_FIRED[chip], fired & ~TIMER2)
