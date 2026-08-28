@@ -1,6 +1,6 @@
 import { interruptRequest, registerCycleCountCallback } from "../cpu6502"
 import { s6502 } from "../instructions"
-import { debugSlot, memGetSlotROM, memSetSlotROM, setSlotIOCallback } from "../memory"
+import { debugSlot, memGetRaw, memGetSlotROM, memSetSlotROM, setSlotIOCallback } from "../memory"
 import { passMockingboard } from "../worker2main"
 
 export const enableMockingboard = (enable = true, slot = 4) => {
@@ -248,6 +248,41 @@ const handleInterruptEnable = (slot: number, chip: number, value: number) => {
 
 let debug = 1000
 
+// The 6522 timer counter is loaded from the latch when the high-order counter
+// register is written. That write lands in the instruction's data phase (its last
+// cycle), so the instruction's earlier address-fetch cycles must NOT drain the
+// freshly-loaded counter. But apple2ts decrements the counter by the full cycle
+// count of the current instruction, so a longer store (e.g. STA abs,Y = 5, or
+// STA (zp,X) = 6) drains one or two extra cycles and the read comes out low.
+// mb-audit T6522_3 loads the counter with 4/4/4/5/5/6/6/4/5/5/6-cycle stores
+// (subTests #0-#A) and expects the SAME read ($F1) for all of them -- emu6502
+// (a passing reference) and AppleWin (GetOpcodeCyclesForWrite) both make the
+// loaded value independent of the store opcode. We compensate by adding the
+// store's extra cycles beyond the 4-cycle absolute-store baseline that mb-audit
+// calibrates to $F1, so every store opcode reads the same value.
+// (The store opcode is the current instruction; s6502.PC still points at it
+// while its execute() runs the counter load.)
+const extraTimerWriteCycles = () => {
+  const opcode = memGetRaw(s6502.PC)
+  switch (opcode) {
+    case 0x8D: // STA abs
+    case 0x8C: // STY abs
+    case 0x8E: // STX abs
+    case 0x9C: // STZ abs
+      return 0
+    case 0x99: // STA abs,Y
+    case 0x9D: // STA abs,X
+    case 0x9E: // STZ abs,X
+    case 0x92: // STA (zp)
+      return 1
+    case 0x81: // STA (zp,X)
+    case 0x91: // STA (zp),Y
+      return 2
+    default:
+      return 0
+  }
+}
+
 export const handleMockingboard: AddressCallback = (addr: number, value = -1) => {
   if (addr < 0xC100) return -1
   const slot = (addr & 0xF00) >> 8
@@ -287,11 +322,21 @@ export const handleMockingboard: AddressCallback = (addr: number, value = -1) =>
         // The W65C22 timer counter loads as (latch + 1), not the latch value:
         // it counts latch+1 cycles before underflowing. This is what emu6502
         // does (t1c = latch + 1) and what mb-audit T6522_3/11:03:00 requires
-        // (reads T1C_L == $F1, i.e. 16 - 15 elapsed cycles). Loading the plain
-        // latch value reads one cycle short ($F0).
+        // (reads T1C_L == $F1). Loading the plain latch value reads one cycle
+        // short ($F0).
+        //
+        // The counter also loads at the store instruction's data phase (its last
+        // cycle), so the store's earlier address-fetch cycles must NOT drain it.
+        // apple2ts decrements the counter by the store's full cycle count, so a
+        // longer store (STA abs,Y = 5, STA (zp,X) = 6) over-drains by its extra
+        // cycles and the read comes out low -- mb-audit 11:03:03 (STA abs,Y)
+        // reads $F0 instead of $F1. Add the store's extra cycles beyond the
+        // 4-cycle baseline (see extraTimerWriteCycles) so every store opcode
+        // reads the same value, as emu6502/AppleWin do.
         const latchLow = memGetSlotROM(slot, T1LL[chip])
-        memSetSlotROM(slot, T1CL[chip], (latchLow + 1) & 0xFF)
-        memSetSlotROM(slot, T1CH[chip], (value + (latchLow === 0xFF ? 1 : 0)) & 0xFF)
+        const loadLow = latchLow + 1 + extraTimerWriteCycles()
+        memSetSlotROM(slot, T1CL[chip], loadLow & 0xFF)
+        memSetSlotROM(slot, T1CH[chip], (value + (loadLow > 0xFF ? 1 : 0)) & 0xFF)
         // Reset T1 interrupt flag
         const fired = memGetSlotROM(slot, TIMER_FIRED[chip])
         memSetSlotROM(slot, TIMER_FIRED[chip], fired & ~TIMER1)
@@ -324,10 +369,12 @@ export const handleMockingboard: AddressCallback = (addr: number, value = -1) =>
       break
     case T2CH[chip]: // Timer 2 high-order counter
       if (value >= 0) {
-        // Same (latch + 1) load model as Timer 1 (see T1CH above).
+        // Same (latch + 1) load model and store-phase compensation as Timer 1
+        // (see T1CH above).
         const t2latchLow = memGetSlotROM(slot, T2LL[chip])
-        memSetSlotROM(slot, T2CH[chip], (value + (t2latchLow === 0xFF ? 1 : 0)) & 0xFF)
-        memSetSlotROM(slot, T2CL[chip], (t2latchLow + 1) & 0xFF)
+        const t2loadLow = t2latchLow + 1 + extraTimerWriteCycles()
+        memSetSlotROM(slot, T2CL[chip], t2loadLow & 0xFF)
+        memSetSlotROM(slot, T2CH[chip], (value + (t2loadLow > 0xFF ? 1 : 0)) & 0xFF)
         // Reset T2 interrupt flag
         const fired = memGetSlotROM(slot, TIMER_FIRED[chip])
         memSetSlotROM(slot, TIMER_FIRED[chip], fired & ~TIMER2)
