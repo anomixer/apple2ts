@@ -283,6 +283,38 @@ const extraTimerWriteCycles = () => {
   }
 }
 
+// The 6522 counter is sampled at the READ instruction's data phase (its last
+// cycle), so a longer read (more address-fetch cycles before the data phase)
+// sees the counter one or two cycles lower. apple2ts serves the counter as stored
+// (before decrementing the current instruction), so it returns the 4-cycle
+// absolute-read value for EVERY read opcode -- mb-audit T6522_5 reads T1C_L with
+// 4/4/4/5/6-cycle reads (subTests #$20-#$25) expecting $FC/$FC/$FC/$FB/$FA, but
+// apple2ts returns $FC for all of them (11:05:23: the 5-cycle read #$23 did not
+// read $FB). Subtract the read's extra cycles beyond the 4-cycle absolute-read
+// baseline (the 4-cycle reads already pass) so each read opcode returns the right
+// value. This is AppleWin's GetOpcodeCyclesForRead. (The read opcode is the
+// current instruction; s6502.PC still points at it while its execute() reads the
+// counter.)
+const extraTimerReadCycles = () => {
+  const opcode = memGetRaw(s6502.PC)
+  const lowNibble = opcode & 0x0F
+  const bit4 = (opcode & 0x10) !== 0
+  if (lowNibble === 0x01 && !bit4) return 2  // (zp,X) read: 6 cycles
+  if (lowNibble === 0x01 && bit4) return 1   // (zp),Y read: 5 cycles
+  if (lowNibble === 0x02 && bit4) return 1   // (zp) read: 5 cycles
+  return 0                                    // abs reads (abs, abs,X, abs,Y): 4 cycles
+}
+
+// The 16-bit timer counter for a chip/timer, adjusted for the current read
+// instruction's data phase (see extraTimerReadCycles). byte 0 = low, 1 = high.
+const readTimerCounterByte = (slot: number, chip: number, timer: number, byte: number) => {
+  const clOff = timer === 0 ? T1CL[chip] : T2CL[chip]
+  const chOff = timer === 0 ? T1CH[chip] : T2CH[chip]
+  const counter = (memGetSlotROM(slot, chOff) << 8) | memGetSlotROM(slot, clOff)
+  const adjusted = (counter - extraTimerReadCycles()) & 0xFFFF
+  return byte ? (adjusted >> 8) & 0xFF : adjusted & 0xFF
+}
+
 export const handleMockingboard: AddressCallback = (addr: number, value = -1) => {
   if (addr < 0xC100) return -1
   const slot = (addr & 0xF00) >> 8
@@ -315,6 +347,7 @@ export const handleMockingboard: AddressCallback = (addr: number, value = -1) =>
       }
       // Reset T1 interrupt (Note that a "write" also does a "read")
       handleInterruptFlag(slot, chip, TIMER1)
+      if (value < 0) return readTimerCounterByte(slot, chip, 0, 0)
       break
     case T1CH[chip]: // Timer 1 high-order counter, fall thru
       if (value >= 0) {
@@ -344,6 +377,7 @@ export const handleMockingboard: AddressCallback = (addr: number, value = -1) =>
         memSetSlotROM(slot, TIMER_STARTED[chip], started | TIMER1)
         handleInterruptFlag(slot, chip, TIMER1)
       }
+      if (value < 0) return readTimerCounterByte(slot, chip, 0, 1)
       break
     case T1LL[chip]: // Timer 1 low-order latch
       if (value >= 0) {
@@ -366,6 +400,7 @@ export const handleMockingboard: AddressCallback = (addr: number, value = -1) =>
       }
       // Reset T2 interrupt (Note that a "write" also does a "read")
       handleInterruptFlag(slot, chip, TIMER2)
+      if (value < 0) return readTimerCounterByte(slot, chip, 1, 0)
       break
     case T2CH[chip]: // Timer 2 high-order counter
       if (value >= 0) {
@@ -382,6 +417,7 @@ export const handleMockingboard: AddressCallback = (addr: number, value = -1) =>
         memSetSlotROM(slot, TIMER_STARTED[chip], started | TIMER2)
         handleInterruptFlag(slot, chip, TIMER2)
       }
+      if (value < 0) return readTimerCounterByte(slot, chip, 1, 1)
       break
     case IFR[chip]: // Interrupt flag register
       if (value >= 0) {
