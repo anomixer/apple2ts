@@ -66,28 +66,34 @@ const handleTimerT1 = (slot: number, chip: number, cycleDelta: number) => {
     if (t1high < 0) {
       t1high += 256
       memSetSlotROM(slot, T1CH[chip], t1high)
-      if (T1started(slot, chip) && !T1fired(slot, chip)) {
-        // "fired" is the armed-latch: it's set when a one-shot timer underflows
-        // (so it fires exactly once) but left clear in continuous (free-running)
-        // mode, where the timer auto-reloads and must keep firing. This mirrors
-        // the real W65C22 / emu6502 "loaded" flag, and is what lets a timer that
-        // ran in continuous mode still interrupt once after switching to one-shot
+      if (T1started(slot, chip)) {
+        // A started timer underflows (0 -> $FFFF). It always re-arms from the
+        // latch -- in BOTH one-shot and continuous (free-running) mode. This is
+        // what emu6502 does (it reloads t1c = latch whenever the counter wraps,
+        // in both modes) and what mb-audit T6522_9 (11:09:01) requires: after a
+        // one-shot underflow the counter must reload to the latch (T1C_h=$02),
+        // not stay at $FFFF. The only difference between the modes is the
+        // "fired" latch: one-shot sets it (so it re-arms for exactly one more
+        // underflow), continuous leaves it clear (so it keeps re-arming and
+        // firing). This is the "loaded" flag; it's what lets a timer that ran in
+        // continuous mode still interrupt once after switching to one-shot
         // (mb-audit T6522_1 / 11:01:01).
-        if (!T1continuous(slot, chip)) {
-          const fired = memGetSlotROM(slot, TIMER_FIRED[chip])
-          memSetSlotROM(slot, TIMER_FIRED[chip], fired | TIMER1)
+        if (!T1fired(slot, chip)) {
+          if (!T1continuous(slot, chip)) {
+            const fired = memGetSlotROM(slot, TIMER_FIRED[chip])
+            memSetSlotROM(slot, TIMER_FIRED[chip], fired | TIMER1)
+          }
+          const ifr = memGetSlotROM(slot, IFR[chip])
+          memSetSlotROM(slot, IFR[chip], ifr | TIMER1)
+          if (T1enabled(slot, chip)) {
+            handleInterruptFlag(slot, chip, -1)
+          }
         }
-        const ifr = memGetSlotROM(slot, IFR[chip])
-        memSetSlotROM(slot, IFR[chip], ifr | TIMER1)
-        if (T1enabled(slot, chip)) {
-          handleInterruptFlag(slot, chip, -1)
-        }
-        if (T1continuous(slot, chip)) {
-          const t1NewHigh = memGetSlotROM(slot, T1LH[chip])
-          const t1NewLow = memGetSlotROM(slot, T1LL[chip])
-          memSetSlotROM(slot, T1CL[chip], t1NewLow)
-          memSetSlotROM(slot, T1CH[chip], t1NewHigh)
-        }
+        // Reload the counter from the latch in both modes.
+        const t1NewHigh = memGetSlotROM(slot, T1LH[chip])
+        const t1NewLow = memGetSlotROM(slot, T1LL[chip])
+        memSetSlotROM(slot, T1CL[chip], t1NewLow)
+        memSetSlotROM(slot, T1CH[chip], t1NewHigh)
       }
     }
   }
