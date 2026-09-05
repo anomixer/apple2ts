@@ -213,7 +213,7 @@ describe("Retro menu metadata structure", () => {
     expect(actionLabel(context)).toBe("retroControl.load")
   })
 
-  test("moves disk provider items to the Load Disk from screen", () => {
+  test("shows every disk item and separator for an empty drive", () => {
     const drive = retroDiskControls.find(control => control.id === "diskDrives.0")
     const context = createControlContext(undefined, key => key, "en", () => undefined)
     mockHandleGetDriveProps.mockReturnValue({ filename: "" })
@@ -222,7 +222,29 @@ describe("Retro menu metadata structure", () => {
     expect(items.map(item => item.id)).toEqual([
       "diskDrives.0.load.device",
       "diskDrives.0.load.from",
+      "diskDrives.0.diskSeparator",
+      "diskDrives.0.writeProtected",
+      "diskDrives.0.favorite",
+      "diskDrives.0.downloadSeparator",
+      "diskDrives.0.download",
+      "diskDrives.0.downloadWoz",
+      "diskDrives.0.downloadAndEject",
+      "diskDrives.0.eject",
+      "diskDrives.0.saveSeparator",
+      "diskDrives.0.saveToDevice",
+      "diskDrives.0.saveTo",
+      "diskDrives.0.pauseSyncing",
+      "diskDrives.0.syncNow",
     ])
+    expect(items.filter(item => item.separator).map(item => item.label)).toEqual([
+      "Disk", "Download", "Save",
+    ])
+    expect(items.slice(3).filter(item => !item.separator).every(item => {
+      const selectable = typeof item.selectable === "function"
+        ? item.selectable(context)
+        : item.selectable
+      return selectable === false
+    })).toBe(true)
     expect(items[1].label instanceof Function ? items[1].label(context) : items[1].label)
       .toBe("disk.loadDiskFromMenu")
 
@@ -281,7 +303,7 @@ describe("Retro menu metadata structure", () => {
       ? item.label(context)
       : item.label)).toEqual([
       "Disk", "disk.writeProtectDisk", "disk.addToFavorites", "Download", "disk.downloadDisk", "disk.downloadWoz",
-      "disk.downloadAndEjectDisk", "disk.ejectDisk", "Save", "disk.saveDiskToMenu",
+      "disk.downloadAndEjectDisk", "disk.ejectDisk", "Save", "disk.saveDiskToDevice", "disk.saveDiskToMenu",
       "disk.pauseSyncing", "disk.syncNow",
     ])
     const saveToItem = insertedDiskItems(0).find(item => item.id.endsWith(".saveTo"))
@@ -305,7 +327,7 @@ describe("Retro menu metadata structure", () => {
       ? item.label(context)
       : item.label)).toEqual([
       "Disk", "disk.writeProtectDisk", "disk.addToFavorites", "Download", "disk.downloadDisk", "disk.downloadWoz",
-      "disk.downloadAndEjectDisk", "disk.ejectDisk", "Save", "disk.saveDiskToMenu",
+      "disk.downloadAndEjectDisk", "disk.ejectDisk", "Save", "disk.saveDiskToDevice", "disk.saveDiskToMenu",
       "disk.pauseSyncing", "disk.syncNow",
     ])
   })
@@ -411,7 +433,7 @@ describe("Retro menu metadata structure", () => {
     const items = insertedDiskItems(0)
     expect(items.map(item => item.label instanceof Function ? item.label(context) : item.label)).toEqual([
       "Disk", "disk.writeProtectDisk", "disk.addToFavorites", "Download", "disk.downloadDisk", "disk.downloadWoz",
-      "disk.downloadAndEjectDisk", "disk.ejectDisk", "Save", "disk.saveDiskToMenu",
+      "disk.downloadAndEjectDisk", "disk.ejectDisk", "Save", "disk.saveDiskToDevice", "disk.saveDiskToMenu",
       "disk.pauseSyncing", "disk.syncNow",
     ])
     expect(items.filter(item => item.separator).map(item => item.label instanceof Function
@@ -422,7 +444,7 @@ describe("Retro menu metadata structure", () => {
       .toBeUndefined()
   })
 
-  test("hides disabled WOZ download", () => {
+  test("shows disabled WOZ download", () => {
     const context = createControlContext(undefined, key => key, "en", () => undefined)
     context.diskBookmarks = new DiskBookmarks()
     mockHandleGetDriveProps.mockReturnValue({
@@ -436,7 +458,9 @@ describe("Retro menu metadata structure", () => {
 
     const items = insertedDiskItems(0)
 
-    expect(items.some(item => item.id.endsWith(".downloadWoz"))).toBe(false)
+    const item = items.find(control => control.id.endsWith(".downloadWoz"))
+    expect(item).toBeDefined()
+    expect(typeof item?.selectable === "function" ? item.selectable(context) : item?.selectable).toBe(false)
   })
 
   test("refreshes an ejected disk drive label to Empty", () => {

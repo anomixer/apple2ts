@@ -1,6 +1,6 @@
 import { DiskCollectionSortMode, setPreferenceDiskCollectionSort } from "../../localstorage"
 import { handleGetSlotConfig, passSetDriveProps } from "../../main2worker"
-import { getDefaultDiskDriveIndex } from "../../../common/utility"
+import { CLOUD_SYNC, getDefaultDiskDriveIndex } from "../../../common/utility"
 import {
   DISK_COLLECTION_ITEM_TYPE,
   TAB_INDEX,
@@ -493,6 +493,7 @@ const favoriteItem = (
 
 const baseWriteProtectItem = (driveIndex: number, drive: DriveProps): RetroControlMetadata => ({
   ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.writeProtected", {}, { driveIndex }),
+  selectable: () => Boolean(drive.filename),
   ...toggleBinding({
     enabled: () => drive.isWriteProtected,
     setEnabled: (context, enabled) => {
@@ -504,6 +505,7 @@ const baseWriteProtectItem = (driveIndex: number, drive: DriveProps): RetroContr
 
 const ejectItem = (driveIndex: number): RetroControlMetadata => ({
   ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.eject", {}, { driveIndex }),
+  selectable: () => Boolean(handleGetDriveProps(driveIndex).filename),
   action: context => {
     handleEjectDisk(driveIndex)
     context.displayProps.updateDisplay()
@@ -514,6 +516,14 @@ export const insertedDiskItems = (
   driveIndex: number,
 ): RetroControlMetadata[] => {
   const drive = handleGetDriveProps(driveIndex)
+  const hasDisk = Boolean(drive.filename)
+  const isElectron = navigator.userAgent.includes("Electron")
+  const activeCloudDisk = Boolean(
+    drive.cloudData && drive.cloudData.syncStatus !== CLOUD_SYNC.INACTIVE
+  )
+  const supportedCloudDisk = activeCloudDisk && (
+    drive.cloudData?.providerName === "OneDrive" || drive.cloudData?.providerName === "GoogleDrive"
+  )
   const setSyncInterval = (syncInterval: number) => {
     const latestDrive = handleGetDriveProps(driveIndex)
     if (!latestDrive.cloudData) return
@@ -526,14 +536,17 @@ export const insertedDiskItems = (
   const downloadItems: RetroControlMetadata[] = [
     {
       ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.download", {}, { driveIndex }),
+      selectable: () => hasDisk,
       action: () => downloadDiskToDevice(driveIndex),
     },
-    ...(!drive.hardDrive && !drive.filename.toLowerCase().endsWith(".woz") ? [{
+    {
       ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.downloadWoz", {}, { driveIndex }),
+      selectable: () => hasDisk && !drive.hardDrive && !drive.filename.toLowerCase().endsWith(".woz"),
       action: () => downloadDiskToDevice(driveIndex, true),
-    }] : []),
+    },
     {
       ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.downloadAndEject", {}, { driveIndex }),
+      selectable: () => hasDisk,
       action: (currentContext: RetroMenuContext) => {
         downloadDiskToDevice(driveIndex)
         handleEjectDisk(driveIndex)
@@ -543,37 +556,41 @@ export const insertedDiskItems = (
     ejectItem(driveIndex),
   ]
 
-  const saveToItems: RetroControlMetadata[] = !navigator.userAgent.includes("Electron") ? [
+  const saveToItems: RetroControlMetadata[] = [
     {
       ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.saveToOneDrive", {}, { driveIndex }),
+      selectable: () => hasDisk && !isElectron,
       action: () => { void saveDiskToCloud(driveIndex, new OneDriveCloudDrive()) },
     },
     {
       ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.saveToGoogleDrive", {}, { driveIndex }),
+      selectable: () => hasDisk && !isElectron,
       action: () => { void saveDiskToCloud(driveIndex, new GoogleDrive()) },
     },
-  ] : []
+  ]
 
   const saveItems: RetroControlMetadata[] = [
-    ...(isFileSystemApiSupported() && !drive.writableFileHandle ? [{
+    {
       ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.saveToDevice", {}, { driveIndex }),
+      selectable: () => hasDisk && isFileSystemApiSupported() && !drive.writableFileHandle,
       action: () => { void saveDiskToDevice(driveIndex) },
-    }] : []),
-    ...(saveToItems.length > 0 ? [{
+    },
+    {
       ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.saveTo", {}, { driveIndex }),
+      selectable: () => hasDisk && !isElectron,
       dynamicChildren: () => saveToItems,
-    }] : []),
-    ...[
-      {
-        ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.pauseSyncing", {}, { driveIndex }),
-        indicator: () => drive.cloudData?.syncInterval === Number.MAX_VALUE ? "*" : undefined,
-        action: () => setSyncInterval(Number.MAX_VALUE),
-      },
-      {
-        ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.syncNow", {}, { driveIndex }),
-        action: () => { void syncCloudDisk(driveIndex) },
-      },
-    ],
+    },
+    {
+      ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.pauseSyncing", {}, { driveIndex }),
+      selectable: () => activeCloudDisk,
+      indicator: () => drive.cloudData?.syncInterval === Number.MAX_VALUE ? "*" : undefined,
+      action: () => setSyncInterval(Number.MAX_VALUE),
+    },
+    {
+      ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.syncNow", {}, { driveIndex }),
+      selectable: () => supportedCloudDisk,
+      action: () => { void syncCloudDisk(driveIndex) },
+    },
   ]
 
   const favorite = favoriteItem(
@@ -667,7 +684,7 @@ const diskBindings: RetroControlBindings = {
       isVisible: () => handleGetSlotConfig()[slot] !== "none",
       dynamicChildren: () => [
         ...diskLoadItems(index),
-        ...(handleGetDriveProps(index).filename ? insertedDiskItems(index) : []),
+        ...insertedDiskItems(index),
       ],
       actionLabel: (context: RetroMenuContext) => context.t(handleGetDriveProps(index).filename
         ? "retroControl.select"
