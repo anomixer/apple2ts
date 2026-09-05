@@ -223,6 +223,8 @@ describe("Retro menu metadata structure", () => {
       "diskDrives.0.load.device",
       "diskDrives.0.load.from",
     ])
+    expect(items[1].label instanceof Function ? items[1].label(context) : items[1].label)
+      .toBe("disk.loadDiskFromMenu")
 
     const loadFromItems = items[1].dynamicChildren?.(context) ?? []
     expect(loadFromItems.map(item => item.id)).toEqual([
@@ -279,9 +281,13 @@ describe("Retro menu metadata structure", () => {
       ? item.label(context)
       : item.label)).toEqual([
       "Disk", "disk.writeProtectDisk", "Download", "disk.downloadDisk", "disk.downloadWoz",
-      "disk.downloadAndEjectDisk", "disk.ejectDisk", "Save", "disk.saveDiskToOneDrive",
-      "disk.saveDiskToGoogleDrive", "disk.pauseSyncing", "disk.syncNow",
+      "disk.downloadAndEjectDisk", "disk.ejectDisk", "Save", "disk.saveDiskToMenu",
+      "disk.pauseSyncing", "disk.syncNow",
     ])
+    const saveToItem = insertedDiskItems(0, context).find(item => item.id.endsWith(".saveTo"))
+    expect(saveToItem?.dynamicChildren?.(context).map(item => item.label instanceof Function
+      ? item.label(context)
+      : item.label)).toEqual(["disk.OneDrive", "disk.GoogleDrive"])
     expect(insertedDiskItems(0, context).filter(item => item.separator).map(item => item.label))
       .toEqual(["Disk", "Download", "Save"])
 
@@ -299,8 +305,8 @@ describe("Retro menu metadata structure", () => {
       ? item.label(context)
       : item.label)).toEqual([
       "Disk", "disk.writeProtectDisk", "Download", "disk.downloadDisk", "disk.downloadWoz",
-      "disk.downloadAndEjectDisk", "disk.ejectDisk", "Save", "disk.saveDiskToOneDrive",
-      "disk.saveDiskToGoogleDrive", "disk.pauseSyncing", "disk.syncNow", "Favorites",
+      "disk.downloadAndEjectDisk", "disk.ejectDisk", "Save", "disk.saveDiskToMenu",
+      "disk.pauseSyncing", "disk.syncNow", "Favorites",
       "disk.addDiskToCollection",
     ])
   })
@@ -352,8 +358,8 @@ describe("Retro menu metadata structure", () => {
     const items = insertedDiskItems(0, context)
     expect(items.map(item => item.label instanceof Function ? item.label(context) : item.label)).toEqual([
       "Disk", "disk.writeProtectDisk", "Download", "disk.downloadDisk", "disk.downloadWoz",
-      "disk.downloadAndEjectDisk", "disk.ejectDisk", "Save", "disk.saveDiskToOneDrive",
-      "disk.saveDiskToGoogleDrive", "disk.pauseSyncing", "disk.syncNow", "Favorites",
+      "disk.downloadAndEjectDisk", "disk.ejectDisk", "Save", "disk.saveDiskToMenu",
+      "disk.pauseSyncing", "disk.syncNow", "Favorites",
       "disk.addDiskToCollection",
     ])
     expect(items.filter(item => item.separator).map(item => item.label instanceof Function

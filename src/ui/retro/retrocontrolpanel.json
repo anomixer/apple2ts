@@ -682,7 +682,7 @@
     {
       "group": "diskTemplates",
       "id": "diskDrives.{{driveIndex}}.load.from",
-      "labelKey": "disk.loadDiskFrom",
+      "labelKey": "disk.loadDiskFromMenu",
       "submenuTitleKey": "disk.loadDiskFrom"
     },
     {
@@ -756,6 +756,12 @@
     },
     {
       "group": "diskTemplates",
+      "id": "diskDrives.{{driveIndex}}.saveTo",
+      "labelKey": "disk.saveDiskToMenu",
+      "submenuTitleKey": "disk.saveDiskTo"
+    },
+    {
+      "group": "diskTemplates",
       "id": "diskDrives.{{driveIndex}}.download",
       "kind": "action",
       "labelKey": "disk.downloadDisk"
@@ -776,13 +782,13 @@
       "group": "diskTemplates",
       "id": "diskDrives.{{driveIndex}}.saveToOneDrive",
       "kind": "action",
-      "labelKey": "disk.saveDiskToOneDrive"
+      "labelKey": "disk.OneDrive"
     },
     {
       "group": "diskTemplates",
       "id": "diskDrives.{{driveIndex}}.saveToGoogleDrive",
       "kind": "action",
-      "labelKey": "disk.saveDiskToGoogleDrive"
+      "labelKey": "disk.GoogleDrive"
     },
     {
       "group": "diskTemplates",

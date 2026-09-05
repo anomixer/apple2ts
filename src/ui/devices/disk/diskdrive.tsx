@@ -7,9 +7,11 @@ import {
   doSetUIDriveProps
 } from "./driveprops"
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome"
-import { faCloud, faDownload, faEject, faFloppyDisk, faFolderOpen,
+import {
+  faCloud, faDownload, faEject, faFloppyDisk, faFolderOpen,
   faGlobe,
-  faLock, faPause, faRotate, faStar, faSync } from "@fortawesome/free-solid-svg-icons"
+  faLock, faPause, faRotate, faStar, faSync
+} from "@fortawesome/free-solid-svg-icons"
 import { OneDriveCloudDrive } from "./onedriveclouddrive"
 import { GoogleDrive } from "./googledrive"
 import React from "react"
@@ -337,6 +339,19 @@ const DiskDrive = (props: DiskDriveProps) => {
     },
   ]
 
+  const saveDiskSubMenu = [
+    {
+      label: t("disk.OneDrive"),
+      icon: faCloud,
+      onClick: () => { saveDiskToCloud(new OneDriveCloudDrive()) }
+    },
+    {
+      label: t("disk.GoogleDrive"),
+      icon: faCloud,
+      onClick: () => { saveDiskToCloud(new GoogleDrive()) }
+    },
+  ]
+
   return (
     <span
       className="flex-column"
@@ -393,9 +408,9 @@ const DiskDrive = (props: DiskDriveProps) => {
             onClick: () => { props.setShowFileOpenDialog(true, props.index) }
           },
           {
-              label: t("disk.loadDiskFrom"),
-              icon: faGlobe,
-              subMenu: loadDiskSubMenu
+            label: t("disk.loadDiskFrom"),
+            icon: faGlobe,
+            subMenu: loadDiskSubMenu
           },
           {
             label: "-"
@@ -469,18 +484,11 @@ const DiskDrive = (props: DiskDriveProps) => {
             onClick: () => { showDiskSaveFilePicker(props.index) }
           },
           {
-            label: t("disk.saveDiskToOneDrive"),
-            icon: faCloud,
+            label: t("disk.saveDiskTo"),
+            icon: faGlobe,
             isDisabled: dprops.filename.length === 0,
             isVisible: () => { return !isElectron },
-            onClick: () => { saveDiskToCloud(new OneDriveCloudDrive()) }
-          },
-          {
-            label: t("disk.saveDiskToGoogleDrive"),
-            icon: faCloud,
-            isDisabled: dprops.filename.length === 0,
-            isVisible: () => { return !isElectron },
-            onClick: () => { saveDiskToCloud(new GoogleDrive()) }
+            subMenu: saveDiskSubMenu
           },
           {
             label: t("disk.pauseSyncing"),

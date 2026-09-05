@@ -571,21 +571,26 @@ export const insertedDiskItems = (
     ejectItem(driveIndex),
   ]
 
+  const saveToItems: RetroControlMetadata[] = !navigator.userAgent.includes("Electron") ? [
+    {
+      ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.saveToOneDrive", {}, { driveIndex }),
+      action: () => { void saveDiskToCloud(driveIndex, new OneDriveCloudDrive()) },
+    },
+    {
+      ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.saveToGoogleDrive", {}, { driveIndex }),
+      action: () => { void saveDiskToCloud(driveIndex, new GoogleDrive()) },
+    },
+  ] : []
+
   const saveItems: RetroControlMetadata[] = [
     ...(isFileSystemApiSupported() && !drive.writableFileHandle ? [{
       ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.saveToDevice", {}, { driveIndex }),
       action: () => { void saveDiskToDevice(driveIndex) },
     }] : []),
-    ...(!navigator.userAgent.includes("Electron") ? [
-      {
-        ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.saveToOneDrive", {}, { driveIndex }),
-        action: () => { void saveDiskToCloud(driveIndex, new OneDriveCloudDrive()) },
-      },
-      {
-        ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.saveToGoogleDrive", {}, { driveIndex }),
-        action: () => { void saveDiskToCloud(driveIndex, new GoogleDrive()) },
-      },
-    ] : []),
+    ...(saveToItems.length > 0 ? [{
+      ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.saveTo", {}, { driveIndex }),
+      dynamicChildren: () => saveToItems,
+    }] : []),
     ...[
       {
         ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.pauseSyncing", {}, { driveIndex }),
