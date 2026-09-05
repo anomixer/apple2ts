@@ -14,7 +14,7 @@ import { doSetRunMode, doSetSpeedMode,
   setTracing,
   doExecuteBasicCommand,
   doSetCyclesToRun,
-  getExternalMemoryView} from "./motherboard"
+  getExternalMemoryView, findExternalMemory} from "./motherboard"
 import { doSetEmuDriveNewData, doSetEmuDriveProps } from "./devices/drivestate"
 import { apple2KeyRelease, setKeyboardState, sendTextToEmulator } from "./devices/keyboard"
 import { pressAppleCommandKey, setGamepads, setReverseYAxis } from "./devices/joystick"
@@ -240,6 +240,20 @@ if (typeof self !== "undefined") {
             e.data.operationId,
             undefined,
             getExternalMemoryView(e.data.payload as MemoryViewRequest),
+          )
+        } catch (error) {
+          passWorkerOperationResult(
+            e.data.operationId,
+            error instanceof Error ? error.message : String(error),
+          )
+        }
+        break
+      case MSG_MAIN.FIND_MEMORY:
+        try {
+          passWorkerOperationResult(
+            e.data.operationId,
+            undefined,
+            findExternalMemory(e.data.payload as MemorySearchRequest),
           )
         } catch (error) {
           passWorkerOperationResult(
