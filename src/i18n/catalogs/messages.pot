@@ -1004,12 +1004,8 @@ msgctxt "disk.saveDiskToMenu"
 msgid "Save Disk to >"
 msgstr ""
 
-msgctxt "disk.addDiskToCollection"
-msgid "Add Disk to Collection"
-msgstr ""
-
-msgctxt "disk.removeDiskFromCollection"
-msgid "Remove Disk from Collection"
+msgctxt "disk.addToFavorites"
+msgid "Add to Favorites"
 msgstr ""
 
 msgctxt "disk.downloadDisk"

@@ -738,15 +738,12 @@
     },
     {
       "group": "diskTemplates",
-      "id": "diskDrives.{{driveIndex}}.addToCollection",
-      "kind": "action",
-      "labelKey": "disk.addDiskToCollection"
-    },
-    {
-      "group": "diskTemplates",
-      "id": "diskDrives.{{driveIndex}}.removeFromCollection",
-      "kind": "action",
-      "labelKey": "disk.removeDiskFromCollection"
+      "id": "diskDrives.{{driveIndex}}.favorite",
+      "kind": "toggle",
+      "labelKey": "disk.addToFavorites",
+      "checkmarkIndex": 1,
+      "hideOptionValue": true,
+      "contextualActionLabelKey": "retroControl.save"
     },
     {
       "group": "diskTemplates",

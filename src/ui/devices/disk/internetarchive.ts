@@ -88,12 +88,15 @@ export const searchInternetArchive = async (
   }
 }
 
-export const createInternetArchiveCloudData = (result: Pick<InternetArchiveResult, "identifier">): CloudData => ({
+export const createInternetArchiveCloudData = (
+  result: Pick<InternetArchiveResult, "identifier"> & Partial<Pick<InternetArchiveResult, "title">>,
+): CloudData => ({
   providerName: "InternetArchive",
   syncStatus: CLOUD_SYNC.INACTIVE,
   syncInterval: -1,
   lastSyncTime: Number.MAX_VALUE,
   fileName: "",
+  title: result.title,
   itemId: result.identifier,
   apiEndpoint: "",
   downloadUrl: generateUrlFromInternetArchiveId(result.identifier).toString(),

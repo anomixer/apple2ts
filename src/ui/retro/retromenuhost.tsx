@@ -25,7 +25,11 @@ import { toggleScanlines } from "../ui_utilities"
 const colorModeClasses = ["color", "color", "green", "amber", "white", "inverse"]
 const retroSkinClasses = ["apple-iie", "apple-iigs", "apple-iiplus"]
 
-export const useRetroMenuHost = (displayProps: DisplayProps, close: () => void) => {
+export const useRetroMenuHost = (
+  displayProps: DisplayProps,
+  close: () => void,
+  getDiskScreenshotUrl: () => URL | undefined,
+) => {
   const { t, language, changeLanguage } = useTranslation()
   const {
     returnToTourHelp,
@@ -115,6 +119,7 @@ export const useRetroMenuHost = (displayProps: DisplayProps, close: () => void) 
     retroIIGSColors,
     diskCollection,
     diskBookmarks,
+    getDiskScreenshotUrl,
     notifyCloudAuthChanged: () => setAuthRefresh(refresh => refresh + 1),
     startTour: tour => {
       setReturnToTourHelp(false)

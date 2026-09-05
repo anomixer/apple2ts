@@ -1168,15 +1168,9 @@ msgctxt "disk.saveDiskToMenu"
 msgid "Save Disk to >"
 msgstr "ディスクの保存先 >"
 
-#, fuzzy
-msgctxt "disk.addDiskToCollection"
-msgid "Add Disk to Collection"
-msgstr "コレクションにディスクを追加"
-
-#, fuzzy
-msgctxt "disk.removeDiskFromCollection"
-msgid "Remove Disk from Collection"
-msgstr "コレクションからディスクを削除"
+msgctxt "disk.addToFavorites"
+msgid "Add to Favorites"
+msgstr "お気に入りに追加"
 
 #, fuzzy
 msgctxt "disk.downloadDisk"

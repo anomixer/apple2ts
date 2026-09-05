@@ -1123,15 +1123,9 @@ msgctxt "disk.saveDiskToMenu"
 msgid "Save Disk to >"
 msgstr "Stash Disk in >"
 
-#, fuzzy
-msgctxt "disk.addDiskToCollection"
-msgid "Add Disk to Collection"
-msgstr "Add Disk to Hoard"
-
-#, fuzzy
-msgctxt "disk.removeDiskFromCollection"
-msgid "Remove Disk from Collection"
-msgstr "Cast Disk Out of Hoard"
+msgctxt "disk.addToFavorites"
+msgid "Add to Favorites"
+msgstr "Add to Hoard"
 
 msgctxt "disk.downloadDisk"
 msgid "Download Disk"

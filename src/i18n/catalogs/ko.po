@@ -1164,15 +1164,9 @@ msgctxt "disk.saveDiskToMenu"
 msgid "Save Disk to >"
 msgstr "디스크 저장 위치 >"
 
-#, fuzzy
-msgctxt "disk.addDiskToCollection"
-msgid "Add Disk to Collection"
-msgstr "컴렉션에 디스크 추가"
-
-#, fuzzy
-msgctxt "disk.removeDiskFromCollection"
-msgid "Remove Disk from Collection"
-msgstr "컴렉션에서 디스크 제거"
+msgctxt "disk.addToFavorites"
+msgid "Add to Favorites"
+msgstr "즐겨찾기에 추가"
 
 #, fuzzy
 msgctxt "disk.downloadDisk"

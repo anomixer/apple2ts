@@ -1,6 +1,6 @@
 import { DiskCollectionSortMode, setPreferenceDiskCollectionSort } from "../../localstorage"
 import { handleGetSlotConfig, passSetDriveProps } from "../../main2worker"
-import { CLOUD_SYNC, getDefaultDiskDriveIndex } from "../../../common/utility"
+import { getDefaultDiskDriveIndex } from "../../../common/utility"
 import {
   DISK_COLLECTION_ITEM_TYPE,
   TAB_INDEX,
@@ -41,6 +41,7 @@ import { GoogleDrive } from "./googledrive"
 import { createRetroGoogleDriveControl } from "./googledrive_retro"
 import { createRetroOneDriveControl } from "./onedrive_retro"
 import { OneDriveCloudDrive } from "./onedriveclouddrive"
+import { canFavoriteDisk, isDiskFavorite, setDiskFavorite } from "./diskfavorites"
 import {
   CLOUD_PROVIDER_NAMES,
   cloudProviderDisplayName,
@@ -56,7 +57,6 @@ import Flyout from "../../flyout"
 import ImageWriter from "../printer/imagewriter"
 import { isMinimalTheme } from "../../ui_settings"
 import { useTranslation } from "../../../i18n/useTranslation"
-import { determineVtocType, VTOC_REFRESH } from "../../../common/prodos_hdv"
 import { choiceBinding, controlFromJson, controlsFromJson, toggleBinding, type RetroControlBindings } from "../../retro/retrocontrolmetadata"
 
 const decodeDiskTitle = (title: string) => {
@@ -428,33 +428,9 @@ const diskMenuGroup = (
     ? [{ ...diskMenuSeparator(driveIndex, id), label }, ...items]
     : []
 
-const getDiskScreenshotUrl = () => {
+const getCurrentDiskScreenshotUrl = () => {
   const canvas = document.getElementById("hiddenCanvas") as HTMLCanvasElement | null
   return new URL(canvas?.toDataURL("image/jpeg", 0.1) ?? "data:image/jpeg,")
-}
-
-const addDiskBookmark = (
-  context: RetroMenuContext,
-  drive: DriveProps,
-  type: DISK_COLLECTION_ITEM_TYPE,
-) => {
-  const cloudData = drive.cloudData
-  if (!cloudData?.itemId) return
-  context.diskBookmarks?.set({
-    type,
-    id: cloudData.itemId,
-    title: cloudData.fileName,
-    screenshotUrl: getDiskScreenshotUrl(),
-    lastUpdated: new Date(type === DISK_COLLECTION_ITEM_TYPE.CLOUD_DRIVE
-      ? cloudData.lastSyncTime
-      : Date.now()),
-    diskUrl: type === DISK_COLLECTION_ITEM_TYPE.INTERNET_ARCHIVE
-      ? cloudData.downloadUrl
-      : undefined,
-    cloudData,
-    vtocType: determineVtocType(cloudData.fileName || drive.filename, drive.diskData),
-    vtocVersion: VTOC_REFRESH,
-  })
 }
 
 const saveDiskToCloud = async (driveIndex: number, provider: CloudProvider) => {
@@ -491,30 +467,28 @@ const syncCloudDisk = async (driveIndex: number) => {
   })
 }
 
-const bookmarkItems = (
+const favoriteItem = (
   driveIndex: number,
   drive: DriveProps,
-  type: DISK_COLLECTION_ITEM_TYPE,
-  context?: RetroMenuContext,
-): RetroControlMetadata[] => {
-  const itemId = drive.cloudData?.itemId
-  if (!itemId) return []
-  const isBookmarked = context?.diskBookmarks?.contains(itemId) ?? false
-  return isBookmarked
-    ? [
-      {
-        ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.removeFromCollection", {}, { driveIndex }),
-        action: (currentContext: RetroMenuContext) => currentContext.diskBookmarks?.remove(itemId),
+): RetroControlMetadata => {
+  return {
+    ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.favorite", {}, { driveIndex }),
+    selectable: () => canFavoriteDisk(drive),
+    ...toggleBinding({
+      enabled: currentContext => Boolean(
+        currentContext.diskBookmarks && isDiskFavorite(currentContext.diskBookmarks, drive)
+      ),
+      setEnabled: (currentContext, enabled) => {
+        if (!currentContext.diskBookmarks) return
+        setDiskFavorite(
+          currentContext.diskBookmarks,
+          drive,
+          enabled,
+          currentContext.getDiskScreenshotUrl?.() ?? getCurrentDiskScreenshotUrl(),
+        )
       },
-      diskMenuSeparator(driveIndex, "collectionRemoveSeparator"),
-    ]
-    : [
-      {
-        ...controlFromJson("diskTemplates", "diskDrives.{{driveIndex}}.addToCollection", {}, { driveIndex }),
-        action: (currentContext: RetroMenuContext) => addDiskBookmark(currentContext, drive, type),
-      },
-      diskMenuSeparator(driveIndex, "collectionSeparator"),
-    ]
+    }),
+  }
 }
 
 const baseWriteProtectItem = (driveIndex: number, drive: DriveProps): RetroControlMetadata => ({
@@ -538,10 +512,8 @@ const ejectItem = (driveIndex: number): RetroControlMetadata => ({
 
 export const insertedDiskItems = (
   driveIndex: number,
-  context?: RetroMenuContext,
 ): RetroControlMetadata[] => {
   const drive = handleGetDriveProps(driveIndex)
-  const activeCloudDisk = Boolean(drive.cloudData && drive.cloudData.syncStatus !== CLOUD_SYNC.INACTIVE)
   const setSyncInterval = (syncInterval: number) => {
     const latestDrive = handleGetDriveProps(driveIndex)
     if (!latestDrive.cloudData) return
@@ -604,18 +576,18 @@ export const insertedDiskItems = (
     ],
   ]
 
-  const favoriteItems = bookmarkItems(
+  const favorite = favoriteItem(
     driveIndex,
     drive,
-    activeCloudDisk ? DISK_COLLECTION_ITEM_TYPE.CLOUD_DRIVE : DISK_COLLECTION_ITEM_TYPE.INTERNET_ARCHIVE,
-    context,
-  ).filter(item => !item.separator)
+  )
 
   return [
-    ...diskMenuGroup(driveIndex, "diskSeparator", "Disk", [baseWriteProtectItem(driveIndex, drive)]),
+    ...diskMenuGroup(driveIndex, "diskSeparator", "Disk", [
+      baseWriteProtectItem(driveIndex, drive),
+      favorite,
+    ]),
     ...diskMenuGroup(driveIndex, "downloadSeparator", "Download", downloadItems),
     ...diskMenuGroup(driveIndex, "saveSeparator", "Save", saveItems),
-    ...diskMenuGroup(driveIndex, "favoritesSeparator", "Favorites", favoriteItems),
   ]
 }
 
@@ -693,9 +665,9 @@ const diskBindings: RetroControlBindings = {
         })
       },
       isVisible: () => handleGetSlotConfig()[slot] !== "none",
-      dynamicChildren: (context: RetroMenuContext) => [
+      dynamicChildren: () => [
         ...diskLoadItems(index),
-        ...(handleGetDriveProps(index).filename ? insertedDiskItems(index, context) : []),
+        ...(handleGetDriveProps(index).filename ? insertedDiskItems(index) : []),
       ],
       actionLabel: (context: RetroMenuContext) => context.t(handleGetDriveProps(index).filename
         ? "retroControl.select"

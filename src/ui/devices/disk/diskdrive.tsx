@@ -19,13 +19,12 @@ import { CLOUD_SYNC, crc32, FILE_SUFFIXES_DISK, uint32toBytes } from "../../../c
 import PopupMenu from "../../controls/popupmenu"
 import { svgDemoZooLogo } from "../../img/icon_demozoo"
 import { passSetDriveProps, handleGetSlotConfig } from "../../main2worker"
-import { DISK_COLLECTION_ITEM_TYPE } from "../../diskdialog/diskpanel_utils"
 import InternetArchivePopup from "./internetarchivedialog"
 import DemoZooDialog from "./demozoodialog"
 
 export const demoZooEnabled = true
 import { DiskBookmarks } from "./diskbookmarks"
-import { determineVtocType, VTOC_REFRESH } from "../../../common/prodos_hdv"
+import { canFavoriteDisk, isDiskFavorite, setDiskFavorite } from "./diskfavorites"
 import { isFileSystemApiSupported } from "../../ui_utilities"
 import { useTranslation } from "../../../i18n/useTranslation"
 import { convertwoz2dsk } from "../../../common/convertwoz2dsk"
@@ -423,6 +422,20 @@ const DiskDrive = (props: DiskDriveProps) => {
             onClick: () => { handleSetDiskWriteProtected(dprops.index, !dprops.isWriteProtected) }
           },
           {
+            label: t("disk.addToFavorites"),
+            icon: faStar,
+            isDisabled: () => !canFavoriteDisk(dprops),
+            isSelected: () => isDiskFavorite(diskBookmarks, dprops),
+            onClick: () => {
+              setDiskFavorite(
+                diskBookmarks,
+                dprops,
+                !isDiskFavorite(diskBookmarks, dprops),
+                getImageDataUrlFromCanvas(),
+              )
+            }
+          },
+          {
             label: "-",
           },
           {
@@ -525,48 +538,6 @@ const DiskDrive = (props: DiskDriveProps) => {
               }
             }
           },
-
-          // Disk is in drive
-          {
-            label: "-"
-          },
-          {
-            label: t("disk.addDiskToCollection"),
-            icon: faStar,
-            isDisabled: () => {
-              const itemId = dprops.cloudData?.itemId
-              return !itemId || diskBookmarks.contains(itemId)
-            },
-            onClick: () => {
-              if (dprops.cloudData) {
-                diskBookmarks.set({
-                  type: dprops.cloudData.downloadUrl ? DISK_COLLECTION_ITEM_TYPE.INTERNET_ARCHIVE : DISK_COLLECTION_ITEM_TYPE.CLOUD_DRIVE,
-                  id: dprops.cloudData.itemId,
-                  title: dprops.cloudData.fileName,
-                  screenshotUrl: getImageDataUrlFromCanvas(),
-                  lastUpdated: new Date(Date.now()),
-                  diskUrl: dprops.cloudData.downloadUrl,
-                  cloudData: dprops.cloudData,
-                  vtocType: determineVtocType(dprops.cloudData.fileName || filename, dprops.diskData),
-                  vtocVersion: VTOC_REFRESH
-                })
-              }
-            }
-          },
-          {
-            label: t("disk.removeDiskFromCollection"),
-            icon: faStar,
-            isDisabled: () => {
-              const itemId = dprops.cloudData?.itemId
-              return !itemId || !diskBookmarks.contains(itemId)
-            },
-            onClick: () => {
-              if (dprops.cloudData && diskBookmarks.contains(dprops.cloudData.itemId)) {
-                diskBookmarks.remove(dprops.cloudData.itemId)
-              }
-            }
-          },
-
         ]]}
       />
 

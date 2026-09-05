@@ -414,6 +414,7 @@ const RetroMenuRenderer = ({ displayProps }: { displayProps: DisplayProps }) => 
   const [canvasRenderState, setCanvasRenderState] = useState<CanvasRenderState>("native")
   const panelCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const panelCanvasPoolRef = useRef<HTMLCanvasElement[]>([])
+  const diskScreenshotUrlRef = useRef<URL | undefined>(undefined)
   const panelRenderRevision = useRef(0)
   const clockPausedUntilRef = useRef(0)
   const menuStackRef = useRef<RetroMenuFrame[]>([])
@@ -445,13 +446,17 @@ const RetroMenuRenderer = ({ displayProps }: { displayProps: DisplayProps }) => 
     setActiveVtocCheckKey,
     setDiskCollection,
     t,
-  } = useRetroMenuHost(displayProps, close)
+  } = useRetroMenuHost(displayProps, close, () => diskScreenshotUrlRef.current)
   const menuStack = manualMenuStack
   const currentFrame = menuStack[menuStack.length - 1]
   const currentMenu = currentFrame?.items ?? rootMenu
   const selectedIndex = manualSelectedIndex
   const isOpen = manualIsOpen
   const open = useCallback(() => {
+    const canvas = document.getElementById("hiddenCanvas") as HTMLCanvasElement | null
+    diskScreenshotUrlRef.current = canvas
+      ? new URL(canvas.toDataURL("image/jpeg", 0.1))
+      : undefined
     menuStack.toReversed().forEach(restoreMenuFramePreview)
     resetCollectionDriveSelectionSession()
     setNow(new Date())

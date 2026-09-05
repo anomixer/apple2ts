@@ -1168,15 +1168,9 @@ msgctxt "disk.saveDiskToMenu"
 msgid "Save Disk to >"
 msgstr "Disk Opslaan op >"
 
-#, fuzzy
-msgctxt "disk.addDiskToCollection"
-msgid "Add Disk to Collection"
-msgstr "Disk Toevoegen aan Collectie"
-
-#, fuzzy
-msgctxt "disk.removeDiskFromCollection"
-msgid "Remove Disk from Collection"
-msgstr "Disk Verwijderen uit Collectie"
+msgctxt "disk.addToFavorites"
+msgid "Add to Favorites"
+msgstr "Toevoegen aan Favorieten"
 
 #, fuzzy
 msgctxt "disk.downloadDisk"

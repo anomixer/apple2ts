@@ -1171,15 +1171,9 @@ msgctxt "disk.saveDiskToMenu"
 msgid "Save Disk to >"
 msgstr "Salvar Disco no >"
 
-#, fuzzy
-msgctxt "disk.addDiskToCollection"
-msgid "Add Disk to Collection"
-msgstr "Adicionar Disco à Coleção"
-
-#, fuzzy
-msgctxt "disk.removeDiskFromCollection"
-msgid "Remove Disk from Collection"
-msgstr "Remover Disco da Coleção"
+msgctxt "disk.addToFavorites"
+msgid "Add to Favorites"
+msgstr "Adicionar aos Favoritos"
 
 #, fuzzy
 msgctxt "disk.downloadDisk"

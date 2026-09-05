@@ -277,18 +277,18 @@ describe("Retro menu metadata structure", () => {
       cloudData: null,
     })
 
-    expect(insertedDiskItems(0, context).map(item => item.label instanceof Function
+    expect(insertedDiskItems(0).map(item => item.label instanceof Function
       ? item.label(context)
       : item.label)).toEqual([
-      "Disk", "disk.writeProtectDisk", "Download", "disk.downloadDisk", "disk.downloadWoz",
+      "Disk", "disk.writeProtectDisk", "disk.addToFavorites", "Download", "disk.downloadDisk", "disk.downloadWoz",
       "disk.downloadAndEjectDisk", "disk.ejectDisk", "Save", "disk.saveDiskToMenu",
       "disk.pauseSyncing", "disk.syncNow",
     ])
-    const saveToItem = insertedDiskItems(0, context).find(item => item.id.endsWith(".saveTo"))
+    const saveToItem = insertedDiskItems(0).find(item => item.id.endsWith(".saveTo"))
     expect(saveToItem?.dynamicChildren?.(context).map(item => item.label instanceof Function
       ? item.label(context)
       : item.label)).toEqual(["disk.OneDrive", "disk.GoogleDrive"])
-    expect(insertedDiskItems(0, context).filter(item => item.separator).map(item => item.label))
+    expect(insertedDiskItems(0).filter(item => item.separator).map(item => item.label))
       .toEqual(["Disk", "Download", "Save"])
 
     mockHandleGetDriveProps.mockReturnValue({
@@ -301,13 +301,12 @@ describe("Retro menu metadata structure", () => {
         syncStatus: CLOUD_SYNC.INACTIVE,
       },
     })
-    expect(insertedDiskItems(0, context).map(item => item.label instanceof Function
+    expect(insertedDiskItems(0).map(item => item.label instanceof Function
       ? item.label(context)
       : item.label)).toEqual([
-      "Disk", "disk.writeProtectDisk", "Download", "disk.downloadDisk", "disk.downloadWoz",
+      "Disk", "disk.writeProtectDisk", "disk.addToFavorites", "Download", "disk.downloadDisk", "disk.downloadWoz",
       "disk.downloadAndEjectDisk", "disk.ejectDisk", "Save", "disk.saveDiskToMenu",
-      "disk.pauseSyncing", "disk.syncNow", "Favorites",
-      "disk.addDiskToCollection",
+      "disk.pauseSyncing", "disk.syncNow",
     ])
   })
 
@@ -321,7 +320,7 @@ describe("Retro menu metadata structure", () => {
       cloudData: null,
     })
 
-    const item = insertedDiskItems(0, context)
+    const item = insertedDiskItems(0)
       .find(control => control.id.endsWith(".writeProtected"))
     const options = typeof item?.options === "function" ? item.options(context) : item?.options
     const optionIndex = typeof item?.optionIndex === "function"
@@ -341,6 +340,60 @@ describe("Retro menu metadata structure", () => {
     expect(mockHandleSetDiskWriteProtected).toHaveBeenCalledWith(0, false)
   })
 
+  test("stages Add to Favorites as a checkmark and commits it with Save", () => {
+    const context = createControlContext(undefined, key => key, "en", () => undefined)
+    context.diskBookmarks = new DiskBookmarks()
+    const screenshotUrl = new URL("data:image/jpeg;base64,emulator-frame")
+    context.getDiskScreenshotUrl = () => screenshotUrl
+    context.diskBookmarks.remove("favorite-item")
+
+    mockHandleGetDriveProps.mockReturnValue({
+      filename: "Favorite.po",
+      diskData: new Uint8Array(),
+      isWriteProtected: false,
+      cloudData: {
+        itemId: "favorite-item",
+        title: "Favorite Title",
+        fileName: "favorite-file.po",
+        downloadUrl: "https://example.com/Favorite.po",
+        syncStatus: CLOUD_SYNC.INACTIVE,
+      },
+    })
+
+    const item = insertedDiskItems(0).find(control => control.id.endsWith(".favorite"))
+    const options = typeof item?.options === "function" ? item.options(context) : item?.options
+    const actionLabel = typeof item?.contextualActionLabel === "function"
+      ? item.contextualActionLabel(context)
+      : item?.contextualActionLabel
+
+    expect(item).toMatchObject({ checkmarkIndex: 1, hideOptionValue: true })
+    expect(typeof item?.selectable === "function" ? item.selectable(context) : item?.selectable).toBe(true)
+    expect(typeof item?.optionIndex === "function" ? item.optionIndex(context) : item?.optionIndex).toBe(0)
+    expect(actionLabel).toBe("retroControl.save")
+
+    options?.[1].action?.(context)
+    expect(context.diskBookmarks.contains("favorite-item")).toBe(true)
+    expect(context.diskBookmarks.get("favorite-item")).toMatchObject({
+      title: "Favorite Title",
+      screenshotUrl,
+    })
+    expect(typeof item?.optionIndex === "function" ? item.optionIndex(context) : item?.optionIndex).toBe(1)
+
+    options?.[0].action?.(context)
+    expect(context.diskBookmarks.contains("favorite-item")).toBe(false)
+
+    mockHandleGetDriveProps.mockReturnValue({
+      filename: "Local.po",
+      diskData: new Uint8Array(),
+      isWriteProtected: false,
+      cloudData: null,
+    })
+    const disabledItem = insertedDiskItems(0).find(control => control.id.endsWith(".favorite"))
+    expect(typeof disabledItem?.selectable === "function"
+      ? disabledItem.selectable(context)
+      : disabledItem?.selectable).toBe(false)
+  })
+
   test("matches popup item order for an active cloud disk", () => {
     const context = createControlContext(undefined, key => key, "en", () => undefined)
     context.diskBookmarks = new DiskBookmarks()
@@ -355,22 +408,21 @@ describe("Retro menu metadata structure", () => {
       },
     })
 
-    const items = insertedDiskItems(0, context)
+    const items = insertedDiskItems(0)
     expect(items.map(item => item.label instanceof Function ? item.label(context) : item.label)).toEqual([
-      "Disk", "disk.writeProtectDisk", "Download", "disk.downloadDisk", "disk.downloadWoz",
+      "Disk", "disk.writeProtectDisk", "disk.addToFavorites", "Download", "disk.downloadDisk", "disk.downloadWoz",
       "disk.downloadAndEjectDisk", "disk.ejectDisk", "Save", "disk.saveDiskToMenu",
-      "disk.pauseSyncing", "disk.syncNow", "Favorites",
-      "disk.addDiskToCollection",
+      "disk.pauseSyncing", "disk.syncNow",
     ])
     expect(items.filter(item => item.separator).map(item => item.label instanceof Function
       ? item.label(context)
-      : item.label)).toEqual(["Disk", "Download", "Save", "Favorites"])
+      : item.label)).toEqual(["Disk", "Download", "Save"])
     const pauseItem = items.find(item => item.id.endsWith(".pauseSyncing"))
     expect(typeof pauseItem?.indicator === "function" ? pauseItem.indicator(context) : pauseItem?.indicator)
       .toBeUndefined()
   })
 
-  test("hides disabled WOZ download and its empty Favorites group", () => {
+  test("hides disabled WOZ download", () => {
     const context = createControlContext(undefined, key => key, "en", () => undefined)
     context.diskBookmarks = new DiskBookmarks()
     mockHandleGetDriveProps.mockReturnValue({
@@ -382,10 +434,9 @@ describe("Retro menu metadata structure", () => {
       cloudData: null,
     })
 
-    const items = insertedDiskItems(0, context)
+    const items = insertedDiskItems(0)
 
     expect(items.some(item => item.id.endsWith(".downloadWoz"))).toBe(false)
-    expect(items.some(item => item.label === "Favorites")).toBe(false)
   })
 
   test("refreshes an ejected disk drive label to Empty", () => {

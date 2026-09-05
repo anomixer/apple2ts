@@ -25,6 +25,7 @@ export type RetroMenuContext = {
   retroIIGSColors: Record<RETRO_IIGS_COLOR_PREFERENCE, number>
   diskCollection?: DiskCollectionItem[]
   diskBookmarks?: DiskBookmarks
+  getDiskScreenshotUrl?: () => URL | undefined
   notifyCloudAuthChanged?: () => void
   startTour: (tour: string) => void
 }
@@ -48,6 +49,7 @@ export const createControlContext = (
   retroIIGSColors: { text: 15, background: 6, border: 6 },
   diskCollection: undefined,
   diskBookmarks: undefined,
+  getDiskScreenshotUrl: undefined,
   notifyCloudAuthChanged: undefined,
   startTour: () => undefined,
 })
