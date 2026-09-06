@@ -681,9 +681,15 @@
     },
     {
       "group": "diskTemplates",
+      "id": "diskDrives.{{driveIndex}}.load.from",
+      "labelKey": "disk.loadDiskFromMenu",
+      "submenuTitleKey": "disk.loadDiskFrom"
+    },
+    {
+      "group": "diskTemplates",
       "id": "diskDrives.{{driveIndex}}.load.internetArchive",
       "binding": "diskDrives.load.internetArchive",
-      "labelKey": "disk.loadDiskFromInternetArchive",
+      "labelKey": "disk.InternetArchive",
       "submenuTitle": "Internet Archive",
       "actionLabel": "Search"
     },
@@ -691,7 +697,7 @@
       "group": "diskTemplates",
       "id": "diskDrives.{{driveIndex}}.load.demoZoo",
       "binding": "diskDrives.load.demoZoo",
-      "labelKey": "disk.loadDiskFromDemoZoo",
+      "labelKey": "disk.DemoZoo",
       "submenuTitle": "DemoZoo",
       "actionLabel": "Search"
     },
@@ -701,7 +707,7 @@
       "binding": "diskDrives.load.cloudProvider",
       "providerId": "OneDrive",
       "providerName": "OneDrive",
-      "labelKey": "disk.loadDiskFromOneDrive",
+      "labelKey": "disk.OneDrive",
       "submenuTitle": "OneDrive",
       "actionLabelKey": "retroControl.open"
     },
@@ -711,7 +717,7 @@
       "binding": "diskDrives.load.cloudProvider",
       "providerId": "GoogleDrive",
       "providerName": "Google Drive",
-      "labelKey": "disk.loadDiskFromGoogleDrive",
+      "labelKey": "disk.GoogleDrive",
       "submenuTitle": "Google Drive",
       "actionLabelKey": "retroControl.open"
     },
@@ -732,21 +738,24 @@
     },
     {
       "group": "diskTemplates",
-      "id": "diskDrives.{{driveIndex}}.addToCollection",
-      "kind": "action",
-      "labelKey": "disk.addDiskToCollection"
-    },
-    {
-      "group": "diskTemplates",
-      "id": "diskDrives.{{driveIndex}}.removeFromCollection",
-      "kind": "action",
-      "labelKey": "disk.removeDiskFromCollection"
+      "id": "diskDrives.{{driveIndex}}.favorite",
+      "kind": "toggle",
+      "labelKey": "disk.addToFavorites",
+      "checkmarkIndex": 1,
+      "hideOptionValue": true,
+      "contextualActionLabelKey": "retroControl.save"
     },
     {
       "group": "diskTemplates",
       "id": "diskDrives.{{driveIndex}}.saveToDevice",
       "kind": "action",
       "labelKey": "disk.saveDiskToDevice"
+    },
+    {
+      "group": "diskTemplates",
+      "id": "diskDrives.{{driveIndex}}.saveTo",
+      "labelKey": "disk.saveDiskToMenu",
+      "submenuTitleKey": "disk.saveDiskTo"
     },
     {
       "group": "diskTemplates",
@@ -770,13 +779,13 @@
       "group": "diskTemplates",
       "id": "diskDrives.{{driveIndex}}.saveToOneDrive",
       "kind": "action",
-      "labelKey": "disk.saveDiskToOneDrive"
+      "labelKey": "disk.OneDrive"
     },
     {
       "group": "diskTemplates",
       "id": "diskDrives.{{driveIndex}}.saveToGoogleDrive",
       "kind": "action",
-      "labelKey": "disk.saveDiskToGoogleDrive"
+      "labelKey": "disk.GoogleDrive"
     },
     {
       "group": "diskTemplates",

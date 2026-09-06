@@ -993,15 +993,19 @@ msgid "Write Protect Disk"
 msgstr ""
 
 msgctxt "disk.saveDiskToDevice"
-msgid "Save Disk to Device"
+msgid "Save Disk"
 msgstr ""
 
-msgctxt "disk.addDiskToCollection"
-msgid "Add Disk to Collection"
+msgctxt "disk.saveDiskTo"
+msgid "Save Disk to"
 msgstr ""
 
-msgctxt "disk.removeDiskFromCollection"
-msgid "Remove Disk from Collection"
+msgctxt "disk.saveDiskToMenu"
+msgid "Save Disk to >"
+msgstr ""
+
+msgctxt "disk.addToFavorites"
+msgid "Add to Favorites"
 msgstr ""
 
 msgctxt "disk.downloadDisk"
@@ -1033,7 +1037,11 @@ msgid "Load Disk"
 msgstr ""
 
 msgctxt "disk.loadDiskFrom"
-msgid "Load Disk From"
+msgid "Load Disk from"
+msgstr ""
+
+msgctxt "disk.loadDiskFromMenu"
+msgid "Load Disk from >"
 msgstr ""
 
 msgctxt "disk.loadDiskFromDevice"

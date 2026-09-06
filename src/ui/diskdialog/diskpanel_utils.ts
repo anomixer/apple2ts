@@ -190,17 +190,20 @@ export const loadDisk = (
   }
 
   if (diskCollectionItem) {
+    const cloudData = diskCollectionItem.cloudData
+      ? { ...diskCollectionItem.cloudData, title: diskCollectionItem.title }
+      : undefined
     if (diskCollectionItem.type == DISK_COLLECTION_ITEM_TYPE.CLOUD_DRIVE && diskCollectionItem.cloudData) {
       if (preserveDriveIndex) {
         handleSetDiskFromCloudData(
-          diskCollectionItem.cloudData,
+          cloudData!,
           driveIndex,
           callback,
           onLoadSuccess,
           true,
         )
       } else {
-        handleSetDiskFromCloudData(diskCollectionItem.cloudData, driveIndex, callback, onLoadSuccess)
+        handleSetDiskFromCloudData(cloudData!, driveIndex, callback, onLoadSuccess)
       }
     } else if (diskCollectionItem.diskUrl && !diskCollectionItem.diskUrl.includes("://")) {
       if (preserveDriveIndex) {
@@ -227,7 +230,7 @@ export const loadDisk = (
           diskCollectionItem.diskUrl || "",
           undefined,
           driveIndex,
-          diskCollectionItem.cloudData,
+          cloudData,
           callback,
           undefined,
           true,
@@ -236,7 +239,7 @@ export const loadDisk = (
           diskCollectionItem.diskUrl || "",
           undefined,
           driveIndex,
-          diskCollectionItem.cloudData,
+          cloudData,
           callback,
         )
       void load.then(loaded => {

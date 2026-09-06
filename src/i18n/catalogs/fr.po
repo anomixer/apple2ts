@@ -2,8 +2,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Apple2TS\n"
 "PO-Revision-Date: 2026-08-25 03:04+0000\n"
-"Last-Translator: Warren James <19525653+3amcinnamonroll@users.noreply.github."
-"com>\n"
+"Last-Translator: Warren James "
+"<19525653+3amcinnamonroll@users.noreply.github.com>\n"
 "Language-Team: French <https://hosted.weblate.org/projects/apple2ts/browser-"
 "emulator/fr/>\n"
 "Language: fr\n"
@@ -1173,20 +1173,21 @@ msgctxt "disk.writeProtectDisk"
 msgid "Write Protect Disk"
 msgstr "Protection en Écriture du Disque"
 
-#, fuzzy
 msgctxt "disk.saveDiskToDevice"
-msgid "Save Disk to Device"
-msgstr "Sauvegarder le Disque sur l'Appareil"
+msgid "Save Disk"
+msgstr "Sauvegarder le Disque"
 
-#, fuzzy
-msgctxt "disk.addDiskToCollection"
-msgid "Add Disk to Collection"
-msgstr "Ajouter le Disque à la Collection"
+msgctxt "disk.saveDiskTo"
+msgid "Save Disk to"
+msgstr "Sauvegarder le Disque sur"
 
-#, fuzzy
-msgctxt "disk.removeDiskFromCollection"
-msgid "Remove Disk from Collection"
-msgstr "Retirer le Disque de la Collection"
+msgctxt "disk.saveDiskToMenu"
+msgid "Save Disk to >"
+msgstr "Sauvegarder le Disque sur >"
+
+msgctxt "disk.addToFavorites"
+msgid "Add to Favorites"
+msgstr "Ajouter aux Favoris"
 
 #, fuzzy
 msgctxt "disk.downloadDisk"
@@ -1223,8 +1224,12 @@ msgid "Load Disk"
 msgstr "Charger le disque"
 
 msgctxt "disk.loadDiskFrom"
-msgid "Load Disk From"
-msgstr ""
+msgid "Load Disk from"
+msgstr "Charger le Disque depuis"
+
+msgctxt "disk.loadDiskFromMenu"
+msgid "Load Disk from >"
+msgstr "Charger le Disque depuis >"
 
 #, fuzzy
 msgctxt "disk.loadDiskFromDevice"
@@ -2555,8 +2560,8 @@ msgstr ""
 
 msgctxt "agent.inputPlaceholder"
 msgid ""
-"Ask me anything about the Apple II emulator... (Press Enter to send, Shift"
-"+Enter for new line)"
+"Ask me anything about the Apple II emulator... (Press Enter to send, "
+"Shift+Enter for new line)"
 msgstr ""
 
 msgctxt "agent.stop"
@@ -2609,8 +2614,8 @@ msgstr ""
 
 msgctxt "agent.storageWarning"
 msgid ""
-"Your API key is stored locally in your browser and never sent to apple2ts."
-"com. Get your {{provider}} API key at"
+"Your API key is stored locally in your browser and never sent to "
+"apple2ts.com. Get your {{provider}} API key at"
 msgstr ""
 
 msgctxt "agent.ollamaWarning"

@@ -2,8 +2,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Apple2TS\n"
 "PO-Revision-Date: 2026-08-25 03:05+0000\n"
-"Last-Translator: GitHub webhook <noreply-webhook-github-integration@weblate."
-"org>\n"
+"Last-Translator: GitHub webhook <noreply-webhook-github-"
+"integration@weblate.org>\n"
 "Language-Team: Korean <https://hosted.weblate.org/projects/apple2ts/browser-"
 "emulator/ko/>\n"
 "Language: ko\n"
@@ -1152,20 +1152,21 @@ msgctxt "disk.writeProtectDisk"
 msgid "Write Protect Disk"
 msgstr "디스크 쓰기 보호"
 
-#, fuzzy
 msgctxt "disk.saveDiskToDevice"
-msgid "Save Disk to Device"
-msgstr "디바이스에 디스크 저장"
+msgid "Save Disk"
+msgstr "디스크 저장"
 
-#, fuzzy
-msgctxt "disk.addDiskToCollection"
-msgid "Add Disk to Collection"
-msgstr "컴렉션에 디스크 추가"
+msgctxt "disk.saveDiskTo"
+msgid "Save Disk to"
+msgstr "디스크 저장 위치"
 
-#, fuzzy
-msgctxt "disk.removeDiskFromCollection"
-msgid "Remove Disk from Collection"
-msgstr "컴렉션에서 디스크 제거"
+msgctxt "disk.saveDiskToMenu"
+msgid "Save Disk to >"
+msgstr "디스크 저장 위치 >"
+
+msgctxt "disk.addToFavorites"
+msgid "Add to Favorites"
+msgstr "즐겨찾기에 추가"
 
 #, fuzzy
 msgctxt "disk.downloadDisk"
@@ -1202,8 +1203,12 @@ msgid "Load Disk"
 msgstr "디스크 로드"
 
 msgctxt "disk.loadDiskFrom"
-msgid "Load Disk From"
-msgstr ""
+msgid "Load Disk from"
+msgstr "디스크 로드 위치"
+
+msgctxt "disk.loadDiskFromMenu"
+msgid "Load Disk from >"
+msgstr "디스크 로드 위치 >"
 
 #, fuzzy
 msgctxt "disk.loadDiskFromDevice"
@@ -2525,8 +2530,8 @@ msgstr ""
 
 msgctxt "agent.inputPlaceholder"
 msgid ""
-"Ask me anything about the Apple II emulator... (Press Enter to send, Shift"
-"+Enter for new line)"
+"Ask me anything about the Apple II emulator... (Press Enter to send, "
+"Shift+Enter for new line)"
 msgstr ""
 
 msgctxt "agent.stop"
@@ -2579,8 +2584,8 @@ msgstr ""
 
 msgctxt "agent.storageWarning"
 msgid ""
-"Your API key is stored locally in your browser and never sent to apple2ts."
-"com. Get your {{provider}} API key at"
+"Your API key is stored locally in your browser and never sent to "
+"apple2ts.com. Get your {{provider}} API key at"
 msgstr ""
 
 msgctxt "agent.ollamaWarning"
