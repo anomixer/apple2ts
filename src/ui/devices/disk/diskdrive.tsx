@@ -7,9 +7,11 @@ import {
   doSetUIDriveProps
 } from "./driveprops"
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome"
-import { faCloud, faDownload, faEject, faFloppyDisk, faFolderOpen,
+import {
+  faCloud, faDownload, faEject, faFloppyDisk, faFolderOpen,
   faGlobe,
-  faLock, faPause, faRotate, faStar, faSync } from "@fortawesome/free-solid-svg-icons"
+  faLock, faPause, faRotate, faStar, faSync
+} from "@fortawesome/free-solid-svg-icons"
 import { OneDriveCloudDrive } from "./onedriveclouddrive"
 import { GoogleDrive } from "./googledrive"
 import React from "react"
@@ -17,13 +19,12 @@ import { CLOUD_SYNC, crc32, FILE_SUFFIXES_DISK, uint32toBytes } from "../../../c
 import PopupMenu from "../../controls/popupmenu"
 import { svgDemoZooLogo } from "../../img/icon_demozoo"
 import { passSetDriveProps, handleGetSlotConfig } from "../../main2worker"
-import { DISK_COLLECTION_ITEM_TYPE } from "../../diskdialog/diskpanel_utils"
 import InternetArchivePopup from "./internetarchivedialog"
 import DemoZooDialog from "./demozoodialog"
 
 export const demoZooEnabled = true
 import { DiskBookmarks } from "./diskbookmarks"
-import { determineVtocType, VTOC_REFRESH } from "../../../common/prodos_hdv"
+import { canFavoriteDisk, isDiskFavorite, setDiskFavorite } from "./diskfavorites"
 import { isFileSystemApiSupported } from "../../ui_utilities"
 import { useTranslation } from "../../../i18n/useTranslation"
 import { convertwoz2dsk } from "../../../common/convertwoz2dsk"
@@ -337,6 +338,19 @@ const DiskDrive = (props: DiskDriveProps) => {
     },
   ]
 
+  const saveDiskSubMenu = [
+    {
+      label: t("disk.OneDrive"),
+      icon: faCloud,
+      onClick: () => { saveDiskToCloud(new OneDriveCloudDrive()) }
+    },
+    {
+      label: t("disk.GoogleDrive"),
+      icon: faCloud,
+      onClick: () => { saveDiskToCloud(new GoogleDrive()) }
+    },
+  ]
+
   return (
     <span
       className="flex-column"
@@ -393,9 +407,9 @@ const DiskDrive = (props: DiskDriveProps) => {
             onClick: () => { props.setShowFileOpenDialog(true, props.index) }
           },
           {
-              label: t("disk.loadDiskFrom"),
-              icon: faGlobe,
-              subMenu: loadDiskSubMenu
+            label: t("disk.loadDiskFrom"),
+            icon: faGlobe,
+            subMenu: loadDiskSubMenu
           },
           {
             label: "-"
@@ -406,6 +420,20 @@ const DiskDrive = (props: DiskDriveProps) => {
             isDisabled: !dprops.filename || dprops.filename.length === 0,
             isSelected: () => { return dprops.isWriteProtected },
             onClick: () => { handleSetDiskWriteProtected(dprops.index, !dprops.isWriteProtected) }
+          },
+          {
+            label: t("disk.addToFavorites"),
+            icon: faStar,
+            isDisabled: () => !canFavoriteDisk(dprops),
+            isSelected: () => isDiskFavorite(diskBookmarks, dprops),
+            onClick: () => {
+              setDiskFavorite(
+                diskBookmarks,
+                dprops,
+                !isDiskFavorite(diskBookmarks, dprops),
+                getImageDataUrlFromCanvas(),
+              )
+            }
           },
           {
             label: "-",
@@ -469,18 +497,11 @@ const DiskDrive = (props: DiskDriveProps) => {
             onClick: () => { showDiskSaveFilePicker(props.index) }
           },
           {
-            label: t("disk.saveDiskToOneDrive"),
-            icon: faCloud,
+            label: t("disk.saveDiskTo"),
+            icon: faGlobe,
             isDisabled: dprops.filename.length === 0,
             isVisible: () => { return !isElectron },
-            onClick: () => { saveDiskToCloud(new OneDriveCloudDrive()) }
-          },
-          {
-            label: t("disk.saveDiskToGoogleDrive"),
-            icon: faCloud,
-            isDisabled: dprops.filename.length === 0,
-            isVisible: () => { return !isElectron },
-            onClick: () => { saveDiskToCloud(new GoogleDrive()) }
+            subMenu: saveDiskSubMenu
           },
           {
             label: t("disk.pauseSyncing"),
@@ -517,48 +538,6 @@ const DiskDrive = (props: DiskDriveProps) => {
               }
             }
           },
-
-          // Disk is in drive
-          {
-            label: "-"
-          },
-          {
-            label: t("disk.addDiskToCollection"),
-            icon: faStar,
-            isDisabled: () => {
-              const itemId = dprops.cloudData?.itemId
-              return !itemId || diskBookmarks.contains(itemId)
-            },
-            onClick: () => {
-              if (dprops.cloudData) {
-                diskBookmarks.set({
-                  type: dprops.cloudData.downloadUrl ? DISK_COLLECTION_ITEM_TYPE.INTERNET_ARCHIVE : DISK_COLLECTION_ITEM_TYPE.CLOUD_DRIVE,
-                  id: dprops.cloudData.itemId,
-                  title: dprops.cloudData.fileName,
-                  screenshotUrl: getImageDataUrlFromCanvas(),
-                  lastUpdated: new Date(Date.now()),
-                  diskUrl: dprops.cloudData.downloadUrl,
-                  cloudData: dprops.cloudData,
-                  vtocType: determineVtocType(dprops.cloudData.fileName || filename, dprops.diskData),
-                  vtocVersion: VTOC_REFRESH
-                })
-              }
-            }
-          },
-          {
-            label: t("disk.removeDiskFromCollection"),
-            icon: faStar,
-            isDisabled: () => {
-              const itemId = dprops.cloudData?.itemId
-              return !itemId || !diskBookmarks.contains(itemId)
-            },
-            onClick: () => {
-              if (dprops.cloudData && diskBookmarks.contains(dprops.cloudData.itemId)) {
-                diskBookmarks.remove(dprops.cloudData.itemId)
-              }
-            }
-          },
-
         ]]}
       />
 

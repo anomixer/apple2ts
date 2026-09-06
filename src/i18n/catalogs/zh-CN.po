@@ -2,8 +2,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Apple2TS\n"
 "PO-Revision-Date: 2026-08-31 13:52+0000\n"
-"Last-Translator: reducedradius <137701630+flytothehighest@users.noreply."
-"github.com>\n"
+"Last-Translator: reducedradius "
+"<137701630+flytothehighest@users.noreply.github.com>\n"
 "Language-Team: Chinese (Simplified Han script) <https://hosted.weblate.org/"
 "projects/apple2ts/browser-emulator/zh_Hans/>\n"
 "Language: zh-CN\n"
@@ -1100,20 +1100,21 @@ msgctxt "disk.writeProtectDisk"
 msgid "Write Protect Disk"
 msgstr "磁盘写保护"
 
-#, fuzzy
 msgctxt "disk.saveDiskToDevice"
-msgid "Save Disk to Device"
-msgstr "保存磁盘到设备"
+msgid "Save Disk"
+msgstr "保存磁盘"
 
-#, fuzzy
-msgctxt "disk.addDiskToCollection"
-msgid "Add Disk to Collection"
-msgstr "加入磁盘收藏"
+msgctxt "disk.saveDiskTo"
+msgid "Save Disk to"
+msgstr "保存磁盘到"
 
-#, fuzzy
-msgctxt "disk.removeDiskFromCollection"
-msgid "Remove Disk from Collection"
-msgstr "从磁盘收藏中移除"
+msgctxt "disk.saveDiskToMenu"
+msgid "Save Disk to >"
+msgstr "保存磁盘到 >"
+
+msgctxt "disk.addToFavorites"
+msgid "Add to Favorites"
+msgstr "添加到收藏夹"
 
 #, fuzzy
 msgctxt "disk.downloadDisk"
@@ -1150,8 +1151,12 @@ msgid "Load Disk"
 msgstr "加载磁盘"
 
 msgctxt "disk.loadDiskFrom"
-msgid "Load Disk From"
-msgstr ""
+msgid "Load Disk from"
+msgstr "从以下位置加载磁盘"
+
+msgctxt "disk.loadDiskFromMenu"
+msgid "Load Disk from >"
+msgstr "从以下位置加载磁盘 >"
 
 #, fuzzy
 msgctxt "disk.loadDiskFromDevice"
@@ -2540,8 +2545,8 @@ msgstr "🤖 助手"
 #, fuzzy
 msgctxt "agent.inputPlaceholder"
 msgid ""
-"Ask me anything about the Apple II emulator... (Press Enter to send, Shift"
-"+Enter for new line)"
+"Ask me anything about the Apple II emulator... (Press Enter to send, "
+"Shift+Enter for new line)"
 msgstr ""
 "向我询问关于 Apple II 模拟器的任何问题... (按 Enter 发送，Shift+Enter 换行)"
 
@@ -2607,8 +2612,8 @@ msgstr "清除"
 #, fuzzy
 msgctxt "agent.storageWarning"
 msgid ""
-"Your API key is stored locally in your browser and never sent to apple2ts."
-"com. Get your {{provider}} API key at"
+"Your API key is stored locally in your browser and never sent to "
+"apple2ts.com. Get your {{provider}} API key at"
 msgstr ""
 "您的 API 密钥会保存在本地浏览器中，绝不会发送至 apple2ts.com。获取您的 "
 "{{provider}} API 密钥："

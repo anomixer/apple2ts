@@ -291,6 +291,7 @@ type CloudData = {
   syncInterval: number,
   lastSyncTime: number,
   fileName: string,
+  title?: string,
   parentId?: string,
   itemId: string,
   apiEndpoint: string,

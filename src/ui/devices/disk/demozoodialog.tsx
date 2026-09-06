@@ -63,6 +63,7 @@ export const createDemoZooCloudData = (item: DemoZooItem, downloadUrl = item.dow
   syncInterval: -1,
   lastSyncTime: Number.MAX_VALUE,
   fileName: item.title,
+  title: item.title,
   itemId: `demozoo_${item.id}`,
   apiEndpoint: "",
   downloadUrl,

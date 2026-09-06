@@ -2,8 +2,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: Apple2TS\n"
 "PO-Revision-Date: 2026-08-25 03:05+0000\n"
-"Last-Translator: GitHub webhook <noreply-webhook-github-integration@weblate."
-"org>\n"
+"Last-Translator: GitHub webhook <noreply-webhook-github-"
+"integration@weblate.org>\n"
 "Language-Team: Swedish <https://hosted.weblate.org/projects/apple2ts/browser-"
 "emulator/sv/>\n"
 "Language: sv\n"
@@ -1157,20 +1157,21 @@ msgctxt "disk.writeProtectDisk"
 msgid "Write Protect Disk"
 msgstr "Disk Skrivskydd"
 
-#, fuzzy
 msgctxt "disk.saveDiskToDevice"
-msgid "Save Disk to Device"
-msgstr "Spara Disk till Enhet"
+msgid "Save Disk"
+msgstr "Spara Disk"
 
-#, fuzzy
-msgctxt "disk.addDiskToCollection"
-msgid "Add Disk to Collection"
-msgstr "Lägg Till Disk i Samling"
+msgctxt "disk.saveDiskTo"
+msgid "Save Disk to"
+msgstr "Spara Disk till"
 
-#, fuzzy
-msgctxt "disk.removeDiskFromCollection"
-msgid "Remove Disk from Collection"
-msgstr "Ta Bort Disk från Samling"
+msgctxt "disk.saveDiskToMenu"
+msgid "Save Disk to >"
+msgstr "Spara Disk till >"
+
+msgctxt "disk.addToFavorites"
+msgid "Add to Favorites"
+msgstr "Lägg till i Favoriter"
 
 #, fuzzy
 msgctxt "disk.downloadDisk"
@@ -1207,8 +1208,12 @@ msgid "Load Disk"
 msgstr "Ladda disk"
 
 msgctxt "disk.loadDiskFrom"
-msgid "Load Disk From"
-msgstr ""
+msgid "Load Disk from"
+msgstr "Ladda Disk från"
+
+msgctxt "disk.loadDiskFromMenu"
+msgid "Load Disk from >"
+msgstr "Ladda Disk från >"
 
 #, fuzzy
 msgctxt "disk.loadDiskFromDevice"
@@ -2535,8 +2540,8 @@ msgstr ""
 
 msgctxt "agent.inputPlaceholder"
 msgid ""
-"Ask me anything about the Apple II emulator... (Press Enter to send, Shift"
-"+Enter for new line)"
+"Ask me anything about the Apple II emulator... (Press Enter to send, "
+"Shift+Enter for new line)"
 msgstr ""
 
 msgctxt "agent.stop"
@@ -2589,8 +2594,8 @@ msgstr ""
 
 msgctxt "agent.storageWarning"
 msgid ""
-"Your API key is stored locally in your browser and never sent to apple2ts."
-"com. Get your {{provider}} API key at"
+"Your API key is stored locally in your browser and never sent to "
+"apple2ts.com. Get your {{provider}} API key at"
 msgstr ""
 
 msgctxt "agent.ollamaWarning"
