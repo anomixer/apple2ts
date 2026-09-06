@@ -1,7 +1,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: Apple2TS\n"
-"PO-Revision-Date: 2026-08-31 13:52+0000\n"
+"PO-Revision-Date: 2026-09-06 02:51+0000\n"
 "Last-Translator: reducedradius "
 "<137701630+flytothehighest@users.noreply.github.com>\n"
 "Language-Team: Chinese (Simplified Han script) <https://hosted.weblate.org/"
@@ -11,7 +11,7 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
-"X-Generator: Weblate 2026.9.dev0\n"
+"X-Generator: Weblate 2026.9.1.dev0\n"
 
 #, fuzzy
 msgctxt "controls.boot"
@@ -396,7 +396,7 @@ msgstr ""
 
 msgctxt "disassembly.speaker.toggleOutput"
 msgid "Toggle speaker output"
-msgstr ""
+msgstr "切换扬声器输出"
 
 msgctxt "disassembly.notice.emulatorIdentifier"
 msgid "INFO: Apple2TS emulator identifier: $CD"
@@ -601,7 +601,7 @@ msgstr ""
 
 msgctxt "disassembly.display.selectTextMode"
 msgid "Select text mode"
-msgstr ""
+msgstr "选择文本模式"
 
 msgctxt "disassembly.display.mixedDisplayStatusOff"
 msgid "Mixed display: OFF (MSB = 0)"
@@ -766,10 +766,9 @@ msgctxt "tour.retroBootButton"
 msgid "Select this option to start the emulator."
 msgstr ""
 
-#, fuzzy
 msgctxt "tour.resetButton"
 msgid "Click here to Reset the Apple II and either reboot or enter BASIC."
-msgstr "按这里重置 Apple II，并重新启动或进入 BASIC。"
+msgstr "点击此处重置 Apple II，并重新启动或进入 BASIC。"
 
 msgctxt "tour.retroResetButton"
 msgid ""
@@ -808,12 +807,9 @@ msgctxt "tour.retroThemeButton"
 msgid "Use the arrow keys to change the emulator UI theme."
 msgstr ""
 
-#, fuzzy
 msgctxt "tour.endTour"
 msgid "You have reached the end of the tour."
-msgstr ""
-"您已到达导览的结尾。按一下地球仪导览按钮来试试其他导览，或按完成开始使用模拟"
-"器。"
+msgstr "您已到达导览的结尾。"
 
 #, fuzzy
 msgctxt "tour.tourSelectorHint"
@@ -870,12 +866,11 @@ msgstr ""
 "按一下调试器图标进入调试模式，您可以查看 6502 处理器的内部状态。再次按一下即"
 "可回到正常模式。"
 
-#, fuzzy
 msgctxt "tour.configButtons"
 msgid ""
 "The bottom row of buttons controls the state of the Apple II, starting with "
 "the emulator speed, the screen color, and muting the sound."
-msgstr "底部一排按钮控制 Apple II 的状态，从模拟器速度、屏幕颜色和静音开始。"
+msgstr "底部一排按钮控制 Apple II 的状态，以模拟器速度、屏幕颜色和静音为起始。"
 
 msgctxt "tour.retroConfigButtons"
 msgid ""
@@ -977,22 +972,18 @@ msgstr ""
 "您切换到其中一个 HGR 页面，您将得到放大的高分辨率屏幕视图，与内存位置连接。您"
 "也可以搜索十六进制数值或 ASCII 字符串，并将内存保存到文件中。"
 
-#, fuzzy
 msgctxt "tour.back"
 msgid "Back"
 msgstr "上一步"
 
-#, fuzzy
 msgctxt "tour.close"
 msgid "Close"
 msgstr "关闭"
 
-#, fuzzy
 msgctxt "tour.last"
 msgid "Finish"
 msgstr "完成"
 
-#, fuzzy
 msgctxt "tour.next"
 msgid "Next"
 msgstr "下一步"
@@ -1027,57 +1018,47 @@ msgctxt "tour.debugLabel"
 msgid "Guided Tours: Debug"
 msgstr "引导式导览：调试"
 
-#, fuzzy
 msgctxt "disk.drive1"
 msgid "Drive 1"
 msgstr "磁盘驱动器 1"
 
-#, fuzzy
 msgctxt "disk.drive2"
 msgid "Drive 2"
 msgstr "磁盘驱动器 2"
 
-#, fuzzy
 msgctxt "disk.hardDisk"
 msgid "Hard Disk"
 msgstr "硬盘"
 
-#, fuzzy
 msgctxt "disk.eject"
 msgid "Eject Disk"
-msgstr "退出磁盘"
+msgstr "弹出磁盘"
 
-#, fuzzy
 msgctxt "disk.insert"
 msgid "Insert Disk"
 msgstr "插入磁盘"
 
-#, fuzzy
 msgctxt "disk.writeProtected"
 msgid "Write Protected"
 msgstr "写保护"
 
-#, fuzzy
 msgctxt "disk.readWrite"
 msgid "Read/Write"
-msgstr "读写"
+msgstr "读/写"
 
 #, fuzzy
 msgctxt "disk.empty"
 msgid "Empty"
 msgstr "空的"
 
-#, fuzzy
 msgctxt "disk.loading"
 msgid "Loading..."
 msgstr "加载中..."
 
-#, fuzzy
 msgctxt "disk.selectDisk"
 msgid "Select Disk Image"
 msgstr "选择磁盘映像文件"
 
-#, fuzzy
 msgctxt "disk.browse"
 msgid "Browse"
 msgstr "浏览"
@@ -1090,12 +1071,10 @@ msgctxt "disk.totalReplay"
 msgid "Total Replay"
 msgstr ""
 
-#, fuzzy
 msgctxt "disk.newReleases"
 msgid "New Releases"
 msgstr "新发行版"
 
-#, fuzzy
 msgctxt "disk.writeProtectDisk"
 msgid "Write Protect Disk"
 msgstr "磁盘写保护"
