@@ -35,12 +35,16 @@ import { memory, memGet, getTextPage, getHires, memoryReset,
   getMainMemory,
   getAuxMemory,
   getHgr1Memory,
-  getHgr2Memory} from "./memory"
+  getHgr2Memory,
+  memGet24,
+  memSet24,
+  gsROM} from "./memory"
 import { setButtonState, handleGamepads } from "./devices/joystick"
 import { handleGameSetup } from "./games/game_mappings"
 import { breakpointMap, clearInterrupts, doSetBreakpointSkipOnce, doSetMemoryWriteWatchpoint as setCpuMemoryWriteWatchpoint, resetCycleCountCallbacks, setStepOut, getHeatMapCPU, getHeatMapCPUMax, resetHeatMapCPU } from "./cpu6502"
 import { ICPU } from "./icpu"
 import { CPU6502Wrapper } from "./cpu6502_wrapper"
+import { CPU65816 } from "./cpu65816"
 
 let cpu: ICPU = new CPU6502Wrapper();
 import { enableSerialCard, resetSerial } from "./devices/superserial/serial"
@@ -611,6 +615,13 @@ export const doLoadBinary = (
 
 export const doSetMachineName = (name: MACHINE_NAME, reset = true, publishState = true) => {
   machineName = name
+  
+  if (machineName === "APPLE2GS") {
+    cpu = new CPU65816(memGet24, memSet24)
+  } else {
+    cpu = new CPU6502Wrapper()
+  }
+
   if (name === "APPLE2P") {
     if (currentSlotConfig[3] !== "none" && currentSlotConfig[3] !== "videoterm" && currentSlotConfig[3] !== "vidhd") {
       currentSlotConfig[3] = "videoterm"
@@ -1014,7 +1025,7 @@ export const getExternalMachineState = () => {
     timeTravelThumbnails: getTimeTravelThumbnails(),
     tracelog: cpuRunMode === RUN_MODE.PAUSED ? getTracelog() : [],
     veraSlot: veraSlot,
-    vidhdActive: vidhd.active,
+    vidhdActive: vidhd.active || ((gsROM && gsROM.length > 0) ? SWITCHES.NEWVIDEO.isSet : false),
     zeroPage: getZeroPage(),
   }
   return state
@@ -1074,6 +1085,16 @@ const doAdvance6502 = () => {
   }
   let cycleTotal = 0
   let currentLine = -1
+
+  if (s6502.cycleCount > 3000000 && !(self as any).didLogStuck) {
+      (self as any).didLogStuck = true;
+      (self as any).debugTraceEnabled = true;
+      setTimeout(() => {
+          (self as any).debugTraceEnabled = false;
+          console.error("STUCK TRACE:", (self as any).traceLog.join("\n"));
+      }, 500);
+  }
+
   for (;;) {
     let cycles = 0
     if (softCard.activeCpu === "Z80") {
@@ -1082,6 +1103,16 @@ const doAdvance6502 = () => {
       s6502.cycleCount += cycles
     } else {
       cycles = cpu.processInstruction(tracing ? updateTrace : null)
+      s6502.cycleCount += cycles
+      if ((self as any).debugTraceEnabled) {
+          if (!(self as any).traceLog) (self as any).traceLog = [];
+          const c = cpu as any;
+          if (c && c.PB !== undefined) {
+              const instrStr = `PC=${c.PB.toString(16).padStart(2,'0')}:${c.PC.toString(16).padStart(4,'0')} Op=${(c.opcode || 0).toString(16).padStart(2,'0')} A=${c.A.toString(16)} X=${c.X.toString(16)} Y=${c.Y.toString(16)} P=${c.P.toString(16)}`;
+              (self as any).traceLog.push(instrStr);
+              if ((self as any).traceLog.length > 100) (self as any).traceLog.shift();
+          }
+      }
     }
     if (!checkConditionalInputStop()) advanceKeySequence()
     if (advanceConditionalInputSequence()) {

@@ -3,6 +3,7 @@ import { s6502 } from "./instructions"
 import { romBase64 as romBase64p } from "./roms/rom_2+"
 import { romBase64 as romBase64e } from "./roms/rom_2e"
 import { romBase64 as romBase64u } from "./roms/rom_2e_unenhanced"
+import { romBase64 as romBase64gs } from "./roms/rom_gs"
 // import { edmBase64 } from "./roms/edm_2e"
 import { Buffer } from "buffer"
 // import { isDebugging } from "./motherboard";
@@ -110,6 +111,10 @@ export const getCurrentMachineName = () => {
   return currentMachineName
 }
 
+export let gsROM = new Uint8Array(0);
+export const iigsRegisters = new Uint8Array(256);
+iigsRegisters[0x36] = 0x80; // Default fast speed
+
 export const doSetRom = (machineName: MACHINE_NAME) => {
   currentMachineName = machineName
   let romStr = ""
@@ -123,6 +128,11 @@ export const doSetRom = (machineName: MACHINE_NAME) => {
     case "APPLE2EE":
       romStr = romBase64e
       break
+    case "APPLE2GS":
+      const rom64_gs = romBase64gs.replace(/[\n\r\s]/g, "");
+      gsROM = new Uint8Array(Buffer.from(rom64_gs, "base64"));
+      console.log(`[DEBUG] gsROM length: ${gsROM.length}, bytes at FFFC: ${gsROM[0x1FFFC]?.toString(16)} ${gsROM[0x1FFFD]?.toString(16)}`);
+      return // Skip standard Apple IIe ROM mapping setup
   }
   // For now, comment out the use of the Extended Debugging Monitor
   // It's unclear what the benefit is, especially since we have a separate
@@ -147,6 +157,118 @@ export const doSetRom = (machineName: MACHINE_NAME) => {
   rom[0xFABB - 0xC000] = 0x05
   memory.set(rom, ROMmemoryStart)
 }
+
+export let gsRAM = new Uint8Array(8 * 1024 * 1024);
+
+export const memGet24 = (address: number): number => {
+    let bank = (address >> 16) & 0xFF;
+    const offset = address & 0xFFFF;
+    
+    // Apple IIgs ROM mapping
+    if (gsROM && gsROM.length > 0) {
+        if (bank >= 0xFE) {
+            // Map the ROM to Bank FE-FF (128KB max)
+            // In the gsROM file, Bank FF is at offset 0, and Bank FE is at offset 0x10000.
+            const romOffset = (bank === 0xFF ? 0 : 0x10000) | offset;
+            if (romOffset < gsROM.length) return gsROM[romOffset];
+            return 0; // Floating bus
+        }
+        // Bank E0 / E1 ROM mappings (only $D000-$FFFF)
+        if ((bank === 0xE0 || bank === 0xE1) && offset >= 0xD000) {
+            const romOffset = ((bank & 1) << 16) | offset;
+            if (romOffset < gsROM.length) return gsROM[romOffset];
+        }
+        
+        // Shadow ROM into Bank 00/01 ($D000 - $FFFF)
+        if ((bank === 0x00 || bank === 0x01) && offset >= 0xD000) {
+            const romOffset = (bank << 16) | offset;
+            if (romOffset < gsROM.length) return gsROM[romOffset];
+        }
+    }
+
+    // Bank E0: Direct access to Main Memory (bypassing soft switches)
+    if (bank === 0xE0) {
+        if (offset >= 0xC000 && offset < 0xD000) {
+            return memGet(offset, false); // I/O still falls back
+        }
+        return memory[offset]; // Main memory is at offset 0
+    }
+
+    // Bank E1: Direct access to Aux Memory (bypassing soft switches)
+    if (bank === 0xE1) {
+        if (offset >= 0xC000 && offset < 0xD000) {
+            return memGet(offset, false);
+        }
+        return memory[RamWorksMemoryStart + offset];
+    }
+
+    // Bank 00: Standard Apple IIe memory map (including ROM and Soft Switches)
+    if (bank === 0x00) {
+        return memGet(offset, false);
+    }
+    
+    // Bank 01: Direct, absolute access to Aux Memory (in IIgs, Bank 01 is subject to soft switches, but typically we can treat it similarly to Aux memory. Wait, IIgs Bank 01 respects some soft switches? Actually, let's treat Bank 01 exactly like E1 for now, but Apple IIe only has Bank 00.)
+    if (bank === 0x01) {
+        if (offset >= 0xC000 && offset < 0xD000) {
+            return memGet(offset, false); // I/O
+        }
+        return memory[RamWorksMemoryStart + offset];
+    }
+    
+    // Bank 02-7F: 8MB of pure, linear 65816 Fast RAM
+    if (bank >= 0x02 && bank < 0x80) {
+        return gsRAM[(bank << 16) | offset];
+    }
+    
+    return 0;
+}
+
+export const memSet24 = (address: number, data: number) => {
+    let bank = (address >> 16) & 0xFF;
+    const offset = address & 0xFFFF;
+    
+    // Bank E0: Direct access to Main Memory (bypassing soft switches)
+    if (bank === 0xE0) {
+        if (offset >= 0xC000 && offset < 0xD000) {
+            memSet(offset, data);
+            return;
+        }
+        memory[offset] = data;
+        return;
+    }
+
+    // Bank E1: Direct access to Aux Memory (bypassing soft switches)
+    if (bank === 0xE1) {
+        if (offset >= 0xC000 && offset < 0xD000) {
+            memSet(offset, data);
+            return;
+        }
+        memory[RamWorksMemoryStart + offset] = data;
+        return;
+    }
+
+    // Bank 00: Standard Apple IIe memory map
+    if (bank === 0x00) {
+        memSet(offset, data);
+        return;
+    }
+
+    // Bank 01: Direct, absolute access to Aux Memory
+    if (bank === 0x01) {
+        if (offset >= 0xC000 && offset < 0xD000) {
+            memSet(offset, data); // I/O
+            return;
+        }
+        memory[RamWorksMemoryStart + offset] = data;
+        return;
+    }
+    
+    // Bank 02-7F: 8MB of pure, linear 65816 Fast RAM
+    if (bank >= 0x02 && bank < 0x80) {
+        gsRAM[(bank << 16) | offset] = data;
+    }
+}
+
 
 export const setRamWorks = (size: number) => {
   // Clamp to 64K...16M and make sure it is a multiple of 64K
@@ -504,6 +626,37 @@ const memGetSoftSwitch = (addr: number): number => {
     // Videx Soft Video Switch: AN0 on -> switch to Videx 80-col display
     videoTerm.active = true
   }
+  
+  // Apple IIgs: $C071-$C07F are Native Interrupt vectors in ROM, not I/O!
+  if (currentMachineName === "APPLE2GS" && addr >= 0xC071 && addr <= 0xC07F) {
+      if (gsROM && gsROM.length > 0) {
+          // In Bank FE, the offset is exactly `addr`
+          return gsROM[addr];
+      }
+  }
+  
+  if (currentMachineName === "APPLE2GS" && addr >= 0xC020 && addr <= 0xC04F) {
+      // Mock ADB status ($C027) - pretend we are ready or not?
+      // Just returning what was written is a good start.
+      // But for ADB Status (C027), bit 7 means data ready. We can mock it so that we pretend it's always ready, or just return 0.
+      let val = iigsRegisters[addr & 0xFF];
+      if (addr === 0xC027) {
+          // ADB Status. Bit 7 = Data Ready. Bit 5 = Mouse Data Ready? Or ADB Ready?
+          // The OS waits for Bit 5 to be 1 during initialization.
+          val = iigsRegisters[0x27] | 0x20; 
+      }
+      if (addr === 0xC026) {
+          // OS read from ADB Data
+          iigsRegisters[0x27] &= ~0x80; // Clear Data Ready bit
+      }
+      if (addr === 0xC034) {
+          // OS read from Clock Control
+          iigsRegisters[0x34] &= ~0x80; // Clear Operation In Progress bit
+          val &= ~0x80;
+      }
+      return val;
+  }
+
   if (addr >= 0xC090) {
     checkSlotIO(addr)
   } else {
@@ -607,11 +760,24 @@ export const memGetRaw = (addr: number): number => {
 }
 
 const memSetSoftSwitch = (addr: number, value: number) => {
-  if (addr === 0xC029 && vidhd.enabled) {
-    vidhd.writeSoftSwitch(value)
-    SWITCHES.NEWVIDEO.isSet = (value & 0x80) !== 0
-    return
-  }
+    // C029 (NEWVIDEO) - used by both Apple IIgs and VidHD
+    if (addr === 0xC029) {
+      if (vidhd.enabled || (gsROM && gsROM.length > 0)) {
+        vidhd.writeSoftSwitch(value)
+      }
+      SWITCHES.NEWVIDEO.isSet = (value & 0x80) !== 0
+      return
+    }
+    
+    if (currentMachineName === "APPLE2GS" && addr >= 0xC020 && addr <= 0xC04F) {
+        iigsRegisters[addr & 0xFF] = value;
+        if (addr === 0xC026) {
+            // OS wrote to ADB Data (C026).
+            // Pretend ADB responds immediately.
+            iigsRegisters[0x26] = 0x00; // Dummy response data
+            iigsRegisters[0x27] |= 0x80; // Set Data Ready bit in Status (C027)
+        }
+    }
   if (addr === 0xC058 && videoTerm.enabled) {
     // Videx Soft Video Switch: AN0 off -> switch to 40-col display
     videoTerm.active = false
@@ -907,6 +1073,9 @@ export const getHgr2Memory = () => {
 }
 
 export const getShr = (): Uint8Array => {
+  if (gsROM && gsROM.length > 0) {
+    return vidhd.extractShrBuffer(memory, RamWorksMemoryStart)
+  }
   if (!vidhd.enabled || !vidhd.active) {
     return new Uint8Array()
   }
