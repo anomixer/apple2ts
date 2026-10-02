@@ -1,6 +1,6 @@
 // Chris Torrence, 2022
 import { passMachineState, passSoftSwitchDescriptions, passWorkerOperationResult } from "./worker2main"
-import { s6502, setState6502, reset6502, setCycleCount, setPC, getStackString, get6502Instructions } from "./instructions"
+import { s6502, setState6502, setCycleCount, setPC, getStackString, get6502Instructions } from "./instructions"
 import { hiresAddressToLine, RUN_MODE, TEST_DEBUG, DEFAULT_SLOT_CONFIG, HEATMAP_STATE, MEMORY_DUMP_STATE, AUTO_SNAPSHOT } from "../common/utility"
 import { resetFloppyDrives, doPauseDrive, getHardDriveState } from "./devices/drivestate"
 // import { slot_omni } from "./roms/slot_omni_cx00"
@@ -38,7 +38,11 @@ import { memory, memGet, getTextPage, getHires, memoryReset,
   getHgr2Memory} from "./memory"
 import { setButtonState, handleGamepads } from "./devices/joystick"
 import { handleGameSetup } from "./games/game_mappings"
-import { breakpointMap, clearInterrupts, doSetBreakpointSkipOnce, doSetMemoryWriteWatchpoint as setCpuMemoryWriteWatchpoint, processInstruction, resetCycleCountCallbacks, setStepOut, getHeatMapCPU, getHeatMapCPUMax, resetHeatMapCPU } from "./cpu6502"
+import { breakpointMap, clearInterrupts, doSetBreakpointSkipOnce, doSetMemoryWriteWatchpoint as setCpuMemoryWriteWatchpoint, resetCycleCountCallbacks, setStepOut, getHeatMapCPU, getHeatMapCPUMax, resetHeatMapCPU } from "./cpu6502"
+import { ICPU } from "./icpu"
+import { CPU6502Wrapper } from "./cpu6502_wrapper"
+
+let cpu: ICPU = new CPU6502Wrapper();
 import { enableSerialCard, resetSerial } from "./devices/superserial/serial"
 import { enableMouseCard } from "./devices/mouse"
 import { enablePassportCard, resetPassport } from "./devices/passport/passport"
@@ -465,7 +469,7 @@ export const doReset = () => {
   resetSoftSwitches()
   // Reset banked RAM
   memGet(0xC082, false)
-  reset6502()
+  cpu.reset()
   resetMachine()
   // Otherwise Heat Map data survives a reset/reboot indefinitely (it was
   // previously cleared only by doSetCycleCount, a time-travel-only path),
@@ -722,7 +726,7 @@ export const doStepInto = () => {
   }
   // Remove all tracelog values if we are no longer tracing.
   if (!tracing) clearTracelog()
-  if (processInstruction(tracing ? updateTrace : null) !== -1) {
+  if (cpu.processInstruction(tracing ? updateTrace : null) !== -1) {
     doSetRunMode(RUN_MODE.PAUSED, true, undefined, {reason: "step"})
   }
 }
@@ -737,7 +741,7 @@ export const doStepOver = () => {
     // Remove all tracelog values if we are no longer tracing.
     if (!tracing) clearTracelog()
     // If we're at a JSR then briefly step in, then step out.
-    if (processInstruction(tracing ? updateTrace : null) !== -1) doStepOut()
+    if (cpu.processInstruction(tracing ? updateTrace : null) !== -1) doStepOut()
   } else {
     // Otherwise just do a single step.
     doStepInto()
@@ -1077,7 +1081,7 @@ const doAdvance6502 = () => {
       cycles = Math.max(1, Math.round(stepT / 2))
       s6502.cycleCount += cycles
     } else {
-      cycles = processInstruction(tracing ? updateTrace : null)
+      cycles = cpu.processInstruction(tracing ? updateTrace : null)
     }
     if (!checkConditionalInputStop()) advanceKeySequence()
     if (advanceConditionalInputSequence()) {

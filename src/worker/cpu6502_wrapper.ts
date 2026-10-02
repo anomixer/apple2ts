@@ -7,7 +7,7 @@ export class CPU6502Wrapper implements ICPU {
         reset6502();
     }
 
-    public processInstruction(): void {
-        processInstruction();
+    public processInstruction(traceCallback?: ((str: string) => void) | null): number {
+        return processInstruction(traceCallback);
     }
 }
