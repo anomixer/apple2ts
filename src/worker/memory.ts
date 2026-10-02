@@ -254,7 +254,7 @@ export const memSet24 = (address: number, data: number) => {
         // Language card region
         if (offset >= 0xD000) {
             // Check if language card RAM is writable
-            if (SWITCHES.BSRWRITE.isSet) {
+            if (SWITCHES.BSR_WRITE.isSet) {
                 const auxOffset = (bank === 0xE1) ? RamWorksMemoryStart : 0;
                 if (!SWITCHES.BSRBANK2.isSet) {
                     // Bank 1

@@ -312,6 +312,26 @@ export const configureMachine = () => {
     clearSlot(s)
   }
 
+  // Apple IIgs uses a completely different architecture
+  // It has built-in hardware and doesn't use expansion cards like the IIe
+  if (machineName === "APPLE2GS") {
+    // IIgs has IWM (Integrated Woz Machine) for disk control in slot 6
+    // The firmware is in ROM, no card ROM needed
+    if (currentSlotConfig[6] === "disk2") {
+      enableDiskDrive()
+    }
+    // IIgs has built-in:
+    // - ADB for keyboard/mouse (not a card)
+    // - Ensoniq DOC for sound (not Mockingboard)
+    // - Super Hi-Res graphics (not VidHD)
+    // - Serial ports via SCC (not SSC card)
+    // So we don't configure any other slots
+    get6502Instructions()
+    return
+  }
+
+  // Apple IIe/II+ configuration continues below...
+
   // Ensure Slot 3 is configured properly: on IIe default to 'aux', 'vidhd' or 'none', on II+ allow 'videoterm', 'vidhd' or 'none'
   if (machineName === "APPLE2P") {
     if (currentSlotConfig[3] !== "none" && currentSlotConfig[3] !== "videoterm" && currentSlotConfig[3] !== "vidhd") {
