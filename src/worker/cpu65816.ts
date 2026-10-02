@@ -439,24 +439,21 @@ export class CPU65816 implements ICPU {
                 break;
             case 0x22: // JSL
                 const jslTarget = this.addrAbsoluteLong();
-                console.log(`[JSL] at ${this.PB.toString(16)}:${((this.PC-4)&0xFFFF).toString(16).padStart(4,'0')} → ${(jslTarget>>16).toString(16)}:${(jslTarget&0xFFFF).toString(16).padStart(4,'0')}, push PB=$${this.PB.toString(16).padStart(2,'0')} PC=$${((this.PC-1)&0xFFFF).toString(16).padStart(4,'0')}, SP=$${this.S.toString(16).padStart(4,'0')}`);
                 this.push8Wide(this.PB);
                 this.push16Wide((this.PC - 1) & 0xFFFF); // PC is already incremented by 3 for abs long
                 this.normaliseStack();
                 this.PB = (jslTarget >> 16) & 0xFF;
                 this.PC = jslTarget & 0xFFFF;
-                console.log(`[JSL] after push: SP=$${this.S.toString(16).padStart(4,'0')}`);
                 break;
             
             case 0x60: // RTS
                 this.PC = (this.pop16() + 1) & 0xFFFF;
                 break;
             case 0x6B: // RTL
-                console.log(`[RTL] at ${this.PB.toString(16)}:${this.PC.toString(16).padStart(4,'0')}, SP=$${this.S.toString(16).padStart(4,'0')}`);
+                // Pop in reverse order of push: PC (2 bytes) then PB (1 byte)
                 this.PC = (this.pop16Wide() + 1) & 0xFFFF;
                 this.PB = this.pop8Wide();
                 this.normaliseStack();
-                console.log(`[RTL] popped: PB=$${this.PB.toString(16).padStart(2,'0')} PC=$${this.PC.toString(16).padStart(4,'0')}, SP=$${this.S.toString(16).padStart(4,'0')}`);
                 break;
             case 0x40: // RTI
                 this.opPop('P');

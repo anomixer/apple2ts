@@ -40,6 +40,34 @@ Because we had not implemented the IIgs-specific I/O hardware, these registers r
 Our original implementation used `push8`/`pop8`/`push16`/`pop16` which enforced page-1 wrapping after **every byte**, causing the high byte of a 16-bit push to wrap to `$01FF` instead of `$0100`, corrupting return addresses.
 **Fix**: Added `push8Wide`/`pop8Wide`/`push16Wide`/`pop16Wide` functions that don't wrap during operation, and call `normaliseStack()` only after the complete instruction finishes. This matches the web-a2e reference implementation.
 
+### 7. Infinite RTL Loop at ff:b5e0 (Current Issue - UNSOLVED)
+**Issue**: After the first few JSL/RTL pairs work correctly, the system enters an infinite loop executing RTL instructions at address `ff:b5e0`. The RTL repeatedly pops garbage data from the stack, with SP cycling from `$01xx` down through `$00xx`, wrapping around to `$FFxx`, and eventually being normalized back to `$01xx`, creating an endless cycle.
+**Symptoms**:
+- First 4 JSL operations execute correctly and return properly
+- At `ff:84ee`, RTL pops from `$01DE` and returns to `ff:859d` (seems correct based on manual stack setup by ROM)
+- At `ff:859e`, RTL pops from `$01E1` and returns to **`ff:0005`** (WRONG - no JSL pushed this)
+- System then enters infinite loop at `ff:b5e0` executing hundreds of RTL instructions
+- Each RTL pops 3 bytes of garbage, returning to random addresses like `08:8806`, `88:0886`, `c0:0585`, etc.
+- SP cycles: `$01DF` → `$0000` → `$FFFF` → normalized back to `$01xx` → repeats
+
+**Analysis**:
+1. The Wide stack implementation (push8Wide/pop8Wide/push16Wide/pop16Wide) appears correct based on web-a2e reference
+2. First JSL at `ff:841c → e1:004c` works perfectly (pushes `$FF:841F`, RTL correctly returns to `ff:8420`)
+3. The crash occurs when RTL at `ff:859e` pops from stack location `$01E1-$01E3` which was NOT written by any JSL
+4. ROM code appears to manually construct fake return addresses on stack (via TXS/TCS operations seen at `ff:84d9-ff:84ec`)
+5. The manually constructed return address at `$01E1-$01E3` contains wrong data, causing jump to `ff:0005`
+6. `ff:0005` or nearby code leads to `ff:b5e0` which may legitimately contain RTL (0x6B) opcode
+7. Because there's no valid return address on stack, RTL keeps popping garbage in an infinite loop
+
+**Possible Root Causes**:
+- The ROM's manual stack manipulation code expects different stack layout than what we're providing
+- Our JSL might be pushing bytes in wrong order (though it matches web-a2e)
+- Bank E0/E1 memory mapping might still be incorrect, causing the manual stack writes to go to wrong location
+- Some other instruction (TXS, TSC, TCS, PLD, PHD) might have incorrect implementation
+- The manual return address construction at `ff:84d9-ff:84ec` might be reading corrupted data from Direct Page
+
+**Current State**: Need to investigate why the manually-constructed return address at `$01E1-$01E3` contains `$FF:0004` instead of expected value (likely `$FF:859C` based on earlier traces showing `A=$859C`).
+
 ## Reference Implementation (web-a2e)
 When stuck, always reference `c:\dev\web-a2e` - a working C++ implementation of Apple IIgs emulation. Key learnings:
 
