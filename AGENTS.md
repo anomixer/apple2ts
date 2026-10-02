@@ -31,6 +31,15 @@ Because we had not implemented the IIgs-specific I/O hardware, these registers r
 **Cause**: Before the OS had a chance to fully initialize the Toolbox (which sets up pointers in Zero Page like `$0004`), the ADB initialization would time out (because Bit 5 of `$C027` was 0). The timeout caused the OS to try to display a "Fatal System Error 0911" via the Toolbox. However, because VBL interrupts were now firing, the CPU was interrupted and jumped to the uninitialized interrupt handler (`$E10010`), leading to a corrupted stack and an infinite `BRK` loop in garbage memory.
 **Fix**: Fixing the ADB Status Bit 5 (as described in #4) allowed the OS to bypass the timeout, preventing it from invoking the uninitialized Toolbox and avoiding the crash loop.
 
+### 6. Stack Wrapping Bug in JSL/RTL (The "Wrong Return Address" Bug)
+**Issue**: RTL (Return from Subroutine Long) was returning to wrong addresses, causing crashes. Example: RTL at `ff:859d` returned to `ff:0005` instead of the correct address.
+**Cause**: The 65816 has special stack behavior for its native instructions (JSL, RTL, PHD, PLD, PHB, PLB, PHK, PEA, PEI, PER). In Emulation mode, the stack pointer is normally constrained to page 1 (`$01xx`). However, these 65816-specific instructions need to temporarily push/pop data that might span across the page boundary. They should:
+1. Allow the stack pointer to move outside page 1 during the multi-byte operation
+2. Re-normalize it back to page 1 only after the entire operation completes
+
+Our original implementation used `push8`/`pop8`/`push16`/`pop16` which enforced page-1 wrapping after **every byte**, causing the high byte of a 16-bit push to wrap to `$01FF` instead of `$0100`, corrupting return addresses.
+**Fix**: Added `push8Wide`/`pop8Wide`/`push16Wide`/`pop16Wide` functions that don't wrap during operation, and call `normaliseStack()` only after the complete instruction finishes. This matches the web-a2e reference implementation.
+
 ## Reference Implementation (web-a2e)
 When stuck, always reference `c:\dev\web-a2e` - a working C++ implementation of Apple IIgs emulation. Key learnings:
 
@@ -58,4 +67,5 @@ When stuck, always reference `c:\dev\web-a2e` - a working C++ implementation of 
 ## Debugging Techniques Used
 - **Instruction Tracing**: Added a circular buffer in `motherboard.ts` to trace the last 100 instructions (PC, Opcode, Registers) when the CPU executed more than 3 million cycles without progressing.
 - **ROM Inspection**: Dumped specific sections of the base64-encoded `gsROM` via Node.js scripts to disassemble the infinite loops (e.g., at `$B670` and `$8440`) and identify which hardware registers the OS was polling.
+- **Reference Implementation Analysis**: Systematically compared our implementation against web-a2e's working C++ code to identify behavioral differences in stack operations, memory mapping, and I/O handling.
 - **Reference Implementation**: Consulted `c:\dev\web-a2e` (Mike Daley's web-a2e project) for correct IIgs memory mapping, clock, and hardware implementation.
