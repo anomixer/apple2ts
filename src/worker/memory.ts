@@ -189,20 +189,34 @@ export const memGet24 = (address: number): number => {
         }
     }
 
-    // Bank E0: Direct access to Main Memory (bypassing soft switches)
-    if (bank === 0xE0) {
-        if (offset >= 0xC000 && offset < 0xD000) {
-            return memGet(offset, false); // I/O still falls back
-        }
-        return memory[offset]; // Main memory is at offset 0
-    }
-
-    // Bank E1: Direct access to Aux Memory (bypassing soft switches)
-    if (bank === 0xE1) {
+    // Bank E0/E1: Mega II (the Apple IIe inside the IIgs)
+    // These are NOT simple linear RAM - they go through the IIe's memory system
+    // which includes soft switches, language card, etc.
+    if (bank === 0xE0 || bank === 0xE1) {
+        // For $C000-$CFFF I/O region, use memGet which handles soft switches
         if (offset >= 0xC000 && offset < 0xD000) {
             return memGet(offset, false);
         }
-        return memory[RamWorksMemoryStart + offset];
+        // For $D000-$FFFF, check if ROM is enabled via language card switches
+        if (offset >= 0xD000) {
+            // If RDROM is set, read from ROM
+            if (!SWITCHES.BSRREADRAM.isSet) {
+                return gsROM[(bank << 16) | offset] || 0;
+            }
+            // Otherwise read from language card RAM
+            // Bank E0 = main, Bank E1 = aux
+            const auxOffset = (bank === 0xE1) ? RamWorksMemoryStart : 0;
+            if (!SWITCHES.BSRBANK2.isSet) {
+                // Bank 1: $D000-$DFFF stored at offset-0x1000
+                return memory[auxOffset + offset - 0x1000];
+            }
+            // Bank 2: $D000-$FFFF stored normally
+            return memory[auxOffset + offset];
+        }
+        // For $0000-$BFFF, direct RAM access
+        // Bank E0 = main RAM, Bank E1 = aux RAM
+        const auxOffset = (bank === 0xE1) ? RamWorksMemoryStart : 0;
+        return memory[auxOffset + offset];
     }
 
     // Bank 00: Standard Apple IIe memory map (including ROM and Soft Switches)
@@ -230,23 +244,31 @@ export const memSet24 = (address: number, data: number) => {
     let bank = (address >> 16) & 0xFF;
     const offset = address & 0xFFFF;
     
-    // Bank E0: Direct access to Main Memory (bypassing soft switches)
-    if (bank === 0xE0) {
+    // Bank E0/E1: Mega II (Apple IIe inside IIgs)
+    if (bank === 0xE0 || bank === 0xE1) {
+        // I/O region
         if (offset >= 0xC000 && offset < 0xD000) {
             memSet(offset, data);
             return;
         }
-        memory[offset] = data;
-        return;
-    }
-
-    // Bank E1: Direct access to Aux Memory (bypassing soft switches)
-    if (bank === 0xE1) {
-        if (offset >= 0xC000 && offset < 0xD000) {
-            memSet(offset, data);
+        // Language card region
+        if (offset >= 0xD000) {
+            // Check if language card RAM is writable
+            if (SWITCHES.BSRWRITE.isSet) {
+                const auxOffset = (bank === 0xE1) ? RamWorksMemoryStart : 0;
+                if (!SWITCHES.BSRBANK2.isSet) {
+                    // Bank 1
+                    memory[auxOffset + offset - 0x1000] = data;
+                } else {
+                    // Bank 2
+                    memory[auxOffset + offset] = data;
+                }
+            }
             return;
         }
-        memory[RamWorksMemoryStart + offset] = data;
+        // Regular RAM
+        const auxOffset = (bank === 0xE1) ? RamWorksMemoryStart : 0;
+        memory[auxOffset + offset] = data;
         return;
     }
 
