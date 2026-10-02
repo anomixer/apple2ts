@@ -55,8 +55,10 @@ class IIgsClock {
     }
 
     readControl(): number {
-        // Control register always shows transaction complete (bit 5 clear)
-        return this.control & ~CONTROL_TRANSACTION;
+        // Bit 7 (0x80) = Operation in Progress (always 0 = operation complete)
+        // Bit 5 (0x20) = Transaction bit (always 0 = transaction complete)
+        // Return control register with these bits always clear
+        return this.control & ~(CONTROL_SELECT | CONTROL_TRANSACTION);
     }
 
     writeControl(value: number): void {

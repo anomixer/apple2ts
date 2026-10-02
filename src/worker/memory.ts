@@ -132,7 +132,9 @@ export const doSetRom = (machineName: MACHINE_NAME) => {
     case "APPLE2GS":
       const rom64_gs = romBase64gs.replace(/[\n\r\s]/g, "");
       gsROM = new Uint8Array(Buffer.from(rom64_gs, "base64"));
-      console.log(`[DEBUG] gsROM length: ${gsROM.length}, bytes at FFFC: ${gsROM[0x1FFFC]?.toString(16)} ${gsROM[0x1FFFD]?.toString(16)}`);
+      console.log(`[DEBUG] gsROM length: ${gsROM.length}`);
+      console.log(`[DEBUG] Reset vector at FF:FFFC = ${gsROM[0xFFFC]?.toString(16).padStart(2,'0')} ${gsROM[0xFFFD]?.toString(16).padStart(2,'0')}`);
+      console.log(`[DEBUG] First bytes of ROM: ${gsROM[0]?.toString(16)} ${gsROM[1]?.toString(16)} ${gsROM[2]?.toString(16)} ${gsROM[3]?.toString(16)}`);
       return // Skip standard Apple IIe ROM mapping setup
   }
   // For now, comment out the use of the Extended Debugging Monitor
