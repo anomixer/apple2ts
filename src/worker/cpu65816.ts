@@ -439,8 +439,9 @@ export class CPU65816 implements ICPU {
                 break;
             case 0x22: // JSL
                 const jslTarget = this.addrAbsoluteLong();
-                this.push8(this.PB);
-                this.push16((this.PC - 1) & 0xFFFF); // PC is already incremented by 3 for abs long
+                this.push8Wide(this.PB);
+                this.push16Wide((this.PC - 1) & 0xFFFF); // PC is already incremented by 3 for abs long
+                this.normaliseStack();
                 this.PB = (jslTarget >> 16) & 0xFF;
                 this.PC = jslTarget & 0xFFFF;
                 break;
@@ -449,8 +450,9 @@ export class CPU65816 implements ICPU {
                 this.PC = (this.pop16() + 1) & 0xFFFF;
                 break;
             case 0x6B: // RTL
-                this.PC = (this.pop16() + 1) & 0xFFFF;
-                this.PB = this.pop8();
+                this.PC = (this.pop16Wide() + 1) & 0xFFFF;
+                this.PB = this.pop8Wide();
+                this.normaliseStack();
                 break;
             case 0x40: // RTI
                 this.opPop('P');
@@ -1323,10 +1325,10 @@ export class CPU65816 implements ICPU {
             case 'X': this.getFlag(Status816.X) ? this.push8(this.X & 0xFF) : this.push16(this.X); break;
             case 'Y': this.getFlag(Status816.X) ? this.push8(this.Y & 0xFF) : this.push16(this.Y); break;
             case 'P': this.push8(this.P | (this.emulationMode ? 0x10 : 0x00)); break; // Break flag injected in E mode
-            case 'B': this.push8(this.DB); break;
-            case 'D': this.push16(this.D); break;
-            case 'K': this.push8(this.PB); break;
-            case 'PEA': case 'PEI': case 'PER': this.push16(val); break;
+            case 'B': this.push8Wide(this.DB); this.normaliseStack(); break;
+            case 'D': this.push16Wide(this.D); this.normaliseStack(); break;
+            case 'K': this.push8Wide(this.PB); this.normaliseStack(); break;
+            case 'PEA': case 'PEI': case 'PER': this.push16Wide(val); this.normaliseStack(); break;
         }
     }
 
@@ -1362,12 +1364,14 @@ export class CPU65816 implements ICPU {
                 }
                 break;
             case 'B':
-                this.DB = this.pop8();
+                this.DB = this.pop8Wide();
+                this.normaliseStack();
                 this.setFlag(Status816.Z, this.DB === 0);
                 this.setFlag(Status816.N, (this.DB & 0x80) !== 0);
                 break;
             case 'D':
-                this.D = this.pop16();
+                this.D = this.pop16Wide();
+                this.normaliseStack();
                 this.setFlag(Status816.Z, this.D === 0);
                 this.setFlag(Status816.N, (this.D & 0x8000) !== 0);
                 break;
@@ -1487,6 +1491,35 @@ export class CPU65816 implements ICPU {
         const lo = this.pop8();
         const hi = this.pop8();
         return lo | (hi << 8);
+    }
+
+    // Wide versions for 65816-specific instructions (JSL, RTL, PHD, PLD, etc.)
+    // These don't enforce page-one wrapping during the operation
+    private push8Wide(value: number) {
+        this.write8(this.S, value);
+        this.S = (this.S - 1) & 0xFFFF;
+    }
+
+    private pop8Wide(): number {
+        this.S = (this.S + 1) & 0xFFFF;
+        return this.read8(this.S);
+    }
+
+    private push16Wide(value: number) {
+        this.push8Wide((value >> 8) & 0xFF);
+        this.push8Wide(value & 0xFF);
+    }
+
+    private pop16Wide(): number {
+        const lo = this.pop8Wide();
+        const hi = this.pop8Wide();
+        return lo | (hi << 8);
+    }
+
+    private normaliseStack() {
+        if (this.emulationMode) {
+            this.S = 0x0100 | (this.S & 0x00FF);
+        }
     }
 
     // --- Helpers ---
