@@ -73,7 +73,8 @@ export function toolSetMachineType(machineType: string): MCPToolResult {
     const machineNames: Record<MACHINE_NAME, string> = {
       "APPLE2P": "Apple II+",
       "APPLE2EU": "Apple IIe (Unenhanced)",
-      "APPLE2EE": "Apple IIe (Enhanced)"
+      "APPLE2EE": "Apple IIe (Enhanced)",
+      "APPLE2GS": "Apple IIgs"
     }
     const machineName = machineNames[machineType as MACHINE_NAME]
 

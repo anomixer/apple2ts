@@ -90,11 +90,34 @@ export class CPU65816 implements ICPU {
         this.waiting = false;
     }
 
+    private traceBuffer: string[] = [];
+    private ffCount = 0;
+    private dumped = false;
+
     public processInstruction(traceCallback?: ((str: string) => void) | null): number {
         if (this.stopped || this.waiting) return 1; // Burn 1 cycle
 
-        // Fetch opcode
+        const pc = this.PC;
+        const pb = this.PB;
         const opcode = this.fetch8();
+        
+        if (!this.dumped) {
+            const tr = `PC=${pb.toString(16).padStart(2, '0')}:${pc.toString(16).padStart(4, '0')} Opcode=${opcode.toString(16).padStart(2, '0')} A=${this.A.toString(16)} X=${this.X.toString(16)} Y=${this.Y.toString(16)} S=${this.S.toString(16)} P=${this.P.toString(16)}`;
+            this.traceBuffer.push(tr);
+            if (this.traceBuffer.length > 100) this.traceBuffer.shift();
+
+            if (opcode === 0xFF) {
+                this.ffCount++;
+                if (this.ffCount > 20) {
+                    console.log("CRASHED INTO SEA OF FF! Last 100 instructions:");
+                    console.log(this.traceBuffer.join('\n'));
+                    this.dumped = true;
+                }
+            } else {
+                this.ffCount = 0;
+            }
+        }
+        
         this.executeOpcode(opcode);
         
         // Return 1 cycle for now as placeholder
@@ -478,9 +501,213 @@ export class CPU65816 implements ICPU {
             case 0xE2: // SEP (Set Processor Status Bits)
                 this.opSEP();
                 break;
+            // --- Missing Core Opcodes (LDA, STA, ADC, SBC, etc) ---
+            // LDA
+            case 0xA9: this.opLDA(this.addrImmediate(this.getFlag(Status816.M))); break;
+            case 0xA5: this.opLDA(this.addrDirect()); break;
+            case 0xB5: this.opLDA(this.addrDirectX()); break;
+            case 0xAD: this.opLDA(this.addrAbsolute()); break;
+            case 0xBD: this.opLDA(this.addrAbsoluteX()); break;
+            case 0xB9: this.opLDA(this.addrAbsoluteY()); break;
+            case 0xA1: this.opLDA(this.addrDirectIndexedIndirect()); break;
+            case 0xB1: this.opLDA(this.addrDirectIndirectIndexed()); break;
+            case 0x92: this.opLDA(this.addrDirectIndirect()); break;
+            case 0x8F: this.opLDA(this.addrAbsoluteLong()); break;
+            case 0xAF: this.opLDA(this.addrAbsoluteLongX()); break;
+            case 0xA3: this.opLDA(this.addrStackRelative()); break;
+            case 0xB3: this.opLDA(this.addrStackRelativeIndirectIndexed()); break;
+            case 0xA7: this.opLDA(this.addrDirectIndirectLong()); break;
+            case 0xB7: this.opLDA(this.addrDirectIndirectLongIndexed()); break;
+
+            // STA
+            case 0x85: this.opSTA(this.addrDirect()); break;
+            case 0x95: this.opSTA(this.addrDirectX()); break;
+            case 0x8D: this.opSTA(this.addrAbsolute()); break;
+            case 0x9D: this.opSTA(this.addrAbsoluteX()); break;
+            case 0x99: this.opSTA(this.addrAbsoluteY()); break;
+            case 0x81: this.opSTA(this.addrDirectIndexedIndirect()); break;
+            case 0x91: this.opSTA(this.addrDirectIndirectIndexed()); break;
+            case 0x92: this.opSTA(this.addrDirectIndirect()); break;
+            case 0x8F: this.opSTA(this.addrAbsoluteLong()); break;
+            case 0x9F: this.opSTA(this.addrAbsoluteLongX()); break;
+            case 0x83: this.opSTA(this.addrStackRelative()); break;
+            case 0x93: this.opSTA(this.addrStackRelativeIndirectIndexed()); break;
+            case 0x87: this.opSTA(this.addrDirectIndirectLong()); break;
+            case 0x97: this.opSTA(this.addrDirectIndirectLongIndexed()); break;
+
+            // ADC
+            case 0x69: this.opADC(this.addrImmediate(this.getFlag(Status816.M))); break;
+            case 0x65: this.opADC(this.addrDirect()); break;
+            case 0x75: this.opADC(this.addrDirectX()); break;
+            case 0x6D: this.opADC(this.addrAbsolute()); break;
+            case 0x7D: this.opADC(this.addrAbsoluteX()); break;
+            case 0x79: this.opADC(this.addrAbsoluteY()); break;
+            case 0x61: this.opADC(this.addrDirectIndexedIndirect()); break;
+            case 0x71: this.opADC(this.addrDirectIndirectIndexed()); break;
+            case 0x72: this.opADC(this.addrDirectIndirect()); break;
+            case 0x6F: this.opADC(this.addrAbsoluteLong()); break;
+            case 0x7F: this.opADC(this.addrAbsoluteLongX()); break;
+            case 0x63: this.opADC(this.addrStackRelative()); break;
+            case 0x73: this.opADC(this.addrStackRelativeIndirectIndexed()); break;
+            case 0x67: this.opADC(this.addrDirectIndirectLong()); break;
+            case 0x77: this.opADC(this.addrDirectIndirectLongIndexed()); break;
+
+            // SBC
+            case 0xE9: this.opSBC(this.addrImmediate(this.getFlag(Status816.M))); break;
+            case 0xE5: this.opSBC(this.addrDirect()); break;
+            case 0xF5: this.opSBC(this.addrDirectX()); break;
+            case 0xED: this.opSBC(this.addrAbsolute()); break;
+            case 0xFD: this.opSBC(this.addrAbsoluteX()); break;
+            case 0xF9: this.opSBC(this.addrAbsoluteY()); break;
+            case 0xE1: this.opSBC(this.addrDirectIndexedIndirect()); break;
+            case 0xF1: this.opSBC(this.addrDirectIndirectIndexed()); break;
+            case 0xF2: this.opSBC(this.addrDirectIndirect()); break;
+            case 0xEF: this.opSBC(this.addrAbsoluteLong()); break;
+            case 0xFF: this.opSBC(this.addrAbsoluteLongX()); break;
+            case 0xE3: this.opSBC(this.addrStackRelative()); break;
+            case 0xF3: this.opSBC(this.addrStackRelativeIndirectIndexed()); break;
+            case 0xE7: this.opSBC(this.addrDirectIndirectLong()); break;
+            case 0xF7: this.opSBC(this.addrDirectIndirectLongIndexed()); break;
+
+            // CMP
+            case 0xC9: this.opCMP(this.addrImmediate(this.getFlag(Status816.M))); break;
+            case 0xC5: this.opCMP(this.addrDirect()); break;
+            case 0xD5: this.opCMP(this.addrDirectX()); break;
+            case 0xCD: this.opCMP(this.addrAbsolute()); break;
+            case 0xDD: this.opCMP(this.addrAbsoluteX()); break;
+            case 0xD9: this.opCMP(this.addrAbsoluteY()); break;
+            case 0xC1: this.opCMP(this.addrDirectIndexedIndirect()); break;
+            case 0xD1: this.opCMP(this.addrDirectIndirectIndexed()); break;
+            case 0xD2: this.opCMP(this.addrDirectIndirect()); break;
+            case 0xCF: this.opCMP(this.addrAbsoluteLong()); break;
+            case 0xDF: this.opCMP(this.addrAbsoluteLongX()); break;
+            case 0xC3: this.opCMP(this.addrStackRelative()); break;
+            case 0xD3: this.opCMP(this.addrStackRelativeIndirectIndexed()); break;
+            case 0xC7: this.opCMP(this.addrDirectIndirectLong()); break;
+            case 0xD7: this.opCMP(this.addrDirectIndirectLongIndexed()); break;
+
+            // AND
+            case 0x29: this.opAND(this.addrImmediate(this.getFlag(Status816.M))); break;
+            case 0x25: this.opAND(this.addrDirect()); break;
+            case 0x35: this.opAND(this.addrDirectX()); break;
+            case 0x2D: this.opAND(this.addrAbsolute()); break;
+            case 0x3D: this.opAND(this.addrAbsoluteX()); break;
+            case 0x39: this.opAND(this.addrAbsoluteY()); break;
+            case 0x21: this.opAND(this.addrDirectIndexedIndirect()); break;
+            case 0x31: this.opAND(this.addrDirectIndirectIndexed()); break;
+            case 0x32: this.opAND(this.addrDirectIndirect()); break;
+            case 0x2F: this.opAND(this.addrAbsoluteLong()); break;
+            case 0x3F: this.opAND(this.addrAbsoluteLongX()); break;
+            case 0x23: this.opAND(this.addrStackRelative()); break;
+            case 0x33: this.opAND(this.addrStackRelativeIndirectIndexed()); break;
+            case 0x27: this.opAND(this.addrDirectIndirectLong()); break;
+            case 0x37: this.opAND(this.addrDirectIndirectLongIndexed()); break;
+
+            // ORA
+            case 0x09: this.opORA(this.addrImmediate(this.getFlag(Status816.M))); break;
+            case 0x05: this.opORA(this.addrDirect()); break;
+            case 0x15: this.opORA(this.addrDirectX()); break;
+            case 0x0D: this.opORA(this.addrAbsolute()); break;
+            case 0x1D: this.opORA(this.addrAbsoluteX()); break;
+            case 0x19: this.opORA(this.addrAbsoluteY()); break;
+            case 0x01: this.opORA(this.addrDirectIndexedIndirect()); break;
+            case 0x11: this.opORA(this.addrDirectIndirectIndexed()); break;
+            case 0x12: this.opORA(this.addrDirectIndirect()); break;
+            case 0x0F: this.opORA(this.addrAbsoluteLong()); break;
+            case 0x1F: this.opORA(this.addrAbsoluteLongX()); break;
+            case 0x03: this.opORA(this.addrStackRelative()); break;
+            case 0x13: this.opORA(this.addrStackRelativeIndirectIndexed()); break;
+            case 0x07: this.opORA(this.addrDirectIndirectLong()); break;
+            case 0x17: this.opORA(this.addrDirectIndirectLongIndexed()); break;
+
+            // EOR
+            case 0x49: this.opEOR(this.addrImmediate(this.getFlag(Status816.M))); break;
+            case 0x45: this.opEOR(this.addrDirect()); break;
+            case 0x55: this.opEOR(this.addrDirectX()); break;
+            case 0x4D: this.opEOR(this.addrAbsolute()); break;
+            case 0x5D: this.opEOR(this.addrAbsoluteX()); break;
+            case 0x59: this.opEOR(this.addrAbsoluteY()); break;
+            case 0x41: this.opEOR(this.addrDirectIndexedIndirect()); break;
+            case 0x51: this.opEOR(this.addrDirectIndirectIndexed()); break;
+            case 0x52: this.opEOR(this.addrDirectIndirect()); break;
+            case 0x4F: this.opEOR(this.addrAbsoluteLong()); break;
+            case 0x5F: this.opEOR(this.addrAbsoluteLongX()); break;
+            case 0x43: this.opEOR(this.addrStackRelative()); break;
+            case 0x53: this.opEOR(this.addrStackRelativeIndirectIndexed()); break;
+            case 0x47: this.opEOR(this.addrDirectIndirectLong()); break;
+            case 0x57: this.opEOR(this.addrDirectIndirectLongIndexed()); break;
+
+            // LDX
+            case 0xA2: this.opLDX(this.addrImmediate(this.getFlag(Status816.X))); break;
+            case 0xA6: this.opLDX(this.addrDirect()); break;
+            case 0xB6: this.opLDX(this.addrDirectY()); break;
+            case 0xAE: this.opLDX(this.addrAbsolute()); break;
+            case 0xBE: this.opLDX(this.addrAbsoluteY()); break;
+
+            // LDY
+            case 0xA0: this.opLDY(this.addrImmediate(this.getFlag(Status816.X))); break;
+            case 0xA4: this.opLDY(this.addrDirect()); break;
+            case 0xB4: this.opLDY(this.addrDirectX()); break;
+            case 0xAC: this.opLDY(this.addrAbsolute()); break;
+            case 0xBC: this.opLDY(this.addrAbsoluteX()); break;
+
+            // STX
+            case 0x86: this.opSTX(this.addrDirect()); break;
+            case 0x96: this.opSTX(this.addrDirectY()); break;
+            case 0x8E: this.opSTX(this.addrAbsolute()); break;
+
+            // STY
+            case 0x84: this.opSTY(this.addrDirect()); break;
+            case 0x94: this.opSTY(this.addrDirectX()); break;
+            case 0x8C: this.opSTY(this.addrAbsolute()); break;
+
+            // CPX
+            case 0xE0: this.opCPX(this.addrImmediate(this.getFlag(Status816.X))); break;
+            case 0xE4: this.opCPX(this.addrDirect()); break;
+            case 0xEC: this.opCPX(this.addrAbsolute()); break;
+
+            // CPY
+            case 0xC0: this.opCPY(this.addrImmediate(this.getFlag(Status816.X))); break;
+            case 0xC4: this.opCPY(this.addrDirect()); break;
+            case 0xCC: this.opCPY(this.addrAbsolute()); break;
+
+            // STZ
+            case 0x64: this.opSTZ(this.addrDirect()); break;
+            case 0x74: this.opSTZ(this.addrDirectX()); break;
+            case 0x9C: this.opSTZ(this.addrAbsolute()); break;
+            case 0x9E: this.opSTZ(this.addrAbsoluteX()); break;
+            
+            // Long addressing modes
+            case 0x0F: this.opORA(this.addrAbsoluteLong()); break;
+            case 0x1F: this.opORA(this.addrAbsoluteLongX()); break;
+            case 0x2F: this.opAND(this.addrAbsoluteLong()); break;
+            case 0x3F: this.opAND(this.addrAbsoluteLongX()); break;
+            case 0x4F: this.opEOR(this.addrAbsoluteLong()); break;
+            case 0x5F: this.opEOR(this.addrAbsoluteLongX()); break;
+            case 0x6F: this.opADC(this.addrAbsoluteLong()); break;
+            case 0x7F: this.opADC(this.addrAbsoluteLongX()); break;
+            case 0x8F: this.opSTA(this.addrAbsoluteLong()); break;
+            case 0x9F: this.opSTA(this.addrAbsoluteLongX()); break;
+            case 0xAF: this.opLDA(this.addrAbsoluteLong()); break;
+            case 0xBF: this.opLDA(this.addrAbsoluteLongX()); break;
+            case 0xCF: this.opCMP(this.addrAbsoluteLong()); break;
+            case 0xDF: this.opCMP(this.addrAbsoluteLongX()); break;
+            case 0xEF: this.opSBC(this.addrAbsoluteLong()); break;
+            case 0xFF: 
+                if (opcode === 0xFF) {
+                    this.opSBC(this.addrAbsoluteLongX()); 
+                }
+                break;
+            
             // TODO: other opcodes...
             default:
                 // Unimplemented opcode
+                const self = this as any;
+                if (!self.unimplementedReported) self.unimplementedReported = new Set();
+                if (!self.unimplementedReported.has(opcode)) {
+                    console.error("CPU65816 Unimplemented opcode: " + opcode.toString(16).padStart(2, '0') + " at PC=" + this.PC.toString(16));
+                    self.unimplementedReported.add(opcode);
+                }
                 break;
         }
     }
@@ -647,6 +874,11 @@ export class CPU65816 implements ICPU {
             this.setFlag(Status816.Z, (res & 0xFFFF) === 0);
             this.setFlag(Status816.N, (res & 0x8000) !== 0);
         }
+    }
+
+    private opSTZ(address: number) {
+        const eightBit = this.getFlag(Status816.M);
+        this.write8or16(address, 0, eightBit);
     }
 
     // --- Branch Instructions ---
@@ -887,11 +1119,9 @@ export class CPU65816 implements ICPU {
     // --- Addressing Modes ---
 
     protected addrImmediate(eightBit: boolean): number {
-        if (eightBit) {
-            return this.fetch8();
-        } else {
-            return this.fetch16();
-        }
+        const addr = (this.PB << 16) | this.PC;
+        this.PC = (this.PC + (eightBit ? 1 : 2)) & 0xFFFF;
+        return addr;
     }
 
     protected addrAbsolute(): number {
@@ -1069,7 +1299,7 @@ export class CPU65816 implements ICPU {
                 this.setFlag(Status816.N, (this.Y & (destY ? 0x8000 : 0x80)) !== 0);
                 break;
             case 'S':
-                this.S = val & (this.emulationMode ? 0xFF : 0xFFFF);
+                this.S = this.emulationMode ? (0x0100 | (val & 0xFF)) : (val & 0xFFFF);
                 break;
             case 'D':
                 this.D = val & 0xFFFF;

@@ -13,6 +13,7 @@ import { noSlotClock } from "./nsc"
 import { videoTerm } from "./devices/videoterm"
 import { vidhd } from "./devices/vidhd"
 import { isDebugging } from "./motherboard"
+import { iigsClock } from "./iigs_clock"
 
 // 0x00000: main memory
 // 0x10000...13FFF: ROM (including page $C0 soft switches)
@@ -627,34 +628,40 @@ const memGetSoftSwitch = (addr: number): number => {
     videoTerm.active = true
   }
   
-  // Apple IIgs: $C071-$C07F are Native Interrupt vectors in ROM, not I/O!
+  // Apple IIgs: $C071-$C07F is firmware, not I/O! It holds the 8-bit BRK/IRQ
+  // handler code that jumps to the 16-bit interrupt manager in bank $E1.
+  // This must read from Bank $FF ROM (not Bank $FE).
   if (currentMachineName === "APPLE2GS" && addr >= 0xC071 && addr <= 0xC07F) {
       if (gsROM && gsROM.length > 0) {
-          // In Bank FE, the offset is exactly `addr`
+          // Bank FF ROM is at offset 0 in gsROM
           return gsROM[addr];
       }
   }
   
+  // Apple IIgs hardware registers ($C020-$C04F)
   if (currentMachineName === "APPLE2GS" && addr >= 0xC020 && addr <= 0xC04F) {
-      // Mock ADB status ($C027) - pretend we are ready or not?
-      // Just returning what was written is a good start.
-      // But for ADB Status (C027), bit 7 means data ready. We can mock it so that we pretend it's always ready, or just return 0.
-      let val = iigsRegisters[addr & 0xFF];
-      if (addr === 0xC027) {
-          // ADB Status. Bit 7 = Data Ready. Bit 5 = Mouse Data Ready? Or ADB Ready?
-          // The OS waits for Bit 5 to be 1 during initialization.
-          val = iigsRegisters[0x27] | 0x20; 
+      // Handle specific IIgs hardware
+      switch (addr) {
+          case 0xC027: // ADB Status
+              // Bit 7 = Data Ready, Bit 5 = Controller Ready
+              // The OS waits for Bit 5 to be 1 during initialization
+              return iigsRegisters[0x27] | 0x20; // Always set "controller ready"
+          
+          case 0xC026: // ADB Data
+              // Reading ADB data clears the Data Ready bit
+              iigsRegisters[0x27] &= ~0x80;
+              return iigsRegisters[0x26];
+          
+          case 0xC033: // Clock Data
+              return iigsClock.readData();
+          
+          case 0xC034: // Clock Control (top 4 bits) + Border Color (bottom 4 bits)
+              return iigsClock.readControl();
+          
+          default:
+              // Other IIgs registers - just echo what was written
+              return iigsRegisters[addr & 0xFF];
       }
-      if (addr === 0xC026) {
-          // OS read from ADB Data
-          iigsRegisters[0x27] &= ~0x80; // Clear Data Ready bit
-      }
-      if (addr === 0xC034) {
-          // OS read from Clock Control
-          iigsRegisters[0x34] &= ~0x80; // Clear Operation In Progress bit
-          val &= ~0x80;
-      }
-      return val;
   }
 
   if (addr >= 0xC090) {
@@ -769,14 +776,31 @@ const memSetSoftSwitch = (addr: number, value: number) => {
       return
     }
     
+    // Apple IIgs hardware registers ($C020-$C04F)
     if (currentMachineName === "APPLE2GS" && addr >= 0xC020 && addr <= 0xC04F) {
-        iigsRegisters[addr & 0xFF] = value;
-        if (addr === 0xC026) {
-            // OS wrote to ADB Data (C026).
-            // Pretend ADB responds immediately.
-            iigsRegisters[0x26] = 0x00; // Dummy response data
-            iigsRegisters[0x27] |= 0x80; // Set Data Ready bit in Status (C027)
+        // Handle specific IIgs hardware writes
+        switch (addr) {
+            case 0xC026: // ADB Data
+                iigsRegisters[0x26] = value;
+                // Pretend ADB responds immediately
+                iigsRegisters[0x27] |= 0x80; // Set Data Ready bit
+                break;
+            
+            case 0xC033: // Clock Data
+                iigsClock.writeData(value);
+                break;
+            
+            case 0xC034: // Clock Control + Border Color
+                iigsClock.writeControl(value);
+                iigsRegisters[0x34] = value; // Also store for border color
+                break;
+            
+            default:
+                // Other IIgs registers - just store the value
+                iigsRegisters[addr & 0xFF] = value;
+                break;
         }
+        return;
     }
   if (addr === 0xC058 && videoTerm.enabled) {
     // Videx Soft Video Switch: AN0 off -> switch to 40-col display

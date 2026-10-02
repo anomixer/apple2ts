@@ -239,7 +239,7 @@ type DisplayProps = {
   setShowFileOpenDialog: (show: boolean, index: number) => void,
 }
 
-type MACHINE_NAME = "APPLE2EU" | "APPLE2EE" | "APPLE2P"
+type MACHINE_NAME = "APPLE2EU" | "APPLE2EE" | "APPLE2P" | "APPLE2GS"
 
 type VERA_SLOT = 0 | 2 | 4
 

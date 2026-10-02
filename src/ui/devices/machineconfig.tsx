@@ -169,8 +169,8 @@ export const MachineConfig = (props: DisplayProps) => {
     setPopupLocation([event.clientX, event.clientY])
   }
 
-  const machineNames: MACHINE_NAME[] = ["APPLE2P", "APPLE2EU", "APPLE2EE"]
-  const roms = [t("machine.models.apple2p"), t("machine.models.apple2eu"), t("machine.models.apple2ee")]
+  const machineNames: MACHINE_NAME[] = ["APPLE2P", "APPLE2EU", "APPLE2EE", "APPLE2GS"]
+  const roms = [t("machine.models.apple2p"), t("machine.models.apple2eu"), t("machine.models.apple2ee"), "Apple IIgs"]
   const extraMemSize = handleGetMemSize()
   const machineName = handleGetMachineName()
   const slotConfig = handleGetSlotConfig()
@@ -257,7 +257,7 @@ export const MachineConfig = (props: DisplayProps) => {
         location={popupLocation}
         onClose={() => { setPopupLocation(undefined) }}
         menuItems={[[
-          ...Array.from(Array(3).keys()).map((i) => (
+          ...Array.from(Array(machineNames.length).keys()).map((i) => (
             {
               label: roms[i],
               isSelected: () => { return machineName === machineNames[i] },
