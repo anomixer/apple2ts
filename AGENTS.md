@@ -42,6 +42,7 @@ Our original implementation used `push8`/`pop8`/`push16`/`pop16` which enforced 
 
 ### 7. Infinite RTL Loop at ff:b5e0 (Current Issue - UNSOLVED)
 **Issue**: After the first few JSL/RTL pairs work correctly, the system enters an infinite loop executing RTL instructions at address `ff:b5e0`. The RTL repeatedly pops garbage data from the stack, with SP cycling from `$01xx` down through `$00xx`, wrapping around to `$FFxx`, and eventually being normalized back to `$01xx`, creating an endless cycle.
+
 **Symptoms**:
 - First 4 JSL operations execute correctly and return properly
 - At `ff:84ee`, RTL pops from `$01DE` and returns to `ff:859d` (seems correct based on manual stack setup by ROM)
@@ -50,23 +51,61 @@ Our original implementation used `push8`/`pop8`/`push16`/`pop16` which enforced 
 - Each RTL pops 3 bytes of garbage, returning to random addresses like `08:8806`, `88:0886`, `c0:0585`, etc.
 - SP cycles: `$01DF` → `$0000` → `$FFFF` → normalized back to `$01xx` → repeats
 
+**Key Trace Evidence**:
+```
+[JSL] at ff:841c → e1:004c, push PB=$ff PC=$841f, SP=$01b7
+[JSL] after push: SP=$01b4
+[RTL] at ff:b5e0, SP=$01b4
+[RTL] popped: PB=$ff PC=$8420, SP=$01b7  ✓ CORRECT!
+
+[RTL] at ff:84ee, SP=$01de
+[RTL] popped: PB=$ff PC=$859d, SP=$01e1  ✓ (manual stack setup)
+
+[RTL] at ff:859e, SP=$01e1  ← NO JSL PUSHED THIS!
+[RTL] popped: PB=$ff PC=$0005, SP=$01e4  ✗ WRONG!
+
+[RTL] at ff:b5e0, SP=$01e0  ← INFINITE LOOP STARTS
+[RTL] popped: PB=$00 PC=$0907, SP=$01e3
+[RTL] at ff:b5e0, SP=$01df
+[RTL] popped: PB=$c0 PC=$0585, SP=$01e2
+... (hundreds more)
+```
+
 **Analysis**:
-1. The Wide stack implementation (push8Wide/pop8Wide/push16Wide/pop16Wide) appears correct based on web-a2e reference
-2. First JSL at `ff:841c → e1:004c` works perfectly (pushes `$FF:841F`, RTL correctly returns to `ff:8420`)
-3. The crash occurs when RTL at `ff:859e` pops from stack location `$01E1-$01E3` which was NOT written by any JSL
-4. ROM code appears to manually construct fake return addresses on stack (via TXS/TCS operations seen at `ff:84d9-ff:84ec`)
-5. The manually constructed return address at `$01E1-$01E3` contains wrong data, causing jump to `ff:0005`
-6. `ff:0005` or nearby code leads to `ff:b5e0` which may legitimately contain RTL (0x6B) opcode
-7. Because there's no valid return address on stack, RTL keeps popping garbage in an infinite loop
+1. **Wide stack implementation is correct**: Verified against web-a2e, first JSL/RTL pair works perfectly
+2. **Manual stack construction**: ROM code at `ff:84d9-ff:84ec` manually builds return address:
+   ```
+   PC=ff:84d9 Opcode=3b  // TSC - Transfer SP to A
+   PC=ff:84da Opcode=18  // CLC
+   PC=ff:84db Opcode=69  // ADC #$16 - A = SP + $16
+   PC=ff:84de Opcode=1b  // TCS - Transfer A to SP (SP now = $01BA + $16 = $01D0)
+   PC=ff:84df Opcode=65  // ADC $xx - Add something from Direct Page
+   PC=ff:84e1 Opcode=69  // ADC #$04 - A = $01DA
+   PC=ff:84e4 Opcode=aa  // TAX - X = $01DE
+   PC=ff:84e5 Opcode=ab  // PLB - Pop data bank (uses Wide pop)
+   PC=ff:84e6 Opcode=28  // PLP - Pop processor status
+   PC=ff:84e7 Opcode=2b  // PLD - Pop direct page (uses Wide pop)
+   PC=ff:84e8 Opcode=98  // TYA - A = Y = 0
+   PC=ff:84e9 Opcode=c9  // CMP #$xx
+   PC=ff:84ec Opcode=9a  // TXS - SP = X = $01DE
+   PC=ff:84ed Opcode=6b  // RTL - Pop from $01DE
+   ```
+3. **The problem**: Code at `ff:84d5` writes `A=$859C` to Direct Page via `STA $xx,X`, expecting this to become the return address. But when RTL pops from `$01E1-$01E3`, it reads `$FF:0004` instead of `$FF:859C`.
 
 **Possible Root Causes**:
-- The ROM's manual stack manipulation code expects different stack layout than what we're providing
-- Our JSL might be pushing bytes in wrong order (though it matches web-a2e)
-- Bank E0/E1 memory mapping might still be incorrect, causing the manual stack writes to go to wrong location
-- Some other instruction (TXS, TSC, TCS, PLD, PHD) might have incorrect implementation
-- The manual return address construction at `ff:84d9-ff:84ec` might be reading corrupted data from Direct Page
+1. **Direct Page addressing bug**: The `STA $xx,X` at `ff:84d5` might be writing to wrong location due to incorrect Direct Page (D register) calculation
+2. **Bank E0/E1 memory mapping still wrong**: Even though we fixed it to use Mega II, there might be additional issues with language card bank switching
+3. **TSC/TCS/TXS implementation bug**: These instructions (0x3B, 0x1B, 0x9A) might not be correctly implemented
+4. **PLD (0x2B) corruption**: If PLD pops wrong value and sets D register incorrectly, subsequent Direct Page accesses will be wrong
+5. **Data in Direct Page is corrupted**: Earlier code might have written wrong values to Direct Page that ROM is now reading
 
-**Current State**: Need to investigate why the manually-constructed return address at `$01E1-$01E3` contains `$FF:0004` instead of expected value (likely `$FF:859C` based on earlier traces showing `A=$859C`).
+**Next Steps to Debug**:
+1. **Add logging to TSC/TCS/TXS**: Verify these instructions correctly transfer values
+2. **Add logging to Direct Page operations**: Log D register value and effective addresses for `addrDirect()`, `addrDirectX()`, `STA $xx,X`
+3. **Dump Direct Page memory**: Before the manual stack construction at `ff:84d9`, dump memory at Direct Page base (D register value) to see what's there
+4. **Check PLD implementation**: At `ff:84e7`, verify PLD pops correct value and sets D register properly
+5. **Disassemble ff:84cb-ff:84d7**: Understand what code is supposed to write to Direct Page before the manual stack setup
+6. **Compare with web-a2e execution**: If possible, trace web-a2e execution at same point to see correct values
 
 ## Reference Implementation (web-a2e)
 When stuck, always reference `c:\dev\web-a2e` - a working C++ implementation of Apple IIgs emulation. Key learnings:
@@ -96,4 +135,19 @@ When stuck, always reference `c:\dev\web-a2e` - a working C++ implementation of 
 - **Instruction Tracing**: Added a circular buffer in `motherboard.ts` to trace the last 100 instructions (PC, Opcode, Registers) when the CPU executed more than 3 million cycles without progressing.
 - **ROM Inspection**: Dumped specific sections of the base64-encoded `gsROM` via Node.js scripts to disassemble the infinite loops (e.g., at `$B670` and `$8440`) and identify which hardware registers the OS was polling.
 - **Reference Implementation Analysis**: Systematically compared our implementation against web-a2e's working C++ code to identify behavioral differences in stack operations, memory mapping, and I/O handling.
+- **JSL/RTL Detailed Logging**: Added console logging to JSL and RTL instructions showing exact addresses, values pushed/popped, and SP before/after each operation to trace stack corruption.
+
+## Key Files Modified
+- `src/worker/cpu65816.ts`: 65816 CPU emulation, JSL/RTL/PHD/PLD/PHB/PLB/PHK/PEA/PEI/PER stack operations
+- `src/worker/memory.ts`: Memory mapping for Bank E0/E1 (Mega II), Bank FE/FF (ROM), IIgs I/O registers
+- `src/worker/iigs_clock.ts`: IIgs clock chip emulation with RTC and battery RAM
+- `src/worker/motherboard.ts`: Main emulation loop, cycle counting, instruction tracing
+- `check_gs_rom.cjs`, `disasm_reset.cjs`, `check_vectors.cjs`: ROM inspection utilities
+
+## Reference Materials
+- **web-a2e**: Working C++ Apple IIgs emulator at `c:\dev\web-a2e\src\core\`
+  - `iigs\iigs_memory.cpp`: Memory mapping implementation
+  - `cpu\65816\cpu65816.cpp`: CPU core with stack operations
+  - `iigs\iigs_clock.cpp`: Clock chip implementation
+- **Apple IIgs Hardware Reference Manual**: Official hardware specifications (search online for "Apple IIgs Hardware Reference Guide PDF")
 - **Reference Implementation**: Consulted `c:\dev\web-a2e` (Mike Daley's web-a2e project) for correct IIgs memory mapping, clock, and hardware implementation.
