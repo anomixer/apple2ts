@@ -4,6 +4,7 @@ import { romBase64 as romBase64p } from "./roms/rom_2+"
 import { romBase64 as romBase64e } from "./roms/rom_2e"
 import { romBase64 as romBase64u } from "./roms/rom_2e_unenhanced"
 import { romBase64 as romBase64gs } from "./roms/rom_gs"
+import { romGsSystemBase64 } from "./roms/rom_gs_system"
 // import { edmBase64 } from "./roms/edm_2e"
 import { Buffer } from "buffer"
 // import { isDebugging } from "./motherboard";
@@ -14,6 +15,7 @@ import { videoTerm } from "./devices/videoterm"
 import { vidhd } from "./devices/vidhd"
 import { isDebugging } from "./motherboard"
 import { iigsClock } from "./iigs_clock"
+import { iigsADB } from "./iigs_adb"
 
 // 0x00000: main memory
 // 0x10000...13FFF: ROM (including page $C0 soft switches)
@@ -113,8 +115,18 @@ export const getCurrentMachineName = () => {
 }
 
 export let gsROM = new Uint8Array(0);
+// Apple IIgs ROM 01 system ROM (128KB, banks $FE-$FF). gsROM is the Mega II
+// (IIe) ROM used by the //e machines; the IIgs boots from gsSystemROM.
+export let gsSystemROM = new Uint8Array(0);
 export const iigsRegisters = new Uint8Array(256);
 iigsRegisters[0x36] = 0x80; // Default fast speed
+// IIgs interrupt state, mirroring web-a2e's iigs_memory: $C046 reports which
+// sources are pending (bit3 VBL, bit4 quarter-second) plus bit7 = "a source
+// is pending AND enabled". The flags survive reads; only $C047 clears them.
+let vblPending = false;
+let quarterSecondPending = false;
+export const iigsSignalVbl = () => { vblPending = true; };
+export const iigsClearInterrupts = () => { vblPending = false; quarterSecondPending = false; };
 
 export const doSetRom = (machineName: MACHINE_NAME) => {
   currentMachineName = machineName
@@ -132,9 +144,11 @@ export const doSetRom = (machineName: MACHINE_NAME) => {
     case "APPLE2GS":
       const rom64_gs = romBase64gs.replace(/[\n\r\s]/g, "");
       gsROM = new Uint8Array(Buffer.from(rom64_gs, "base64"));
-      console.log(`[DEBUG] gsROM length: ${gsROM.length}`);
-      console.log(`[DEBUG] Reset vector at FF:FFFC = ${gsROM[0xFFFC]?.toString(16).padStart(2,'0')} ${gsROM[0xFFFD]?.toString(16).padStart(2,'0')}`);
-      console.log(`[DEBUG] First bytes of ROM: ${gsROM[0]?.toString(16)} ${gsROM[1]?.toString(16)} ${gsROM[2]?.toString(16)} ${gsROM[3]?.toString(16)}`);
+      const rom64_sys = romGsSystemBase64.replace(/[\n\r\s]/g, "");
+      gsSystemROM = new Uint8Array(Buffer.from(rom64_sys, "base64"));
+      console.log(`[DEBUG] gsROM (Mega II) length: ${gsROM.length}`);
+      console.log(`[DEBUG] gsSystemROM length: ${gsSystemROM.length}`);
+      console.log(`[DEBUG] Reset vector at FF:FFFC = ${gsSystemROM[0x1FFFC]?.toString(16).padStart(2,'0')} ${gsSystemROM[0x1FFFD]?.toString(16).padStart(2,'0')}`);
       return // Skip standard Apple IIe ROM mapping setup
   }
   // For now, comment out the use of the Extended Debugging Monitor
@@ -167,25 +181,25 @@ export const memGet24 = (address: number): number => {
     let bank = (address >> 16) & 0xFF;
     const offset = address & 0xFFFF;
     
-    // Apple IIgs ROM mapping
-    if (gsROM && gsROM.length > 0) {
+    // Apple IIgs ROM 01 mapping: the 128KB system ROM lives in banks $FE-$FF
+    // (FE at image offset 0, FF at 0x10000). The Mega II banks $E0/$E1 and the
+    // shadowed banks $00/$01 read the fast ROM in bank FF through their
+    // language-card window when RDROM is set — matching gssquared/web-a2e.
+    if (gsSystemROM && gsSystemROM.length > 0) {
         if (bank >= 0xFE) {
-            // Map the ROM to Bank FE-FF (128KB max)
-            // In the gsROM file, Bank FF is at offset 0, and Bank FE is at offset 0x10000.
-            const romOffset = (bank === 0xFF ? 0 : 0x10000) | offset;
-            if (romOffset < gsROM.length) return gsROM[romOffset];
-            return 0; // Floating bus
+            return gsSystemROM[((bank & 1) << 16) | offset];
         }
-        // Bank E0 / E1 ROM mappings (only $D000-$FFFF)
         if ((bank === 0xE0 || bank === 0xE1) && offset >= 0xD000) {
-            const romOffset = ((bank & 1) << 16) | offset;
-            if (romOffset < gsROM.length) return gsROM[romOffset];
+            if (!SWITCHES.BSRREADRAM.isSet) return gsSystemROM[0x10000 + offset];
         }
-        
-        // Shadow ROM into Bank 00/01 ($D000 - $FFFF)
-        if ((bank === 0x00 || bank === 0x01) && offset >= 0xD000) {
-            const romOffset = (bank << 16) | offset;
-            if (romOffset < gsROM.length) return gsROM[romOffset];
+        if (bank === 0x00 || bank === 0x01) {
+            if (offset >= 0xD000 && !SWITCHES.BSRREADRAM.isSet) {
+                return gsSystemROM[0x10000 + offset];
+            }
+            // $C071-$C07F: BRK/IRQ firmware (JML to the interrupt manager).
+            // $C100-$CFFF: internal ROM pages, served from bank FF.
+            if (offset >= 0xC071 && offset <= 0xC07F) return gsSystemROM[0x10000 + offset];
+            if (offset >= 0xC100 && offset <= 0xCFFF) return gsSystemROM[0x10000 + offset];
         }
     }
 
@@ -292,6 +306,21 @@ export const memSet24 = (address: number, data: number) => {
     if (bank >= 0x02 && bank < 0x80) {
         gsRAM[(bank << 16) | offset] = data;
     }
+}
+
+// The IIgs ROM installs its interrupt manager (JML $FF79C8) into E1:$0010-$0013
+// and enables VBL interrupts during its interrupt-init routine (ff:78 region).
+// That routine is never reached by the observed boot path, so the ROM's own
+// BRKs (ff:a0ef/ff:b61d) storm into E1:$0010=0. Installing the manager + INTEN
+// here mirrors what the ROM would do, so interrupts are serviced instead.
+export const iigsInitInterrupts = () => {
+    // E1:$0010-$0013 = JML $FF79C8 (the ROM's full interrupt manager)
+    memSet24(0xE10010, 0x5c);
+    memSet24(0xE10011, 0xc8);
+    memSet24(0xE10012, 0x79);
+    memSet24(0xE10013, 0xff);
+    // INTEN = $08: enable the VBL interrupt source
+    iigsRegisters[0x41] = 0x08;
 }
 
 
@@ -656,9 +685,9 @@ const memGetSoftSwitch = (addr: number): number => {
   // handler code that jumps to the 16-bit interrupt manager in bank $E1.
   // This must read from Bank $FF ROM (not Bank $FE).
   if (currentMachineName === "APPLE2GS" && addr >= 0xC071 && addr <= 0xC07F) {
-      if (gsROM && gsROM.length > 0) {
-          // Bank FF ROM is at offset 0 in gsROM
-          return gsROM[addr];
+      if (gsSystemROM && gsSystemROM.length > 0) {
+          // Bank FF of the system ROM (128KB image: FE@0, FF@0x10000)
+          return gsSystemROM[0x10000 + addr];
       }
   }
   
@@ -666,22 +695,59 @@ const memGetSoftSwitch = (addr: number): number => {
   if (currentMachineName === "APPLE2GS" && addr >= 0xC020 && addr <= 0xC04F) {
       // Handle specific IIgs hardware
       switch (addr) {
+          case 0xC024: // ADB Mouse Data
+              return iigsADB.readMouseData();
+
+          case 0xC025: // ADB Modifiers
+              return iigsADB.readModifiers();
+
           case 0xC027: // ADB Status
-              // Bit 7 = Data Ready, Bit 5 = Controller Ready
-              // The OS waits for Bit 5 to be 1 during initialization
-              return iigsRegisters[0x27] | 0x20; // Always set "controller ready"
-          
+              // Bit 5 = data available, Bit 2 = keyboard data. The controller
+              // finishes commands instantly, so it reports what is really
+              // pending. The firmware polls bit 5 before every read, and the
+              // OS waits for it during ADB init, so the ADB must produce
+              // responses to the init commands (writeCommand -> completeCommand).
+              return iigsADB.readStatus();
+
           case 0xC026: // ADB Data
-              // Reading ADB data clears the Data Ready bit
-              iigsRegisters[0x27] &= ~0x80;
-              return iigsRegisters[0x26];
-          
+              return iigsADB.readData();
+
           case 0xC033: // Clock Data
               return iigsClock.readData();
-          
+
           case 0xC034: // Clock Control (top 4 bits) + Border Color (bottom 4 bits)
               return iigsClock.readControl();
-          
+
+          case 0xC046: {
+              // $C046 INTFLAG (web-a2e interruptStatusRegister): bit3 = VBL
+              // pending, bit4 = quarter-second pending, bit7 = "some source is
+              // pending AND enabled in $C041". Flags report what happened
+              // regardless of the enable bits; only a $C047 write clears them.
+              // The boot gate at ff:8552/ff:8555 does `lda $c046` in 8-bit
+              // accumulator mode and `bmi` on bit 7 to take the interrupt
+              // manager installer at ff:8549 -> ff:854b (jsr $a1b8), which
+              // copies the E1 interrupt stubs into E1:$0010/$0080. Without a
+              // pending VBL the installer is skipped, E1:$0010 stays 0x00
+              // (BRK) and every interrupt storms.
+              let val = 0;
+              if (vblPending) val |= 0x08;
+              if (quarterSecondPending) val |= 0x10;
+              const en = iigsRegisters[0x41];
+              if ((vblPending && (en & 0x08)) || (quarterSecondPending && (en & 0x10))) {
+                  val |= 0x80;
+              }
+              // ADB interrupt is NOT gated by INTEN (web-a2e: adb.interruptPending()
+              // only needs its own enable bits from $C027 writes).
+              if (iigsADB.interruptPending()) val |= 0x80;
+              return val;
+          }
+
+          case 0xC047:
+              // $C047 read: web-a2e has no read case for it, so it falls
+              // through to the Mega II, where it is the //e ROMSW sense --
+              // bit 7 = 1 (internal ROM) at reset.
+              return iigsRegisters[0x47] | 0x80;
+
           default:
               // Other IIgs registers - just echo what was written
               return iigsRegisters[addr & 0xFF];
@@ -804,10 +870,12 @@ const memSetSoftSwitch = (addr: number, value: number) => {
     if (currentMachineName === "APPLE2GS" && addr >= 0xC020 && addr <= 0xC04F) {
         // Handle specific IIgs hardware writes
         switch (addr) {
-            case 0xC026: // ADB Data
-                iigsRegisters[0x26] = value;
-                // Pretend ADB responds immediately
-                iigsRegisters[0x27] |= 0x80; // Set Data Ready bit
+            case 0xC026: // ADB Data (command/response queue)
+                iigsADB.writeCommand(value);
+                break;
+
+            case 0xC027: // ADB Status (interrupt enables)
+                iigsADB.writeStatus(value);
                 break;
             
             case 0xC033: // Clock Data
@@ -818,7 +886,14 @@ const memSetSoftSwitch = (addr: number, value: number) => {
                 iigsClock.writeControl(value);
                 iigsRegisters[0x34] = value; // Also store for border color
                 break;
-            
+
+            case 0xC047: // CLEARINT - clears the pending interrupt flags
+                // (web-a2e: vblPending_ = false; quarterSecondPending_ = false)
+                vblPending = false;
+                quarterSecondPending = false;
+                iigsRegisters[0x47] = value;
+                break;
+
             default:
                 // Other IIgs registers - just store the value
                 iigsRegisters[addr & 0xFF] = value;

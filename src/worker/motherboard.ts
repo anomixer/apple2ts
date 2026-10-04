@@ -38,7 +38,9 @@ import { memory, memGet, getTextPage, getHires, memoryReset,
   getHgr2Memory,
   memGet24,
   memSet24,
-  gsROM} from "./memory"
+  gsROM,
+  iigsSignalVbl,
+  iigsInitInterrupts} from "./memory"
 import { setButtonState, handleGamepads } from "./devices/joystick"
 import { handleGameSetup } from "./games/game_mappings"
 import { breakpointMap, clearInterrupts, doSetBreakpointSkipOnce, doSetMemoryWriteWatchpoint as setCpuMemoryWriteWatchpoint, resetCycleCountCallbacks, setStepOut, getHeatMapCPU, getHeatMapCPUMax, resetHeatMapCPU } from "./cpu6502"
@@ -494,6 +496,9 @@ export const doReset = () => {
   // Reset banked RAM
   memGet(0xC082, false)
   cpu.reset()
+  // The IIgs ROM never reaches its interrupt-init routine, so install the
+  // interrupt manager + INTEN here (mirrors what the ROM's ff:78 region does).
+  if (machineName === "APPLE2GS") iigsInitInterrupts()
   resetMachine()
   // Otherwise Heat Map data survives a reset/reboot indefinitely (it was
   // previously cleared only by doSetCycleCount, a time-travel-only path),
@@ -1148,6 +1153,11 @@ const doAdvance6502 = () => {
       // so if it's set then vertical blanking needs to be activated.
       if (SWITCHES.VBLINV.isSet) {
         startVBL()
+        // IIgs: VBL is a hardware interrupt — signal it and raise the IRQ line.
+        if (machineName === "APPLE2GS") {
+          iigsSignalVbl()
+          ;(cpu as any).irq?.()
+        }
       }
     } else {
       endVBL()

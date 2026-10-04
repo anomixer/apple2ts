@@ -9,8 +9,8 @@ export enum Status816 {
     Z = 0x02, // Zero
     I = 0x04, // Interrupt disable
     D = 0x08, // Decimal
-    X = 0x10, // Index registers are 8 bits (native); Break (emulation)
-    M = 0x20, // Accumulator is 8 bits (native); unused, always 1 (emulation)
+    X = 0x10, // Index registers are 8 bits (native); Break (emulation) — bit 4
+    M = 0x20, // Accumulator is 8 bits (native); unused, always 1 (emulation) — bit 5
     V = 0x40, // Overflow
     N = 0x80  // Negative
 }
@@ -52,6 +52,7 @@ export class CPU65816 implements ICPU {
     public emulationMode: boolean = true;
     public stopped: boolean = false;
     public waiting: boolean = false;
+    public irqPending: boolean = false;
 
     private readMemory: ReadCallback;
     private writeMemory: WriteCallback;
@@ -94,8 +95,51 @@ export class CPU65816 implements ICPU {
     private ffCount = 0;
     private dumped = false;
 
+    // Raise the IRQ line (level-triggered). The CPU samples it once per
+    // instruction; if the I flag is clear it is taken before the next fetch.
+    // Mirrors web-a2e's irqPending_ latch + per-instruction sampling.
+    public irq() {
+        this.irqPending = true;
+    }
+
+    // Service an interrupt: push the return state, set I, clear D, fetch the
+    // vector. Mirrors web-a2e's interrupt() verbatim. In emulation mode the
+    // pushed P carries the 6502 B flag (bit 4 = FLAG816_X here): SET for a
+    // software BRK, CLEARED for a hardware interrupt — the handler's only way
+    // to tell them apart.
+    private interrupt(nativeVector: number, emulationVector: number, software: boolean) {
+        if (!this.emulationMode) {
+            this.push8(this.PB);
+            this.push16(this.PC);
+            this.push8(this.P);
+        } else {
+            this.push16(this.PC);
+            this.push8(software ? (this.P | Status816.X) : (this.P & ~Status816.X));
+        }
+        this.setFlag(Status816.I, true);
+        this.setFlag(Status816.D, false);
+        this.PB = 0;
+        this.PC = this.read8or16(this.emulationMode ? emulationVector : nativeVector, false);
+        this.waiting = false;
+    }
+
     public processInstruction(traceCallback?: ((str: string) => void) | null): number {
-        if (this.stopped || this.waiting) return 1; // Burn 1 cycle
+        if (this.stopped) return 1; // Burn 1 cycle
+        // WAI: wait for an interrupt to arrive, not to be taken. Once one is
+        // pending, fall through and service it (web-a2e: waiting_ cleared then
+        // the pending NMI/IRQ is taken).
+        if (this.waiting) {
+            if (!this.irqPending) return 1;
+            this.waiting = false;
+        }
+        // Sample IRQ before the next opcode fetch. A hardware IRQ takes the
+        // $FFFE (emulation) / $FFEE (native) vector; software=false keeps the
+        // B flag clear so the handler can tell it was hardware.
+        if (!this.getFlag(Status816.I) && this.irqPending) {
+            this.irqPending = false;
+            this.interrupt(VEC_N_IRQ, VEC_E_IRQ, false);
+            return 7;
+        }
 
         const pc = this.PC;
         const pb = this.PB;
@@ -130,7 +174,7 @@ export class CPU65816 implements ICPU {
             case 0xA9: this.opLDA(this.addrImmediate(this.getFlag(Status816.M))); break;
             case 0xA5: this.opLDA(this.addrDirect()); break;
             case 0xB5: this.opLDA(this.addrDirectX()); break;
-            case 0xB2: this.opLDA(this.addrDirectIndirect()); break;
+            case 0xB2: this.opLDA(this.addrDirectIndirectIndexed()); break; // LDA ($dp),Y
             case 0xAF: this.opLDA(this.addrAbsoluteLong()); break;
             case 0xAD: this.opLDA(this.addrAbsolute()); break;
             // ... (skipping some for brevity) ...
@@ -376,7 +420,12 @@ export class CPU65816 implements ICPU {
             case 0x4B: this.opPush('K'); break; // PHK
             case 0xF4: this.opPush('PEA', this.fetch16()); break; // PEA
             case 0xD4: this.opPush('PEI', this.addrDirectIndirect()); break; // PEI
-            case 0x62: this.opPush('PER', this.fetch16()); break; // PER
+            case 0x62: { // PER — pushes PC-1 + signed offset (PC is already past the 3-byte operand)
+                let perOffset = this.fetch16();
+                if (perOffset & 0x8000) perOffset -= 0x10000;
+                this.opPush('PER', (this.PC + perOffset) & 0xFFFF);
+                break;
+            }
 
             // --- Shifts and Rotates ---
             case 0x0A: this.opShift('ASL', -1); break; // ASL A
@@ -466,34 +515,42 @@ export class CPU65816 implements ICPU {
             case 0x42: this.fetch8(); break; // WDM (consumes 1 byte)
             case 0xDB: this.stopped = true; break; // STP
             case 0xCB: this.waiting = true; break; // WAI
-            case 0x00: // BRK
+            case 0x00: // BRK (software interrupt; pushes the B flag set)
                 this.PC = (this.PC + 1) & 0xFFFF; // BRK is a 2-byte instruction
-                if (!this.emulationMode) this.push8(this.PB);
-                this.push16(this.PC);
-                this.opPush('P');
-                this.setFlag(Status816.I, true);
-                this.setFlag(Status816.D, false);
-                // Hardware vector
-                this.PC = this.read8or16(this.emulationMode ? 0xFFFE : 0xFFE6, false);
-                this.PB = 0;
+                this.interrupt(VEC_N_BRK, VEC_E_IRQ, true);
                 break;
             case 0x02: // COP
                 this.PC = (this.PC + 1) & 0xFFFF;
-                if (!this.emulationMode) this.push8(this.PB);
-                this.push16(this.PC);
-                this.opPush('P');
-                this.setFlag(Status816.I, true);
-                this.setFlag(Status816.D, false);
-                this.PC = this.read8or16(this.emulationMode ? 0xFFF4 : 0xFFE4, false);
-                this.PB = 0;
+                this.interrupt(VEC_N_COP, VEC_E_COP, true);
                 break;
             case 0x54: // MVN
-            case 0x44: // MVP
+            case 0x44: { // MVP
+                // Block move: operands are destBank, srcBank; DB becomes destBank.
+                // One byte per execution; PC rewinds until A wraps to $FFFF.
+                // Matches web-a2e: 0x54 increments X/Y, 0x44 decrements.
                 const destBank = this.fetch8();
-                this.fetch8(); // srcBank
+                const srcBank = this.fetch8();
                 this.DB = destBank;
-                // Complex memory move skipped for brevity, placeholder only
+                const from = (srcBank << 16) | this.X;
+                const to = (destBank << 16) | this.Y;
+                this.write8(to, this.read8(from));
+                if (opcode === 0x54) {
+                    this.X = (this.X + 1) & 0xFFFF;
+                    this.Y = (this.Y + 1) & 0xFFFF;
+                } else {
+                    this.X = (this.X - 1) & 0xFFFF;
+                    this.Y = (this.Y - 1) & 0xFFFF;
+                }
+                if (this.getFlag(Status816.X)) {
+                    this.X &= 0xFF;
+                    this.Y &= 0xFF;
+                }
+                this.A = (this.A - 1) & 0xFFFF;
+                if (this.A !== 0xFFFF) {
+                    this.PC = (this.PC - 3) & 0xFFFF; // re-execute the same MVN
+                }
                 break;
+            }
             
             case 0xFB: // XCE (Exchange Carry and Emulation bit)
                 this.opXCE();

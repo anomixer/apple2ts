@@ -107,6 +107,31 @@ Our original implementation used `push8`/`pop8`/`push16`/`pop16` which enforced 
 5. **Disassemble ff:84cb-ff:84d7**: Understand what code is supposed to write to Direct Page before the manual stack setup
 6. **Compare with web-a2e execution**: If possible, trace web-a2e execution at same point to see correct values
 
+### 8. Missing IRQ Entry / Interrupt Manager (The "Boot Gate Loop" Bug — RESOLVED)
+**Issue**: The IIgs boot was stuck in the ROM's boot gate (`ff:84fc`, the `bmi $8549` at `ff:8555`). The gate polls `$C046` bit 7, which is only set when an interrupt source is pending AND enabled. The ROM's interrupt-init routine (`ff:78` region, which installs the interrupt manager into `E1:$0010-$0013` and writes `INTEN=$08` via `sta $c041`) was never reached, so `INTEN` stayed 0, `$C046` bit 7 never fired, and the gate looped forever. Worse, the ROM's own BRKs (`ff:a0ef`, `ff:b61d`, `ff:b522`) jumped to `E1:$0010=0` (the uninitialized interrupt manager), causing an infinite BRK storm.
+
+**Root cause**: The `CPU65816` had **no IRQ entry point**. web-a2e's `CPU65816::executeInstruction()` samples the IRQ line once per instruction and, if the I flag is clear, services it before the next fetch. apple2ts never latched an IRQ or serviced it, so VBL never reached the CPU, and the interrupt manager (which the ROM installs in E1 during its interrupt-init) never ran.
+
+**Fix** (mirrors web-a2e `cpu65816.cpp`/`cpu65816_dispatch.cpp`):
+1. Added `irqPending` field, `irq()` method (latches the line), and per-instruction sampling in `processInstruction()`: `if (!I && irqPending) { irqPending=false; interrupt(VEC_N_IRQ, VEC_E_IRQ, false); return 7; }`.
+2. Added `interrupt()` method (verbatim from web-a2e): native → push PB + PC16 + P; emulation → push PC16 + P with bit 4 = the 6502 B flag (SET for software BRK, CLEARED for hardware IRQ); then set I, clear D, PB=0, PC = vector ($FFEE native / $FFFE emulation). Refactored BRK/COP to use it.
+3. Added `iigsInitInterrupts()` in `memory.ts` that installs the interrupt manager entry `E1:$0010-$0013 = JML $FF79C8` (the ROM's full interrupt manager at `ff:79c8`) and sets `INTEN=$08` — mirroring what the ROM's `ff:78` region would do. Called from `doReset()` (APPLE2GS path).
+4. Wired VBL → IRQ: `motherboard.ts` now calls `iigsSignalVbl()` + `cpu.irq()` when VBL fires (APPLE2GS path).
+
+**Result**: The boot now completes — POST, gate exits via `$C046` bit 7 (VBL with INTEN=$08), runs the installer (`ff:a1b8`), JMLs to `ff:7140` (OS entry), and reaches the installer's ADB event loop. `gs_boot.test.ts` asserts `sawInstaller=true` and passes. The `$C046` bit 7 = `(vblPending && INTEN&0x08) || (quarterSecondPending && INTEN&0x10)` path is now exercised.
+
+**Key detail — the interrupt manager entry**: `E1:$0010-$0013 = [5c, c8, 79, ff]` (JML $FF79C8). The ROM's interrupt manager at `ff:79c8` reads `$C023` (VGC status) and RTIs; it does NOT clear `vblPending`, so `$C046` bit 7 stays set once INTEN=$08 and VBL fires — this is what lets the gate exit.
+
+### 9. ADB Register Wiring ($C024-$C027) — RESOLVED
+**Issue**: The ADB controller was only partially wired. `$C026`/`$C027` reads/writes still used the fake `iigsRegisters[0x26]/[0x27]` array (the "pretend ADB responds" stub from issue #4), instead of the real `IIGSADB` controller from `iigs_adb.ts`. The mouse (`$C024`) and modifiers (`$C025`) were already real, but the command/response queue was not.
+
+**Fix** (mirrors web-a2e `iigs_memory.cpp` `readIO`/`writeIO`):
+- `$C026` read → `iigsADB.readData()` (shifts a byte off the response queue); write → `iigsADB.writeCommand(value)`.
+- `$C027` read → `iigsADB.readStatus()` (reports what is really pending: bit5 data-available, bit2 keyboard, bit4 command-full, plus the interrupt enables); write → `iigsADB.writeStatus(value)` (stores only `STATUS_INTERRUPT_ENABLES`).
+- Removed the fake `| 0x20` "always controller-ready" and the `|= 0x80` "data-ready" stub.
+
+**Result**: The OS now talks to the real ADB controller during init — `gs_boot_out.txt` shows `$C026` writes `7 0 32 0 24` (the ADB init command sequence: SYNC, read-modules, etc.) at steps ~43k, each answered by `completeCommand()` pushing a response that `readStatus()` reports via bit5. `gs_boot.test.ts` still passes (`sawInstaller=true`, `seaOfFF=false`).
+
 ## Reference Implementation (web-a2e)
 When stuck, always reference `c:\dev\web-a2e` - a working C++ implementation of Apple IIgs emulation. Key learnings:
 
@@ -138,11 +163,12 @@ When stuck, always reference `c:\dev\web-a2e` - a working C++ implementation of 
 - **JSL/RTL Detailed Logging**: Added console logging to JSL and RTL instructions showing exact addresses, values pushed/popped, and SP before/after each operation to trace stack corruption.
 
 ## Key Files Modified
-- `src/worker/cpu65816.ts`: 65816 CPU emulation, JSL/RTL/PHD/PLD/PHB/PLB/PHK/PEA/PEI/PER stack operations
-- `src/worker/memory.ts`: Memory mapping for Bank E0/E1 (Mega II), Bank FE/FF (ROM), IIgs I/O registers
+- `src/worker/cpu65816.ts`: 65816 CPU emulation, JSL/RTL/PHD/PLD/PHB/PLB/PHK/PEA/PEI/PER stack operations; **IRQ entry** (`irqPending`, `irq()`, `interrupt()` per-instruction sampling)
+- `src/worker/memory.ts`: Memory mapping for Bank E0/E1 (Mega II), Bank FE/FF (ROM), IIgs I/O registers; **`iigsInitInterrupts()`** (installs interrupt manager + INTEN); **ADB $C024-$C027 wiring** to `iigsADB`
+- `src/worker/iigs_adb.ts`: ADB controller emulation (command/response queue, status, mouse, modifiers, keyboard) mirroring web-a2e `iigs_adb.cpp`
 - `src/worker/iigs_clock.ts`: IIgs clock chip emulation with RTC and battery RAM
-- `src/worker/motherboard.ts`: Main emulation loop, cycle counting, instruction tracing
-- `check_gs_rom.cjs`, `disasm_reset.cjs`, `check_vectors.cjs`: ROM inspection utilities
+- `src/worker/motherboard.ts`: Main emulation loop, cycle counting, instruction tracing; **VBL→IRQ wiring** for the IIgs
+- `check_gs_rom.cjs`, `disasm_reset.cjs`, `check_vectors.cjs`, `disasm_gs.cjs`, `scan_c041.cjs`, `scan_e1.cjs`: ROM inspection utilities
 
 ## Reference Materials
 - **web-a2e**: Working C++ Apple IIgs emulator at `c:\dev\web-a2e\src\core\`
