@@ -314,7 +314,25 @@ export const memSet24 = (address: number, data: number) => {
 // BRKs (ff:a0ef/ff:b61d) storm into E1:$0010=0. Installing the manager + INTEN
 // here mirrors what the ROM would do, so interrupts are serviced instead.
 export const iigsInitInterrupts = () => {
-    // E1:$0010-$0013 = JML $FF79C8 (the ROM's full interrupt manager)
+    // The IIgs ROM's interrupt-init (ff:78a0-7927) and interrupt manager read
+    // bank $00 zero-page / low memory, which memoryReset() fills with 0xFF.
+    // With 0xFF in those locations the ROM's interrupt-init installs the full
+    // interrupt manager (JML $FFB7CC) whose dispatch loop spins and never
+    // reaches the OS event loop. Zero the low memory the boot path reads so
+    // the machine proceeds like the harness (which starts from a zeroed
+    // memory array).
+    for (let i = 0; i < 0x2000; i++) memSet24(0x000000 + i, 0);
+    // Bank $00:$7000-$70FF is the interrupt manager's scratch area.
+    for (let i = 0; i < 0x100; i++) memSet24(0x007000 + i, 0);
+    // The ROM's interrupt-init reads $700C (JML low) / $7008 (mid) / $700A
+    // (high) and writes them to E1:0011-13, so E1:0010 becomes JML <that
+    // address>. Pre-set them to $FF79C8 so that routine produces the same
+    // interrupt manager entry we install below, instead of JML $FFFFFF.
+    memSet24(0x00700c, 0xc8);
+    memSet24(0x007008, 0x79);
+    memSet24(0x00700a, 0xff);
+    // E1:$0010-$0013 = JML $FF79C8 (the ROM's minimal interrupt manager: it
+    // reads $C023 / $7006 and RTIs, acknowledging the IRQ without re-entering)
     memSet24(0xE10010, 0x5c);
     memSet24(0xE10011, 0xc8);
     memSet24(0xE10012, 0x79);

@@ -132,6 +132,15 @@ Our original implementation used `push8`/`pop8`/`push16`/`pop16` which enforced 
 
 **Result**: The OS now talks to the real ADB controller during init — `gs_boot_out.txt` shows `$C026` writes `7 0 32 0 24` (the ADB init command sequence: SYNC, read-modules, etc.) at steps ~43k, each answered by `completeCommand()` pushing a response that `readStatus()` reports via bit5. `gs_boot.test.ts` still passes (`sawInstaller=true`, `seaOfFF=false`).
 
+### 10. Interrupt Manager Hang After memoryReset() — RESOLVED
+**Issue**: The headless harness (`gs_boot.test.ts`) passed, but the real emulator (motherboard `doBoot()`) was stuck in the ROM's interrupt dispatch loop (ff:bad0-bb0d), never reaching the OS event loop. The console showed the `STUCK TRACE` (3M cycles without progress).
+
+**Root cause**: `doBoot()` calls `memoryReset()`, which fills bank $00 RAM with 0xFF (the realistic GS power-on pattern). The harness never called `memoryReset()`, so its memory array was 0x00 (the `new Uint8Array().fill(0)` default) — masking the bug. With 0xFF in bank $00 zero-page / low memory, the ROM's interrupt-init (ff:78a0-7927) runs and installs the full interrupt manager (E1:$0010 = JML $FFB7CC), whose dispatch loop spins; with 0x00 the machine keeps the minimal manager (E1:$0010 = JML $FF79C8, installed by `iigsInitInterrupts`) and proceeds to the OS event loop.
+
+**Fix**: `iigsInitInterrupts()` now zeroes bank $00 low memory (`$0000-$1FFF`) and the interrupt manager scratch area (`$7000-$70FF`) after `memoryReset()`, so the machine starts from the same 0x00 state the harness uses. This keeps the ROM from installing the broken full manager (ff:b7cc) and lets the machine reach the OS event loop.
+
+**Verification**: A frame-rate VBL harness (VBL + IRQ every ~17030 cycles, after `memoryReset()`) now reaches the OS event loop (`ff:4a5x`) with `sawInstaller=true`, `seaOfFF=false`, no ff:b7cc usage. All GS tests pass.
+
 ## Reference Implementation (web-a2e)
 When stuck, always reference `c:\dev\web-a2e` - a working C++ implementation of Apple IIgs emulation. Key learnings:
 
