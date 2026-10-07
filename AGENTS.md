@@ -110,35 +110,49 @@ with the animated barber pole scan bar, identical to real Apple IIgs hardware!
 - **Startup Mode Indicator**: Updated `src/ui/panels/help/startuptextpage.ts` to display "Apple IIgs mode" on idle.
 - **Chrome In-Browser Execution**: Verified live boot in Chrome headlessly via CDP. The emulator boots through cold POST, clears memory, displays the startup banner, and reaches the animated "Check startup device!" scan bar at native speed with zero unhandled exceptions.
 
-## Reference Implementation (web-a2e & GSSquared)
-When stuck, always reference:
-- `c:\dev\web-a2e`: Working C++ implementation of Apple IIgs emulation (memory mapping, clock, ADB, 65816 CPU).
-- `c:\dev\gssquared`: High-fidelity C++ Apple IIgs emulator (RTC/BRAM state machine, IWM2 mode/status logic, interrupt flags `$C046`, and self-test trigger behavior).
+## Primary Reference Implementation: GSSquared
+> [!WARNING]
+> **Avoid relying on `web-a2e` as an authoritative core reference!**
+> `web-a2e` contains several incomplete or incorrect register behaviors (such as missing/flawed cold reset states, incomplete IWM softswitches, and misleading status flags). Trying to copy its hacks previously caused the self-test `System Bad: GGGG0000` crash loop.
+>
+> **Always use `c:\dev\gssquared` as the gold standard** — it is a production-grade, highly cycle-accurate emulator with a thorough `DevelopLog.md` and complete hardware implementations.
+
+### Key Hardware Reference Insights from GSSquared
+
+### $C046 Bit 7 & Cold Boot Reset
+- In `c:\dev\gssquared\Docs\DevelopLog.md:8026`: Bit 7 of `$C046` indicates interrupt state. The ROM checks bit 7 on reset; if `1`, it assumes a warm reset occurred and jumps to the built-in self-test (`$A1B8`), failing the warm-reset signature at `$0310`.
+- Cold boot **must have bit 7 = 0**.
+
+### IWM ($C0E0-$C0EF) Softswitches
+- Implemented strictly per `c:\dev\gssquared\src\devices\iwm\IWM2.hpp`:
+  - Even read with Q6=1, Q7=0 (`$C0EE`) returns `iwmMode & 0x1F`.
+  - Odd write with Q6=1, Q7=1 (`$C0EF`) latches `iwmMode = value & 0x1F`.
+  - This instantly resolves the ROM's `SELIWM` polling loop at `ff:6a54`.
+
+### Clock & 256-byte Battery RAM ($C033/$C034)
+- Ported verbatim from `c:\dev\gssquared\src\devices\rtc\RTC_PRAM.hpp`:
+  - $C033: Clock data register.
+  - $C034: Clock control register.
+  - 256-byte BRAM with 2-byte command framing (`0b00111000`).
+  - Pre-seeded signature at BRAM `$B0-$B7` matching ROM `$FF7350-$FF7357` (`CB D2 C7 C2 10 A2 E8 03`).
 
 ### $C071-$C07F: BRK/IRQ Handler Firmware
-- **Not I/O registers!** This region contains actual 8-bit firmware code
-- The IIgs BRK/IRQ vectors ($00:FFE6, $00:FFFE) point here (e.g., $C071 for BRK, $C074 for IRQ)
-- This firmware code does: set status flags, then JML (Jump Long) to the 16-bit interrupt manager in Bank $E1
-- **Must read from Bank $FF ROM**, not from memory or Bus
-- Without this, every BRK/IRQ jumps to zeros and crashes
-
-### Clock ($C033/$C034) Implementation
-- $C033: Clock Data register (serial interface)
-- $C034: Clock Control register (top 4 bits) + Border Color (bottom 4 bits)
-- Clock chip has 256 bytes of battery RAM (settings, Control Panel data)
-- Multi-step transaction state machine matching `gssquared` `RTC_PRAM.hpp`.
+- **Not I/O registers!** This region contains actual 8-bit firmware code.
+- The IIgs BRK/IRQ vectors ($00:FFE6, $00:FFFE) point here (e.g., $C071 for BRK, $C074 for IRQ).
+- Firmware code sets status flags, then JML (Jump Long) to the 16-bit interrupt manager in Bank $E1.
+- **Must read from Bank $FF ROM**, not from memory or Bus.
 
 ### ADB ($C024-$C027) Registers
 - $C024: ADB Mouse Data
 - $C025: ADB Modifiers (keyboard modifiers)
 - $C026: ADB Data (command/response queue)
-- $C027: ADB Status - **Bit 5 must be 1** during boot (controller ready)
+- $C027: ADB Status - Bit 5 must be 1 during boot (controller ready).
 - Wired to `iigsADB` instance in `iigs_adb.ts`.
 
 ## Debugging Techniques Used
 - **Instruction Tracing**: Added a circular buffer in `motherboard.ts` to trace instructions when debugging specific loops.
 - **ROM Inspection**: Disassembled portions of `gsROM` via Node.js helper scripts to identify hardware polling loops (such as `SELIWM` and diagnostic entry points).
-- **Reference Implementation Analysis**: Cross-referenced `gssquared` and `web-a2e` to match exact hardware register semantics.
+- **GSSquared Cross-Referencing**: Verified exact register logic and development log notes directly against `c:\dev\gssquared`.
 - **CDP In-Browser Screenshots**: Automated Chrome screenshot capture via DevTools Protocol to visually verify boot screens.
 
 ## Key Files Modified
@@ -152,7 +166,7 @@ When stuck, always reference:
 - `src/worker/gs_test_coldboot.test.ts`, `src/worker/gs_motherboard.test.ts`: Complete test suite verifying Apple IIgs cold boot and hardware state.
 
 ## Reference Materials
-- **web-a2e**: `c:\dev\web-a2e\src\core\`
-- **GSSquared**: `c:\dev\gssquared\`
-- **Apple IIgs Hardware Reference Manual**
+- **GSSquared**: `c:\dev\gssquared\` (Primary reference: `RTC_PRAM.hpp`, `IWM2.hpp`, `display.cpp`, `DevelopLog.md`)
+- **Apple IIgs Hardware Reference Manual**: Official hardware specifications
+
 
