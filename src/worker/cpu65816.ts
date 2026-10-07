@@ -177,7 +177,7 @@ export class CPU65816 implements ICPU {
         }
 
         const opcode = this.fetch8();
-        
+
         if (!this.dumped) {
             const tr = `PC=${pb.toString(16).padStart(2, '0')}:${pc.toString(16).padStart(4, '0')} Opcode=${opcode.toString(16).padStart(2, '0')} A=${this.A.toString(16)} X=${this.X.toString(16)} Y=${this.Y.toString(16)} S=${this.S.toString(16)} P=${this.P.toString(16)}`;
             this.traceBuffer.push(tr);
@@ -375,13 +375,13 @@ export class CPU65816 implements ICPU {
             // INC A (Accumulator) is 0x1A
             case 0x1A:
                 const eightBit = this.getFlag(Status816.M);
-                this.A++;
                 if (eightBit) {
-                    this.A = (this.A & 0xFF00) | ((this.A & 0xFF));
-                    this.setFlag(Status816.Z, (this.A & 0xFF) === 0);
-                    this.setFlag(Status816.N, (this.A & 0x80) !== 0);
+                    const lo = (this.A + 1) & 0xFF;
+                    this.A = (this.A & 0xFF00) | lo;
+                    this.setFlag(Status816.Z, lo === 0);
+                    this.setFlag(Status816.N, (lo & 0x80) !== 0);
                 } else {
-                    this.A &= 0xFFFF;
+                    this.A = (this.A + 1) & 0xFFFF;
                     this.setFlag(Status816.Z, this.A === 0);
                     this.setFlag(Status816.N, (this.A & 0x8000) !== 0);
                 }
@@ -395,13 +395,13 @@ export class CPU65816 implements ICPU {
             // DEC A (Accumulator) is 0x3A
             case 0x3A:
                 const eightBitDec = this.getFlag(Status816.M);
-                this.A--;
                 if (eightBitDec) {
-                    this.A = (this.A & 0xFF00) | ((this.A & 0xFF));
-                    this.setFlag(Status816.Z, (this.A & 0xFF) === 0);
-                    this.setFlag(Status816.N, (this.A & 0x80) !== 0);
+                    const lo = (this.A - 1) & 0xFF;
+                    this.A = (this.A & 0xFF00) | lo;
+                    this.setFlag(Status816.Z, lo === 0);
+                    this.setFlag(Status816.N, (lo & 0x80) !== 0);
                 } else {
-                    this.A &= 0xFFFF;
+                    this.A = (this.A - 1) & 0xFFFF;
                     this.setFlag(Status816.Z, this.A === 0);
                     this.setFlag(Status816.N, (this.A & 0x8000) !== 0);
                 }
@@ -1085,28 +1085,70 @@ export class CPU65816 implements ICPU {
     private opADC(address: number) {
         const eightBit = this.getFlag(Status816.M);
         const operand = this.read8or16(address, eightBit);
-        
+        const carryIn = this.getFlag(Status816.C) ? 1 : 0;
+
         if (this.getFlag(Status816.D)) {
-            // TODO: Decimal mode implementation
+            if (eightBit) {
+                const a = this.A & 0xFF;
+                let al = (a & 0x0F) + (operand & 0x0F) + carryIn;
+                if (al >= 0x0A) al = ((al + 0x06) & 0x0F) + 0x10;
+                let ua = (a & 0xF0) + (operand & 0xF0) + al;
+                if (ua >= 0xA0) ua += 0x60;
+                const sa = (a & 0x80 ? (a & 0xF0) - 0x100 : (a & 0xF0)) + 
+                           (operand & 0x80 ? (operand & 0xF0) - 0x100 : (operand & 0xF0)) + 
+                           al;
+                const result8 = ua & 0xFF;
+                this.A = (this.A & 0xFF00) | result8;
+                this.setFlag(Status816.C, ua >= 0x100);
+                this.setFlag(Status816.Z, result8 === 0);
+                this.setFlag(Status816.V, sa < -128 || sa > 127);
+                this.setFlag(Status816.N, (result8 & 0x80) !== 0);
+            } else {
+                let aLo = this.A & 0xFF;
+                let aHi = (this.A >> 8) & 0xFF;
+                let bLo = operand & 0xFF;
+                let bHi = (operand >> 8) & 0xFF;
+
+                let al = (aLo & 0x0F) + (bLo & 0x0F) + carryIn;
+                if (al >= 0x0A) al = ((al + 0x06) & 0x0F) + 0x10;
+                let uaLo = (aLo & 0xF0) + (bLo & 0xF0) + al;
+                if (uaLo >= 0xA0) uaLo += 0x60;
+                let cOutLo = uaLo >= 0x100 ? 1 : 0;
+
+                let ah = (aHi & 0x0F) + (bHi & 0x0F) + cOutLo;
+                if (ah >= 0x0A) ah = ((ah + 0x06) & 0x0F) + 0x10;
+                let uaHi = (aHi & 0xF0) + (bHi & 0xF0) + ah;
+                if (uaHi >= 0xA0) uaHi += 0x60;
+
+                const result16 = ((uaHi & 0xFF) << 8) | (uaLo & 0xFF);
+                this.A = result16;
+                this.setFlag(Status816.C, uaHi >= 0x100);
+                this.setFlag(Status816.Z, result16 === 0);
+                this.setFlag(Status816.N, (uaHi & 0x80) !== 0);
+                const sa = (aHi & 0x80 ? (aHi & 0xF0) - 0x100 : (aHi & 0xF0)) + 
+                           (bHi & 0x80 ? (bHi & 0xF0) - 0x100 : (bHi & 0xF0)) + 
+                           ah;
+                this.setFlag(Status816.V, sa < -128 || sa > 127);
+            }
             return;
         }
 
-        const carryIn = this.getFlag(Status816.C) ? 1 : 0;
-        const result = this.A + operand + carryIn;
-
         if (eightBit) {
+            const a8 = this.A & 0xFF;
+            const result = a8 + operand + carryIn;
             const result8 = result & 0xFF;
             this.setFlag(Status816.C, result > 0xFF);
             this.setFlag(Status816.Z, result8 === 0);
             this.setFlag(Status816.N, (result8 & 0x80) !== 0);
-            this.setFlag(Status816.V, ((this.A ^ result8) & (operand ^ result8) & 0x80) !== 0);
+            this.setFlag(Status816.V, (!((a8 ^ operand) & 0x80) && ((a8 ^ result8) & 0x80)) !== 0);
             this.A = (this.A & 0xFF00) | result8; // Keep high byte intact
         } else {
+            const result = this.A + operand + carryIn;
             const result16 = result & 0xFFFF;
             this.setFlag(Status816.C, result > 0xFFFF);
             this.setFlag(Status816.Z, result16 === 0);
             this.setFlag(Status816.N, (result16 & 0x8000) !== 0);
-            this.setFlag(Status816.V, ((this.A ^ result16) & (operand ^ result16) & 0x8000) !== 0);
+            this.setFlag(Status816.V, (!((this.A ^ operand) & 0x8000) && ((this.A ^ result16) & 0x8000)) !== 0);
             this.A = result16;
         }
     }
@@ -1114,30 +1156,71 @@ export class CPU65816 implements ICPU {
     private opSBC(address: number) {
         const eightBit = this.getFlag(Status816.M);
         const operand = this.read8or16(address, eightBit);
-        
+        const carryIn = this.getFlag(Status816.C) ? 1 : 0;
+
         if (this.getFlag(Status816.D)) {
-            // TODO: Decimal mode implementation
+            if (eightBit) {
+                const a = this.A & 0xFF;
+                const n1 = operand ^ 0xFF;
+                let al = (a & 0x0F) - (operand & 0x0F) + carryIn - 1;
+                if (al < 0) al = ((al - 0x06) & 0x0F) - 0x10;
+                let ua = (a & 0xF0) - (operand & 0xF0) + al;
+                const v = (!((a ^ n1) & 0x80) && ((a ^ ua) & 0x80)) !== 0;
+                if (ua < 0) ua -= 0x60;
+                const result8 = ua & 0xFF;
+                this.A = (this.A & 0xFF00) | result8;
+                this.setFlag(Status816.C, ua >= 0);
+                this.setFlag(Status816.Z, result8 === 0);
+                this.setFlag(Status816.V, v);
+                this.setFlag(Status816.N, (result8 & 0x80) !== 0);
+            } else {
+                let aLo = this.A & 0xFF;
+                let aHi = (this.A >> 8) & 0xFF;
+                let bLo = operand & 0xFF;
+                let bHi = (operand >> 8) & 0xFF;
+
+                const n1Lo = bLo ^ 0xFF;
+                let al = (aLo & 0x0F) - (bLo & 0x0F) + carryIn - 1;
+                if (al < 0) al = ((al - 0x06) & 0x0F) - 0x10;
+                let uaLo = (aLo & 0xF0) - (bLo & 0xF0) + al;
+                if (uaLo < 0) uaLo -= 0x60;
+                const cOutLo = uaLo >= 0 ? 1 : 0;
+
+                const n1Hi = bHi ^ 0xFF;
+                let ah = (aHi & 0x0F) - (bHi & 0x0F) + cOutLo - 1;
+                if (ah < 0) ah = ((ah - 0x06) & 0x0F) - 0x10;
+                let uaHi = (aHi & 0xF0) - (bHi & 0xF0) + ah;
+                const v = (!((aHi ^ n1Hi) & 0x80) && ((aHi ^ uaHi) & 0x80)) !== 0;
+                if (uaHi < 0) uaHi -= 0x60;
+
+                const result16 = ((uaHi & 0xFF) << 8) | (uaLo & 0xFF);
+                this.A = result16;
+                this.setFlag(Status816.C, uaHi >= 0);
+                this.setFlag(Status816.Z, result16 === 0);
+                this.setFlag(Status816.V, v);
+                this.setFlag(Status816.N, (uaHi & 0x80) !== 0);
+            }
             return;
         }
 
-        const carryIn = this.getFlag(Status816.C) ? 1 : 0;
-        // SBC is basically ADC with inverted operand
-        const invertedOperand = eightBit ? (operand ^ 0xFF) : (operand ^ 0xFFFF);
-        const result = this.A + invertedOperand + carryIn;
-
         if (eightBit) {
+            const a8 = this.A & 0xFF;
+            const invertedOperand = operand ^ 0xFF;
+            const result = a8 + invertedOperand + carryIn;
             const result8 = result & 0xFF;
             this.setFlag(Status816.C, result >= 0x100);
             this.setFlag(Status816.Z, result8 === 0);
             this.setFlag(Status816.N, (result8 & 0x80) !== 0);
-            this.setFlag(Status816.V, ((this.A ^ result8) & (invertedOperand ^ result8) & 0x80) !== 0);
+            this.setFlag(Status816.V, (!((a8 ^ invertedOperand) & 0x80) && ((a8 ^ result8) & 0x80)) !== 0);
             this.A = (this.A & 0xFF00) | result8; // Keep high byte intact
         } else {
+            const invertedOperand = operand ^ 0xFFFF;
+            const result = this.A + invertedOperand + carryIn;
             const result16 = result & 0xFFFF;
             this.setFlag(Status816.C, result >= 0x10000);
             this.setFlag(Status816.Z, result16 === 0);
             this.setFlag(Status816.N, (result16 & 0x8000) !== 0);
-            this.setFlag(Status816.V, ((this.A ^ result16) & (invertedOperand ^ result16) & 0x8000) !== 0);
+            this.setFlag(Status816.V, (!((this.A ^ invertedOperand) & 0x8000) && ((this.A ^ result16) & 0x8000)) !== 0);
             this.A = result16;
         }
     }

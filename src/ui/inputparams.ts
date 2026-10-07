@@ -1,6 +1,6 @@
 import { COLOR_MODE, MONITOR_MODE, RUN_MODE, UI_THEMES } from "../common/utility"
 import { useGlobalContext } from "./globalcontext"
-import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging } from "./main2worker"
+import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging, passSetSlotConfig } from "./main2worker"
 import { setDefaultBinaryAddress, handleSetDiskFromURL } from "./devices/disk/driveprops"
 import { loadOneDriveScript } from "./devices/disk/cloudscriptloader"
 import { isOneDriveMsalAuthCallback } from "./devices/disk/onedrive_authredirect"
@@ -75,6 +75,14 @@ export const handleInputParams = (paramString = "") => {
     two: 1,
     three: 2,
     fast: 3,
+    "1.02": 0,
+    "1.02mhz": 0,
+    "2.8": 1,
+    "2.8mhz": 1,
+    "7.1": 2,
+    "7.1mhz": 2,
+    "14.3": 3,
+    "14.3mhz": 3,
     warp: 4,
     ludicrous: 4,
   }

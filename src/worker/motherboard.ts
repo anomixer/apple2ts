@@ -88,6 +88,7 @@ let appMode = "default"
 let showDebugTab = false
 let refreshTime = 16.6881 // = 17030 / 1020.488
 let cpuCyclesPerRefresh = 17030
+export const getCpuCyclesPerRefresh = () => cpuCyclesPerRefresh
 let cpuRunMode = RUN_MODE.IDLE
 export const getCpuRunMode = () => cpuRunMode
 
@@ -561,12 +562,33 @@ export const doReset = () => {
 // Note that making the cyclesPerRefresh too large can cause games to be
 // less responsive to keyboard input, since we're checking the keyboard
 // less often.
+const IIE_CYCLES_PER_REFRESH = [
+  Math.round(17030 * 0.1),
+  Math.round(17030 * 0.5),
+  17030,
+  17030 * 2,
+  17030 * 3,
+  17030 * 4,
+  17030 * 24,
+]
+
+const GS_CYCLES_PER_REFRESH = [
+  Math.round(17030 * 0.1),            // -2: Snail (0.1 MHz)
+  Math.round(17030 * 0.5),            // -1: Slow (0.5 MHz)
+  17030,                              //  0: Normal (1.02 MHz)
+  Math.round(2800000 * 0.0166881),   //  1: 2.8 MHz (46727 cycles)
+  Math.round(7100000 * 0.0166881),   //  2: 7.1 MHz (118486 cycles)
+  Math.round(14300000 * 0.0166881),  //  3: Fast / 14.3 MHz (238640 cycles)
+  Math.round(17030 * 24),             //  4: Warp (unthrottled)
+]
+
 export const doSetSpeedMode = (speedModeIn: number, operationId?: number) => {
   speedMode = speedModeIn
   // speedMode = -2 is slowest, but add 2 to it to make the arrays be zero based.
   // speedMode = 0 is still 1 MHz, so no risk of backwards compatibility issues.
   refreshTime = (speedMode === 4) ? 0 : 16.6881
-  cpuCyclesPerRefresh = 17030 * ([0.1, 0.5, 1, 2, 3, 4, 24])[speedMode + 2]
+  const cyclesTable = (machineName === "APPLE2GS") ? GS_CYCLES_PER_REFRESH : IIE_CYCLES_PER_REFRESH
+  cpuCyclesPerRefresh = cyclesTable[speedMode + 2]
   resetRefreshCounter()
   updateExternalMachineState()
   if (operationId !== undefined) passWorkerOperationResult(operationId)
@@ -688,6 +710,8 @@ export const doSetMachineName = (name: MACHINE_NAME, reset = true, publishState 
   didConfiguration = false
   doSetRom(machineName)
   configureMachine()
+  const cyclesTable = (machineName === "APPLE2GS") ? GS_CYCLES_PER_REFRESH : IIE_CYCLES_PER_REFRESH
+  cpuCyclesPerRefresh = cyclesTable[speedMode + 2]
   if (machineName === "APPLE2GS") iigsInitInterrupts()
   if (reset) doReset()
   if (publishState) updateExternalMachineState()

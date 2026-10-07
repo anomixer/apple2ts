@@ -255,7 +255,16 @@ export function getMCPResource(uri: MCPResourceURI): MCPResource | null {
         const machineName = handleGetMachineName()
         const runMode = handleGetRunMode()
         
-        const speedNames = [
+        const isGS = machineName === "APPLE2GS"
+        const speedNames = isGS ? [
+          "0.1 MHz (Snail)",
+          "0.5 MHz (Slow)",
+          "1.02 MHz (Normal)",
+          "2.8 MHz",
+          "7.1 MHz",
+          "14.3 MHz (Fast)",
+          "Ludicrous"
+        ] : [
           "0.1 MHz (Snail)",
           "0.5 MHz (Slow)",
           "1 MHz (Normal)",

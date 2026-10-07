@@ -51,6 +51,7 @@ const C800SlotSet = (slot: number) => {
 }
 
 export const RamWorksBankGet = () => {
+  if (currentMachineName === "APPLE2GS") return 0
   return memGetC000(0xC073)
 }
 
@@ -119,6 +120,7 @@ export let gsROM = new Uint8Array(0);
 // (IIe) ROM used by the //e machines; the IIgs boots from gsSystemROM.
 export let gsSystemROM = new Uint8Array(0);
 export const iigsRegisters = new Uint8Array(256);
+export const megaIIAux = new Uint8Array(65536);
 iigsRegisters[0x36] = 0x80; // Default fast speed
 export let iigsSlotRegister = 0b11110110; // $C02D SLTROMSEL: 1 = Your Card, 0 = Internal ROM (default: slots 7,6,5,4,2,1 = card)
 // IIgs interrupt state, mirroring web-a2e's iigs_memory: $C046 reports which
@@ -222,14 +224,16 @@ export const memGet24 = (address: number): number => {
             // $C100-$CFFF: slot card space or internal ROM pages.
             if (offset >= 0xC071 && offset <= 0xC07F) return gsSystemROM[0x10000 + offset];
             if (offset >= 0xC100 && offset <= 0xCFFF) {
-                if (SWITCHES.INTCXROM.isSet) return gsSystemROM[0x10000 + offset];
                 if (offset < 0xC800) {
                     const slot = (offset >> 8) & 0x0F;
+                    manageC800(slot);
+                    if (SWITCHES.INTCXROM.isSet) return gsSystemROM[0x10000 + offset];
                     const isCard = (slot === 3) ? SWITCHES.SLOTC3ROM.isSet : ((iigsSlotRegister & (1 << slot)) !== 0);
                     if (isCard) return memGet(offset, false);
                     return gsSystemROM[0x10000 + offset];
                 } else {
-                    if (internalC8ROMIsActive()) return gsSystemROM[0x10000 + offset];
+                    if (offset === 0xCFFF) manageC800(0xFF);
+                    if (SWITCHES.INTCXROM.isSet || internalC8ROMIsActive()) return gsSystemROM[0x10000 + offset];
                     return memGet(offset, false);
                 }
             }
@@ -237,8 +241,7 @@ export const memGet24 = (address: number): number => {
     }
 
     // Bank E0/E1: Mega II (the Apple IIe inside the IIgs)
-    // These are NOT simple linear RAM - they go through the IIe's memory system
-    // which includes soft switches, language card, etc.
+    // Bank E0 = Mega II Main, Bank E1 = Mega II Aux
     if (bank === 0xE0 || bank === 0xE1) {
         // For $C000-$CFFF I/O region, use memGet which handles soft switches
         if (offset >= 0xC000 && offset < 0xD000) {
@@ -251,19 +254,23 @@ export const memGet24 = (address: number): number => {
                 return gsROM[(bank << 16) | offset] || 0;
             }
             // Otherwise read from language card RAM
-            // Bank E0 = main, Bank E1 = aux
-            const auxOffset = (bank === 0xE1) ? RamWorksMemoryStart : 0;
-            if (!SWITCHES.BSRBANK2.isSet) {
-                // Bank 1: $D000-$DFFF stored at offset-0x1000
-                return memory[auxOffset + offset - 0x1000];
+            if (bank === 0xE1) {
+                if (!SWITCHES.BSRBANK2.isSet) {
+                    return megaIIAux[offset - 0x1000];
+                }
+                return megaIIAux[offset];
+            } else {
+                if (!SWITCHES.BSRBANK2.isSet) {
+                    return memory[offset - 0x1000];
+                }
+                return memory[offset];
             }
-            // Bank 2: $D000-$FFFF stored normally
-            return memory[auxOffset + offset];
         }
         // For $0000-$BFFF, direct RAM access
-        // Bank E0 = main RAM, Bank E1 = aux RAM
-        const auxOffset = (bank === 0xE1) ? RamWorksMemoryStart : 0;
-        return memory[auxOffset + offset];
+        if (bank === 0xE1) {
+            return megaIIAux[offset];
+        }
+        return memory[offset];
     }
 
     // Bank 00: Standard Apple IIe memory map (including ROM and Soft Switches)
@@ -271,7 +278,7 @@ export const memGet24 = (address: number): number => {
         return memGet(offset, false);
     }
     
-    // Bank 01: Direct, absolute access to Aux Memory (in IIgs, Bank 01 is subject to soft switches, but typically we can treat it similarly to Aux memory. Wait, IIgs Bank 01 respects some soft switches? Actually, let's treat Bank 01 exactly like E1 for now, but Apple IIe only has Bank 00.)
+    // Bank 01: Direct, absolute access to Aux Memory (65816 Fast RAM Bank 01)
     if (bank === 0x01) {
         if (offset >= 0xC000 && offset < 0xD000) {
             return memGet(offset, false); // I/O
@@ -302,20 +309,28 @@ export const memSet24 = (address: number, data: number) => {
         if (offset >= 0xD000) {
             // Check if language card RAM is writable
             if (SWITCHES.BSR_WRITE.isSet) {
-                const auxOffset = (bank === 0xE1) ? RamWorksMemoryStart : 0;
-                if (!SWITCHES.BSRBANK2.isSet) {
-                    // Bank 1
-                    memory[auxOffset + offset - 0x1000] = data;
+                if (bank === 0xE1) {
+                    if (!SWITCHES.BSRBANK2.isSet) {
+                        megaIIAux[offset - 0x1000] = data;
+                    } else {
+                        megaIIAux[offset] = data;
+                    }
                 } else {
-                    // Bank 2
-                    memory[auxOffset + offset] = data;
+                    if (!SWITCHES.BSRBANK2.isSet) {
+                        memory[offset - 0x1000] = data;
+                    } else {
+                        memory[offset] = data;
+                    }
                 }
             }
             return;
         }
         // Regular RAM
-        const auxOffset = (bank === 0xE1) ? RamWorksMemoryStart : 0;
-        memory[auxOffset + offset] = data;
+        if (bank === 0xE1) {
+            megaIIAux[offset] = data;
+            return;
+        }
+        memory[offset] = data;
         return;
     }
 
@@ -325,13 +340,17 @@ export const memSet24 = (address: number, data: number) => {
         return;
     }
 
-    // Bank 01: Direct, absolute access to Aux Memory
+    // Bank 01: Direct, absolute access to Aux Memory (65816 Fast RAM Bank 01)
     if (bank === 0x01) {
         if (offset >= 0xC000 && offset < 0xD000) {
             memSet(offset, data); // I/O
             return;
         }
         memory[RamWorksMemoryStart + offset] = data;
+        // Super Hi-Res ($2000-$9FFF) shadowing into Mega II Bank E1
+        if (offset >= 0x2000 && offset < 0xA000 && !(iigsRegisters[0x35] & 0x08)) {
+            megaIIAux[offset] = data;
+        }
         return;
     }
     
@@ -370,6 +389,23 @@ export const iigsInitInterrupts = () => {
     memSet24(0xE10011, 0xc8);
     memSet24(0xE10012, 0x79);
     memSet24(0xE10013, 0xff);
+
+    // Apple IIgs Toolbox Dispatchers in Bank E1 ($E10000..$E1000F)
+    // Matches ROM FE:0051..005F (JML $FE00AF, JML $FE00A3, JML $FE0075, JML $FE0069)
+    memSet24(0xE10000, 0x5c); memSet24(0xE10001, 0xaf); memSet24(0xE10002, 0x00); memSet24(0xE10003, 0xfe);
+    memSet24(0xE10004, 0x5c); memSet24(0xE10005, 0xa3); memSet24(0xE10006, 0x00); memSet24(0xE10007, 0xfe);
+    memSet24(0xE10008, 0x5c); memSet24(0xE10009, 0x75); memSet24(0xE1000A, 0x00); memSet24(0xE1000B, 0xfe);
+    memSet24(0xE1000C, 0x5c); memSet24(0xE1000D, 0x69); memSet24(0xE1000E, 0x00); memSet24(0xE1000F, 0xfe);
+
+    // Matches ROM FE:0061..0067 copied to $E10180..$E10187
+    memSet24(0xE10180, 0x22); memSet24(0xE10181, 0x68); memSet24(0xE10182, 0x00); memSet24(0xE10183, 0xe1);
+    memSet24(0xE10184, 0x5c); memSet24(0xE10185, 0x0b); memSet24(0xE10186, 0xbf); memSet24(0xE10187, 0xff);
+
+    // Apple IIgs Tool Locator function table pointers ($E103C0..$E103CA)
+    // Initialized by TLStartUp ($FE0011..$FE0030) pointing to ROM Tool tables
+    memSet24(0xE103C0, 0x2f); memSet24(0xE103C1, 0x01); memSet24(0xE103C2, 0xfe);
+    memSet24(0xE103C4, 0xef); memSet24(0xE103C5, 0x01); memSet24(0xE103C6, 0xfe);
+    memSet24(0xE103C8, 0x2f); memSet24(0xE103C9, 0x01); memSet24(0xE103CA, 0xfe);
     // Reset INTEN ($C041) to 0 at power-on / cold boot (interrupts disabled)
     iigsRegisters[0x41] = 0x00;
     iigsSlotRegister = 0b11110110;
@@ -663,6 +699,7 @@ export const memoryReset = () => {
   memory.fill(0xFF, 0, 0x10000)
   // Everything past here is RamWorks memory
   memory.fill(0xFF, BaseMachineMemory)
+  megaIIAux.fill(0xFF)
 
   // Real Apple II RAM does not power up as a uniform 0xFF: it settles into
   // a repeating 0xFF,0xFF,0x00,0x00 byte pattern (see js/util.ts's
@@ -804,9 +841,8 @@ const memGetSoftSwitch = (addr: number): number => {
           }
 
           case 0xC047:
-              // $C047 read: web-a2e has no read case for it, so it falls
-              // through to the Mega II, where it is the //e ROMSW sense --
-              // bit 7 = 1 (internal ROM) at reset.
+              vblPending = false;
+              quarterSecondPending = false;
               return iigsRegisters[0x47] | 0x80;
 
           default:
@@ -1067,7 +1103,7 @@ const memSetSoftSwitch = (addr: number, value: number) => {
 
   // these are write-only soft switches that don't work like the others, since
   // we need the full byte of data being written
-  if (addr === 0xC071 || addr === 0xC073) {
+  if (currentMachineName !== "APPLE2GS" && (addr === 0xC071 || addr === 0xC073)) {
     // Out of range bank index?
     if (value > RamWorksMaxBank) return
     // The 0th bank is also AUX memory
@@ -1354,7 +1390,7 @@ export const getHgr2Memory = () => {
 
 export const getShr = (): Uint8Array => {
   if (gsROM && gsROM.length > 0) {
-    return vidhd.extractShrBuffer(memory, RamWorksMemoryStart)
+    return vidhd.extractShrBuffer(megaIIAux, 0)
   }
   if (!vidhd.enabled || !vidhd.active) {
     return new Uint8Array()

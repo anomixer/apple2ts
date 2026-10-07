@@ -204,6 +204,21 @@ export const setPreferenceBreakpoints = (breakpoints: BreakpointMap) => {
   passBreakpoints(breakpoints)
 }
 
+export const getPreferenceMachineName = (): MACHINE_NAME => {
+  const saved = localStorage.getItem("machineName")
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved)
+      if (parsed === "APPLE2P" || parsed === "APPLE2EU" || parsed === "APPLE2EE" || parsed === "APPLE2GS") {
+        return parsed
+      }
+    } catch {
+      // Clear invalid machineName
+    }
+  }
+  return "APPLE2EE"
+}
+
 export const setPreferenceMachineName = (
   name: MACHINE_NAME = "APPLE2EE",
   origin: SettingsChangeOrigin = "external",

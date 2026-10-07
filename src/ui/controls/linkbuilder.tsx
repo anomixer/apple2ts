@@ -31,16 +31,6 @@ const LinkBuilder = () => {
     t("linkBuilder.colorNames.inverse")
   ]
   const colorModes = ["color", "nofringe", "green", "amber", "white", "inverse"]
-
-  const speedNames = [
-    t("linkBuilder.speedNames.snail"),
-    t("linkBuilder.speedNames.slow"),
-    t("linkBuilder.speedNames.normal"),
-    t("linkBuilder.speedNames.two"),
-    t("linkBuilder.speedNames.three"),
-    t("linkBuilder.speedNames.four"),
-    t("linkBuilder.speedNames.warp")
-  ]
   const speedParams = ["snail", "slow", "normal", "two", "three", "fast", "warp"]
 
   const gameModes = [
@@ -100,6 +90,24 @@ const LinkBuilder = () => {
   const lbMachineName: MACHINE_NAME = machine === machineValues[3] ? "APPLE2GS"
     : machine === machineValues[2] ? "APPLE2P"
     : machine === machineValues[1] ? "APPLE2EU" : "APPLE2EE"
+
+  const speedNames = (lbMachineName === "APPLE2GS") ? [
+    t("linkBuilder.speedNames.snail"),
+    t("linkBuilder.speedNames.slow"),
+    "1.02 MHz",
+    "2.8 MHz",
+    "7.1 MHz",
+    "14.3 MHz",
+    t("linkBuilder.speedNames.warp")
+  ] : [
+    t("linkBuilder.speedNames.snail"),
+    t("linkBuilder.speedNames.slow"),
+    t("linkBuilder.speedNames.normal"),
+    t("linkBuilder.speedNames.two"),
+    t("linkBuilder.speedNames.three"),
+    t("linkBuilder.speedNames.four"),
+    t("linkBuilder.speedNames.warp")
+  ]
 
   const ramdiskValues = [
     t("linkBuilder.ramDiskSizes.default"),
