@@ -33,6 +33,9 @@ export type WriteCallback = (address: number, value: number) => void;
 export type VectorReadCallback = (address: number) => number;
 
 import { ICPU } from "./icpu";
+import { specialJumpTable } from "./memory";
+import { SWITCHES } from "./softswitches";
+import { s6502 } from "./instructions";
 
 export class CPU65816 implements ICPU {
     // 16-bit Accumulator (A) and 8-bit Data Bank (B is hidden in high byte when 8-bit)
@@ -143,6 +146,28 @@ export class CPU65816 implements ICPU {
 
         const pc = this.PC;
         const pb = this.PB;
+
+        // Peripheral card hooks (e.g. SmartPort / Hard Drive block access)
+        if (pb === 0) {
+            const fn = specialJumpTable.get(pc);
+            if (fn && (!SWITCHES.INTCXROM.isSet || (pc & 0xF000) !== 0xC000)) {
+                s6502.Accum = this.A & 0xFF;
+                s6502.XReg = this.X & 0xFF;
+                s6502.YReg = this.Y & 0xFF;
+                s6502.StackPtr = this.S & 0xFF;
+                s6502.PStatus = this.P;
+                s6502.PC = this.PC;
+
+                fn();
+
+                this.A = (this.A & 0xFF00) | (s6502.Accum & 0xFF);
+                this.X = (this.X & 0xFF00) | (s6502.XReg & 0xFF);
+                this.Y = (this.Y & 0xFF00) | (s6502.YReg & 0xFF);
+                this.S = (this.S & 0xFF00) | (s6502.StackPtr & 0xFF);
+                this.P = s6502.PStatus;
+            }
+        }
+
         const opcode = this.fetch8();
         
         if (!this.dumped) {

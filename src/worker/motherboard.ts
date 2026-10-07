@@ -41,7 +41,8 @@ import { memory, memGet, getTextPage, getHires, memoryReset,
   gsROM,
   iigsSignalVbl,
   iigsInterruptPending,
-  iigsInitInterrupts} from "./memory"
+  iigsInitInterrupts,
+  iigsClearInterrupts} from "./memory"
 import { setButtonState, handleGamepads } from "./devices/joystick"
 import { handleGameSetup } from "./games/game_mappings"
 import { breakpointMap, clearInterrupts, doSetBreakpointSkipOnce, doSetMemoryWriteWatchpoint as setCpuMemoryWriteWatchpoint, resetCycleCountCallbacks, setStepOut, getHeatMapCPU, getHeatMapCPUMax, resetHeatMapCPU } from "./cpu6502"
@@ -479,6 +480,7 @@ export const doBoot = () => {
     enableHardDrive()
   }
 
+  if (machineName === "APPLE2GS") iigsInitInterrupts()
   doReset()
   // This is a hack. If we don't currently have a hard drive image on boot,
   // temporarily disable the hard drive and then re-enable it later.
@@ -498,9 +500,9 @@ export const doReset = () => {
   // Reset banked RAM
   memGet(0xC082, false)
   cpu.reset()
-  // The IIgs ROM never reaches its interrupt-init routine, so install the
-  // interrupt manager + INTEN here (mirrors what the ROM's ff:78 region does).
-  if (machineName === "APPLE2GS") iigsInitInterrupts()
+  if (machineName === "APPLE2GS") {
+    iigsClearInterrupts()
+  }
   resetMachine()
   // Otherwise Heat Map data survives a reset/reboot indefinitely (it was
   // previously cleared only by doSetCycleCount, a time-travel-only path),
@@ -661,6 +663,7 @@ export const doSetMachineName = (name: MACHINE_NAME, reset = true, publishState 
   didConfiguration = false
   doSetRom(machineName)
   configureMachine()
+  if (machineName === "APPLE2GS") iigsInitInterrupts()
   if (reset) doReset()
   if (publishState) updateExternalMachineState()
 }

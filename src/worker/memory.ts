@@ -120,6 +120,7 @@ export let gsROM = new Uint8Array(0);
 export let gsSystemROM = new Uint8Array(0);
 export const iigsRegisters = new Uint8Array(256);
 iigsRegisters[0x36] = 0x80; // Default fast speed
+export let iigsSlotRegister = 0b11110110; // $C02D SLTROMSEL: 1 = Your Card, 0 = Internal ROM (default: slots 7,6,5,4,2,1 = card)
 // IIgs interrupt state, mirroring web-a2e's iigs_memory: $C046 reports which
 // sources are pending (bit3 VBL, bit4 quarter-second) plus bit7 = "a source
 // is pending AND enabled". The flags survive reads; only $C047 clears them.
@@ -221,9 +222,20 @@ export const memGet24 = (address: number): number => {
                 return gsSystemROM[0x10000 + offset];
             }
             // $C071-$C07F: BRK/IRQ firmware (JML to the interrupt manager).
-            // $C100-$CFFF: internal ROM pages, served from bank FF.
+            // $C100-$CFFF: slot card space or internal ROM pages.
             if (offset >= 0xC071 && offset <= 0xC07F) return gsSystemROM[0x10000 + offset];
-            if (offset >= 0xC100 && offset <= 0xCFFF) return gsSystemROM[0x10000 + offset];
+            if (offset >= 0xC100 && offset <= 0xCFFF) {
+                if (SWITCHES.INTCXROM.isSet) return gsSystemROM[0x10000 + offset];
+                if (offset < 0xC800) {
+                    const slot = (offset >> 8) & 0x0F;
+                    const isCard = (slot === 3) ? SWITCHES.SLOTC3ROM.isSet : ((iigsSlotRegister & (1 << slot)) !== 0);
+                    if (isCard) return memGet(offset, false);
+                    return gsSystemROM[0x10000 + offset];
+                } else {
+                    if (internalC8ROMIsActive()) return gsSystemROM[0x10000 + offset];
+                    return memGet(offset, false);
+                }
+            }
         }
     }
 
@@ -363,6 +375,8 @@ export const iigsInitInterrupts = () => {
     memSet24(0xE10013, 0xff);
     // Reset INTEN ($C041) to 0 at power-on / cold boot (interrupts disabled)
     iigsRegisters[0x41] = 0x00;
+    iigsSlotRegister = 0b11110110;
+    iigsRegisters[0x2D] = iigsSlotRegister;
     iigsClearInterrupts();
     iigsResetIwm();
 }
@@ -475,6 +489,9 @@ const updateWriteBankSwitchedRamTable = () => {
 
 const slotIsActive = (slot: number) => {
   if (SWITCHES.INTCXROM.isSet) return false
+  if (currentMachineName === "APPLE2GS") {
+    return (slot !== 3) ? ((iigsSlotRegister & (1 << slot)) !== 0) : SWITCHES.SLOTC3ROM.isSet
+  }
   // SLOTC3ROM switch only has an effect if INTCXROM is off
   return (slot !== 3) ? true : SWITCHES.SLOTC3ROM.isSet
 }
@@ -756,6 +773,9 @@ const memGetSoftSwitch = (addr: number): number => {
           case 0xC026: // ADB Data
               return iigsADB.readData();
 
+          case 0xC02D: // SLTROMSEL
+              return iigsSlotRegister;
+
           case 0xC033: // Clock Data
               return iigsClock.readData();
 
@@ -969,6 +989,12 @@ const memSetSoftSwitch = (addr: number, value: number) => {
                 iigsADB.writeStatus(value);
                 break;
             
+            case 0xC02D: // SLTROMSEL
+                iigsSlotRegister = value & 0xFE;
+                iigsRegisters[0x2D] = iigsSlotRegister;
+                updateAddressTables();
+                break;
+
             case 0xC033: // Clock Data
                 iigsClock.writeData(value);
                 break;

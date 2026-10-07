@@ -149,6 +149,27 @@ with the animated barber pole scan bar, identical to real Apple IIgs hardware!
 - $C027: ADB Status - Bit 5 must be 1 during boot (controller ready).
 - Wired to `iigsADB` instance in `iigs_adb.ts`.
 
+### 15. Slot 7 SmartPort/Hard Drive Booting ($C02D & specialJumpTable Hook) — RESOLVED
+**Issue**: Mounting a bootable Hard Drive (HDV) in Slot 7 did not boot; the machine stayed at "Check startup device!".
+**Root causes**:
+1. **Hardcoded Internal ROM Override**: In `memGet24` (`memory.ts`), `$C100-$CFFF` in Bank 00 was mapped unconditionally to internal `gsSystemROM`, preventing the CPU from ever seeing the Slot 7 card ROM driver at `$C700-$C7FF`.
+2. **Missing Slot Register `$C02D` (SLTROMSEL)**: In Apple IIgs hardware, `$C02D` controls whether each slot is mapped to peripheral card (bit=1) or internal ROM (bit=0). Default is `0b11110110` (slots 7, 6, 5, 4, 2, 1 = card).
+3. **`specialJumpTable` Disconnected in `cpu65816.ts`**: The SmartPort/HDV driver uses special hooks at `$C7C0` and `$C7C3` (`processHardDriveBlockAccess` and `processSmartPortAccess`), but `CPU65816` never checked `specialJumpTable`, and its registers (`A, X, Y, S, P`) were isolated from `s6502`.
+**Fix**:
+1. Implemented `$C02D` read/write in `memory.ts` and updated `memGet24` so that when `!SWITCHES.INTCXROM.isSet` and `(iigsSlotRegister & (1 << slot)) !== 0`, the slot space routes to `memGet(offset, false)`.
+2. In `cpu65816.ts`, added `specialJumpTable` checks before opcode fetch in Bank 00, seamlessly syncing CPU registers between `CPU65816` and `s6502`.
+**Result**: The Apple IIgs cold boot slot scan detects Slot 7 (`$C701=0x20`), jumps to `$C700`, loads blocks 0 and 1 into `$0800/$0A00` via the block hook, and executes the ProDOS bootloader at `$0801`. Verified with `gs_hdd_boot.test.ts`.
+
+### 16. Ctrl-Reset to Applesoft BASIC Prompt `]` — RESOLVED
+**Issue**: Pressing Ctrl-Reset from the "Check startup device!" screen re-looped into the cold boot slot scan instead of dropping into the Applesoft BASIC prompt `]`.
+**Root cause**:
+1. In `motherboard.ts`, `doReset()` was calling `iigsInitInterrupts()`, which wiped the first 8KB of Bank 00 memory (`memSet24(0x000000 + i, 0)`).
+2. The ROM's cold boot sequence had already initialized the Apple II warm reset vector at `$03F2-$03F4` to `00 E0 45` (`$03F4 = $03F3 ^ $A5 = $E0 ^ $A5 = $45`).
+3. Wiping low memory with 0 destroyed `$03F2-$03F4`. When the reset vector at `FF:FA62` executed `LDA $03F3; EOR #$A5; CMP $03F4; BNE $FAA6`, the check failed (`0 ^ $A5 = $A5 != 0`), causing the ROM to branch to the cold boot slot scan at `$FAA6`.
+**Fix**:
+- Moved `iigsInitInterrupts()` to run only during cold boot (`doBoot()` and machine type switch), leaving `doReset()` (Ctrl-Reset) to preserve memory contents, zero page, and `$03F2-$03F4`.
+**Result**: On Ctrl-Reset, the vector check passes (`$03F4 == $03F3 ^ $A5`), the ROM takes the warm reset path, jumps to `$FEE6`, initializes the monitor, and immediately drops to the Applesoft prompt `]`. Verified with `gs_ctrl_reset.test.ts`.
+
 ## Debugging Techniques Used
 - **Instruction Tracing**: Added a circular buffer in `motherboard.ts` to trace instructions when debugging specific loops.
 - **ROM Inspection**: Disassembled portions of `gsROM` via Node.js helper scripts to identify hardware polling loops (such as `SELIWM` and diagnostic entry points).
@@ -156,17 +177,17 @@ with the animated barber pole scan bar, identical to real Apple IIgs hardware!
 - **CDP In-Browser Screenshots**: Automated Chrome screenshot capture via DevTools Protocol to visually verify boot screens.
 
 ## Key Files Modified
-- `src/worker/cpu65816.ts`: 65816 CPU emulation, stack normalization, IRQ sampling.
-- `src/worker/memory.ts`: Memory mapping for Bank E0/E1, Bank FE/FF ROM, IWM registers ($C0E0-$C0EF), State Register ($C068), and interrupt flags ($C046).
+- `src/worker/cpu65816.ts`: 65816 CPU emulation, stack normalization, IRQ sampling, peripheral `specialJumpTable` execution.
+- `src/worker/memory.ts`: Memory mapping for Bank E0/E1, Bank FE/FF ROM, IWM registers ($C0E0-$C0EF), State Register ($C068), Slot Register ($C02D), and interrupt flags ($C046).
 - `src/worker/iigs_adb.ts`: ADB controller emulation.
 - `src/worker/iigs_clock.ts`: Full RTC and 256-byte Battery RAM state machine from `gssquared`.
-- `src/worker/motherboard.ts`: CPU cycle accounting, VBL→IRQ gated triggering for IIgs.
+- `src/worker/motherboard.ts`: CPU cycle accounting, VBL→IRQ gated triggering for IIgs, separation of cold boot memory init from warm reset.
 - `src/ui/inputparams.ts`: URL query parameter support for `?machine=apple2gs` and `?boot=true`.
 - `src/ui/panels/help/startuptextpage.ts`: Apple IIgs startup banner model text.
-- `src/worker/gs_test_coldboot.test.ts`, `src/worker/gs_motherboard.test.ts`: Complete test suite verifying Apple IIgs cold boot and hardware state.
+- `src/worker/gs_test_coldboot.test.ts`, `src/worker/gs_motherboard.test.ts`, `src/worker/gs_hdd_boot.test.ts`, `src/worker/gs_ctrl_reset.test.ts`: Complete test suite verifying Apple IIgs cold boot, hard drive boot, and Ctrl-Reset behavior.
 
 ## Reference Materials
-- **GSSquared**: `c:\dev\gssquared\` (Primary reference: `RTC_PRAM.hpp`, `IWM2.hpp`, `display.cpp`, `DevelopLog.md`)
+- **GSSquared**: `c:\dev\gssquared\` (Primary reference: `RTC_PRAM.hpp`, `IWM2.hpp`, `display.cpp`, `DevelopLog.md`, `mmu_iie.cpp`, `computer.cpp`)
 - **Apple IIgs Hardware Reference Manual**: Official hardware specifications
 
 
