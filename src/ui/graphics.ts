@@ -162,7 +162,7 @@ const processTextPage = (ctx: CanvasRenderingContext2D,
   const isAltCharSet = machineName === "APPLE2P" ? false : handleGetAltCharSet()
   const colorFill = skinForeground ??
     ["#FFFFFF", "#FFFFFF", TEXT_GREEN, TEXT_AMBER, TEXT_WHITE, TEXT_WHITE][colorMode]
-  const hasMouseText = machineName === "APPLE2EE"
+  const hasMouseText = machineName === "APPLE2EE" || machineName === "APPLE2GS"
   const hasLowerCase = (nchars === 80) || (machineName !== "APPLE2P")
   const useApple2PlusMap = (nchars !== 80) && (machineName === "APPLE2P")
   const colors = [loresColors, loresColors, loresGreen, loresAmber, loresWhite][colorMode]

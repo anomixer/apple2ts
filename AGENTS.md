@@ -168,7 +168,18 @@ with the animated barber pole scan bar, identical to real Apple IIgs hardware!
 3. Wiping low memory with 0 destroyed `$03F2-$03F4`. When the reset vector at `FF:FA62` executed `LDA $03F3; EOR #$A5; CMP $03F4; BNE $FAA6`, the check failed (`0 ^ $A5 = $A5 != 0`), causing the ROM to branch to the cold boot slot scan at `$FAA6`.
 **Fix**:
 - Moved `iigsInitInterrupts()` to run only during cold boot (`doBoot()` and machine type switch), leaving `doReset()` (Ctrl-Reset) to preserve memory contents, zero page, and `$03F2-$03F4`.
-**Result**: On Ctrl-Reset, the vector check passes (`$03F4 == $03F3 ^ $A5`), the ROM takes the warm reset path, jumps to `$FEE6`, initializes the monitor, and immediately drops to the Applesoft prompt `]`. Verified with `gs_ctrl_reset.test.ts`.
+### 17. Apple IIgs MouseText Decoding (Open Apple / Closed Apple Startup Bar) — RESOLVED
+**Issue**: On the Apple IIgs "Check startup device!" screen, the animated scan bar showed an inverse `@` / `A` and inverse `L` characters instead of the Open Apple () and Closed Apple () glyphs and horizontal lines.
+**Root cause**:
+- In `src/ui/graphics.ts:165` and `src/ui/copycanvas.ts:40`, `hasMouseText` was hardcoded to `machineName === "APPLE2EE"`.
+- For `APPLE2GS`, `hasMouseText` evaluated to `false`.
+- When `hasMouseText` is false:
+  1. `convertTextPageValueToASCII` does not translate MouseText characters in the `$40-$5F` range (shifted by 64 to `0xE080-0xE09F` in the PUA font `PrintChar21`). Instead, it treats them as plain ASCII (`$40` = `@`, `$41` = `A`, `$4C` = `L`).
+  2. `doInverse` treats all codes `<= 127` as inverse when MouseText is disabled, drawing an inverse background rectangle over the character.
+**Fix**:
+- Updated `hasMouseText` in both `src/ui/graphics.ts` and `src/ui/copycanvas.ts` to `machineName === "APPLE2EE" || machineName === "APPLE2GS"`.
+- In `src/ui/inputparams.ts`, dispatched `passSetSlotConfig(nextSlotConfig)` to ensure custom slot parameters from URL query strings are properly sent to the worker.
+**Result**: The scan bar properly renders the authentic MouseText Open Apple (`0xE080`) and Solid Apple (`0xE081`) glyphs and horizontal line characters (`0xE08C`) against the blue screen, exactly matching Apple IIgs ROM 01 hardware. Verified with `copycanvas.test.ts`.
 
 ## Debugging Techniques Used
 - **Instruction Tracing**: Added a circular buffer in `motherboard.ts` to trace instructions when debugging specific loops.
@@ -182,7 +193,9 @@ with the animated barber pole scan bar, identical to real Apple IIgs hardware!
 - `src/worker/iigs_adb.ts`: ADB controller emulation.
 - `src/worker/iigs_clock.ts`: Full RTC and 256-byte Battery RAM state machine from `gssquared`.
 - `src/worker/motherboard.ts`: CPU cycle accounting, VBL→IRQ gated triggering for IIgs, separation of cold boot memory init from warm reset.
-- `src/ui/inputparams.ts`: URL query parameter support for `?machine=apple2gs` and `?boot=true`.
+- `src/ui/graphics.ts`: Enabled MouseText decoding and inverse-attribute handling for `APPLE2GS`.
+- `src/ui/copycanvas.ts`: Enabled MouseText support for `APPLE2GS` during screen copying.
+- `src/ui/inputparams.ts`: URL query parameter support for `?machine=apple2gs`, `?boot=true`, and syncing slot changes to the worker.
 - `src/ui/panels/help/startuptextpage.ts`: Apple IIgs startup banner model text.
 - `src/worker/gs_test_coldboot.test.ts`, `src/worker/gs_motherboard.test.ts`, `src/worker/gs_hdd_boot.test.ts`, `src/worker/gs_ctrl_reset.test.ts`: Complete test suite verifying Apple IIgs cold boot, hard drive boot, and Ctrl-Reset behavior.
 

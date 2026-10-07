@@ -194,6 +194,7 @@ export const handleInputParams = (paramString = "") => {
 
   if (slotConfigChanged) {
     setPreferenceSlotConfig(nextSlotConfig)
+    passSetSlotConfig(nextSlotConfig)
   }
 
   const theme = params.get("theme")
