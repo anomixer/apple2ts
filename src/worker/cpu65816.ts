@@ -122,7 +122,14 @@ export class CPU65816 implements ICPU {
         this.setFlag(Status816.I, true);
         this.setFlag(Status816.D, false);
         this.PB = 0;
-        this.PC = this.read8or16(this.emulationMode ? emulationVector : nativeVector, false);
+        const vec = this.emulationMode ? emulationVector : nativeVector;
+        if (this.readVector) {
+            const lo = this.readVector(vec);
+            const hi = this.readVector(vec + 1);
+            this.PC = lo | (hi << 8);
+        } else {
+            this.PC = this.read8or16(vec, false);
+        }
         this.waiting = false;
     }
 
@@ -131,14 +138,15 @@ export class CPU65816 implements ICPU {
         // WAI: wait for an interrupt to arrive, not to be taken. Once one is
         // pending, fall through and service it (web-a2e: waiting_ cleared then
         // the pending NMI/IRQ is taken).
+        const hasHardwareIrq = this.irqPending || (s6502.flagIRQ !== 0);
         if (this.waiting) {
-            if (!this.irqPending) return 1;
+            if (!hasHardwareIrq) return 1;
             this.waiting = false;
         }
         // Sample IRQ before the next opcode fetch. A hardware IRQ takes the
         // $FFFE (emulation) / $FFEE (native) vector; software=false keeps the
         // B flag clear so the handler can tell it was hardware.
-        if (!this.getFlag(Status816.I) && this.irqPending) {
+        if (!this.getFlag(Status816.I) && hasHardwareIrq) {
             this.irqPending = false;
             this.interrupt(VEC_N_IRQ, VEC_E_IRQ, false);
             return 7;

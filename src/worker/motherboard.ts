@@ -1,7 +1,7 @@
 // Chris Torrence, 2022
 import { passMachineState, passSoftSwitchDescriptions, passWorkerOperationResult } from "./worker2main"
 import { s6502, setState6502, setCycleCount, setPC, getStackString, get6502Instructions } from "./instructions"
-import { hiresAddressToLine, RUN_MODE, TEST_DEBUG, DEFAULT_SLOT_CONFIG, HEATMAP_STATE, MEMORY_DUMP_STATE, AUTO_SNAPSHOT } from "../common/utility"
+import { hiresAddressToLine, RUN_MODE, TEST_DEBUG, DEFAULT_SLOT_CONFIG, DEFAULT_SLOT_CONFIG_GS, HEATMAP_STATE, MEMORY_DUMP_STATE, AUTO_SNAPSHOT } from "../common/utility"
 import { resetFloppyDrives, doPauseDrive, getHardDriveState } from "./devices/drivestate"
 // import { slot_omni } from "./roms/slot_omni_cx00"
 import { SWITCHES, overrideSoftSwitch, resetSoftSwitches, setVideo7Override,
@@ -42,10 +42,12 @@ import { memory, memGet, getTextPage, getHires, memoryReset,
   iigsSignalVbl,
   iigsInterruptPending,
   iigsInitInterrupts,
-  iigsClearInterrupts} from "./memory"
+  iigsClearInterrupts,
+  iigsSlotRegister,
+  iigsRegisters} from "./memory"
 import { setButtonState, handleGamepads } from "./devices/joystick"
 import { handleGameSetup } from "./games/game_mappings"
-import { breakpointMap, clearInterrupts, doSetBreakpointSkipOnce, doSetMemoryWriteWatchpoint as setCpuMemoryWriteWatchpoint, resetCycleCountCallbacks, setStepOut, getHeatMapCPU, getHeatMapCPUMax, resetHeatMapCPU } from "./cpu6502"
+import { breakpointMap, clearInterrupts, doSetBreakpointSkipOnce, doSetMemoryWriteWatchpoint as setCpuMemoryWriteWatchpoint, resetCycleCountCallbacks, processCycleCountCallbacks, setStepOut, getHeatMapCPU, getHeatMapCPUMax, resetHeatMapCPU } from "./cpu6502"
 import { ICPU } from "./icpu"
 import { CPU6502Wrapper } from "./cpu6502_wrapper"
 import { CPU65816 } from "./cpu65816"
@@ -318,19 +320,40 @@ export const configureMachine = () => {
   }
 
   // Apple IIgs uses a completely different architecture
-  // It has built-in hardware and doesn't use expansion cards like the IIe
+  // It has built-in hardware and native slot management
   if (machineName === "APPLE2GS") {
-    // IIgs has IWM (Integrated Woz Machine) for disk control in slot 6
-    // The firmware is in ROM, no card ROM needed
+    disableVideoTerm()
+    disableVidHD()
+    setAuxCardEnabled(true)
+
+    // Slot 1: SSC (if configured)
+    if (currentSlotConfig[1] === "ssc") {
+      enableSerialCard()
+    }
+    // Slot 4: Mockingboard (if configured)
+    if (currentSlotConfig[4] === "mockingboard") {
+      enableMockingboard(true, 4)
+    }
+    // Slot 6: 5.25" Disk II (if configured)
     if (currentSlotConfig[6] === "disk2") {
       enableDiskDrive()
     }
-    // IIgs has built-in:
-    // - ADB for keyboard/mouse (not a card)
-    // - Ensoniq DOC for sound (not Mockingboard)
-    // - Super Hi-Res graphics (not VidHD)
-    // - Serial ports via SCC (not SSC card)
-    // So we don't configure any other slots
+    // Slot 7: SmartPort / Hard Drive (if configured)
+    if (currentSlotConfig[7] === "smartport") {
+      enableHardDrive()
+    }
+
+    // Sync $C02D (SLTROMSEL) with configured peripheral cards
+    let slotReg = 0
+    for (let s = 1; s <= 7; s++) {
+      if (s === 3) continue // slot 3 is always internal video
+      if (currentSlotConfig[s] !== "none") {
+        slotReg |= (1 << s)
+      }
+    }
+    iigsSlotRegister = slotReg
+    iigsRegisters[0x2D] = slotReg
+
     get6502Instructions()
     return
   }
@@ -651,7 +674,9 @@ export const doSetMachineName = (name: MACHINE_NAME, reset = true, publishState 
     cpu = new CPU6502Wrapper()
   }
 
-  if (name === "APPLE2P") {
+  if (name === "APPLE2GS") {
+    currentSlotConfig = { ...DEFAULT_SLOT_CONFIG_GS }
+  } else if (name === "APPLE2P") {
     if (currentSlotConfig[3] !== "none" && currentSlotConfig[3] !== "videoterm" && currentSlotConfig[3] !== "vidhd") {
       currentSlotConfig[3] = "videoterm"
     }
@@ -1125,6 +1150,9 @@ const doAdvance6502 = () => {
     } else {
       cycles = cpu.processInstruction(tracing ? updateTrace : null)
       s6502.cycleCount += cycles
+      if (machineName === "APPLE2GS") {
+        processCycleCountCallbacks()
+      }
     }
     if (!checkConditionalInputStop()) advanceKeySequence()
     if (advanceConditionalInputSequence()) {

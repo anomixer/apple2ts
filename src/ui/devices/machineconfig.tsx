@@ -7,7 +7,7 @@ import { setUIStateBoolean, setTabView } from "../ui_settings"
 import { notifySettingsChanged } from "../settingschange"
 import PopupMenu from "../controls/popupmenu"
 import { useTranslation } from "../../i18n/useTranslation"
-import { DEFAULT_SLOT_CONFIG, RUN_MODE } from "../../common/utility"
+import { DEFAULT_SLOT_CONFIG, DEFAULT_SLOT_CONFIG_GS, RUN_MODE } from "../../common/utility"
 import { handleSetCPUState } from "../controller"
 import { isCanvasFullscreen, setCanvasFullscreen } from "../controls/fullscreenbutton"
 import type { RetroControlMetadata, RetroMenuContext } from "../retro/retromenucontext"
@@ -17,37 +17,22 @@ import { controlOptionsToPopupItems } from "../controls/controlpopup"
 import { choiceBinding, controlsFromJson, type RetroControlBindings } from "../retro/retrocontrolmetadata"
 import { changeSerialMode, getSerialMode } from "./serial/serialhub"
 
-export const RAM_OPTIONS = [64, 512, 1024, 4096, 8192] as const
-
-export const SLOT_NUMBERS = [1, 2, 3, 4, 5, 6, 7] as const
-type SlotNumber = typeof SLOT_NUMBERS[number]
-
-type SlotOption = {
-  card: SLOT_CARD_ID
-  ramSizeKb?: typeof RAM_OPTIONS[number]
-}
-
-export const getSlotOptions = (slot: SlotNumber, machine: MACHINE_NAME): SlotOption[] => {
-  if (slot === 3) {
-    return machine === "APPLE2P"
-      ? [{ card: "none" }, { card: "videoterm" }, { card: "vidhd" }]
-      : [
-        { card: "none" },
-        ...RAM_OPTIONS.map(ramSizeKb => ({ card: "aux" as const, ramSizeKb })),
-        { card: "vidhd" },
-      ]
-  }
-  const options: Record<SlotNumber, SLOT_CARD_ID[]> = {
-    1: ["none", "ssc"],
-    2: ["none", "vera", "passport", "softcard"],
-    3: [],
-    4: ["none", "mouse", "mockingboard", "vera", "softcard"],
-    5: ["none", "mouse", "mockingboard", "softcard"],
-    6: ["none", "disk2"],
-    7: ["none", "smartport"],
-  }
-  return options[slot].map(card => ({ card }))
-}
+export {
+  RAM_OPTIONS,
+  SLOT_NUMBERS,
+  type SlotNumber,
+  type SlotOption,
+  getSlotOptions,
+  sanitizeSlotConfig,
+} from "../../common/slot_options"
+import {
+  RAM_OPTIONS,
+  SLOT_NUMBERS,
+  type SlotNumber,
+  type SlotOption,
+  getSlotOptions,
+  sanitizeSlotConfig,
+} from "../../common/slot_options"
 
 const getAuxCardLabel = (sizeKb: number): string => {
   if (sizeKb <= 64) {
@@ -140,19 +125,26 @@ const machineBindings: RetroControlBindings = {
         currentIndex: () => {
           const currentCard = handleGetSlotConfig()[slot]
           const currentRamSize = handleGetMemSize()
-          return getSlotOptions(slot, handleGetMachineName()).findIndex(option =>
+          const options = getSlotOptions(slot, handleGetMachineName())
+          const idx = options.findIndex(option =>
             option.card === currentCard
             && (option.card !== "aux" || option.ramSizeKb === currentRamSize))
+          return idx >= 0 ? idx : 0
         },
         select: (context, optionIndex) => {
           selectRetroSlotCard(context, slot, getSlotOptions(slot, handleGetMachineName())[optionIndex])
         },
       }),
-      defaultIndex: () => getSlotOptions(slot, handleGetMachineName()).findIndex(option =>
-        option.card === (slot === 3 && handleGetMachineName() === "APPLE2P"
-          ? "videoterm"
-          : DEFAULT_SLOT_CONFIG[slot])
-        && (option.card !== "aux" || option.ramSizeKb === 64)),
+      defaultIndex: () => {
+        const machine = handleGetMachineName()
+        const defaultCard = machine === "APPLE2GS"
+          ? DEFAULT_SLOT_CONFIG_GS[slot]
+          : (slot === 3 && machine === "APPLE2P" ? "videoterm" : DEFAULT_SLOT_CONFIG[slot])
+        const idx = getSlotOptions(slot, machine).findIndex(option =>
+          option.card === defaultCard
+          && (option.card !== "aux" || option.ramSizeKb === 64))
+        return idx >= 0 ? idx : 0
+      },
     } satisfies Partial<RetroControlMetadata>,
   ])),
 }

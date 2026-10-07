@@ -1,6 +1,7 @@
 import { BreakpointMap, BreakpointNew } from "../common/breakpoint"
 import { TraceSettingsDefault } from "../common/util_disassemble"
-import { AUTO_SNAPSHOT, COLOR_MODE, DEFAULT_SLOT_CONFIG, MONITOR_MODE, UI_THEME, UI_THEMES } from "../common/utility"
+import { AUTO_SNAPSHOT, COLOR_MODE, DEFAULT_SLOT_CONFIG, DEFAULT_SLOT_CONFIG_GS, MONITOR_MODE, UI_THEME, UI_THEMES } from "../common/utility"
+import { sanitizeSlotConfig } from "../common/slot_options"
 import { changeMockingboardMode } from "./devices/audio/mockingboard_audio"
 import { passAutoSnapshot, passBreakpoints, passReverseYAxis, passSetMachineName, passSetRamWorks, passSetShowDebugTab, passSetSlotConfig, passSetTraceSettings, passSetVeraSlot, passSiriusJoyport, passSpeedMode, requestSpeedMode, } from "./main2worker"
 import { getTheme, getUIState, initialBooleanUIKeys, setColorMode, setTheme, setUIStateBoolean, BooleanKeyOf, setMonitorMode, isDefaultTrueBooleanKey, setAutoSnapshot } from "./ui_settings"
@@ -214,18 +215,22 @@ export const setPreferenceMachineName = (
   }
   passSetMachineName(name)
 
-  const slotConfig = getPreferenceSlotConfig()
-  let newSlot3 = slotConfig[3]
-  if (name === "APPLE2P") {
-    if (newSlot3 !== "none" && newSlot3 !== "videoterm" && newSlot3 !== "vidhd") newSlot3 = "videoterm"
+  let newSlotConfig: SlotConfig
+  if (name === "APPLE2GS") {
+    newSlotConfig = { ...DEFAULT_SLOT_CONFIG_GS }
   } else {
-    if (newSlot3 !== "none" && newSlot3 !== "aux" && newSlot3 !== "vidhd") newSlot3 = "aux"
+    const slotConfig = getPreferenceSlotConfig()
+    newSlotConfig = { ...slotConfig }
+    let newSlot3 = newSlotConfig[3]
+    if (name === "APPLE2P") {
+      if (newSlot3 !== "none" && newSlot3 !== "videoterm" && newSlot3 !== "vidhd") newSlot3 = "videoterm"
+    } else {
+      if (newSlot3 !== "none" && newSlot3 !== "aux" && newSlot3 !== "vidhd") newSlot3 = "aux"
+    }
+    newSlotConfig[3] = newSlot3
   }
-  if (slotConfig[3] !== newSlot3) {
-    slotConfig[3] = newSlot3
-    setPreferenceSlotConfig(slotConfig, origin)
-  }
-  notifySettingsChanged(["slots.3"], origin)
+  setPreferenceSlotConfig(newSlotConfig, origin)
+  notifySettingsChanged([1, 2, 3, 4, 5, 6, 7].map(slot => `slots.${slot}`), origin)
 }
 
 export const setPreferenceMockingboardMode = (
@@ -282,19 +287,20 @@ export const setPreferenceVeraSlot = (slot: VERA_SLOT = 0) => {
 }
 
 export const getPreferenceSlotConfig = (): SlotConfig => {
+  const machine = getPreferenceMachineName()
   const saved = localStorage.getItem("slotConfig")
   if (saved) {
     try {
       const parsed = JSON.parse(saved)
       if (parsed && typeof parsed === "object" && parsed[1] && parsed[7]) {
-        return parsed as SlotConfig
+        return sanitizeSlotConfig(parsed as SlotConfig, machine)
       }
     } catch {
       // Clear invalid slotConfig
     }
     localStorage.removeItem("slotConfig")
   }
-  return { ...DEFAULT_SLOT_CONFIG }
+  return machine === "APPLE2GS" ? { ...DEFAULT_SLOT_CONFIG_GS } : { ...DEFAULT_SLOT_CONFIG }
 }
 
 export const setPreferenceSlotConfig = (

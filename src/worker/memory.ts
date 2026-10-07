@@ -214,10 +214,7 @@ export const memGet24 = (address: number): number => {
         if (bank >= 0xFE) {
             return gsSystemROM[((bank & 1) << 16) | offset];
         }
-        if ((bank === 0xE0 || bank === 0xE1) && offset >= 0xD000) {
-            if (!SWITCHES.BSRREADRAM.isSet) return gsSystemROM[0x10000 + offset];
-        }
-        if (bank === 0x00 || bank === 0x01) {
+        if (bank === 0x00 || bank === 0x01 || bank === 0xE0 || bank === 0xE1) {
             if (offset >= 0xD000 && !SWITCHES.BSRREADRAM.isSet) {
                 return gsSystemROM[0x10000 + offset];
             }

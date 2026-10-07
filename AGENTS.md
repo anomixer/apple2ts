@@ -181,6 +181,35 @@ with the animated barber pole scan bar, identical to real Apple IIgs hardware!
 - In `src/ui/inputparams.ts`, dispatched `passSetSlotConfig(nextSlotConfig)` to ensure custom slot parameters from URL query strings are properly sent to the worker.
 **Result**: The scan bar properly renders the authentic MouseText Open Apple (`0xE080`) and Solid Apple (`0xE081`) glyphs and horizontal line characters (`0xE08C`) against the blue screen, exactly matching Apple IIgs ROM 01 hardware. Verified with `copycanvas.test.ts`.
 
+### 18. Apple IIgs Slot Management & Mockingboard Compatibility — RESOLVED
+**Issue**: When Apple IIgs (`APPLE2GS`) was selected:
+1. Slot Manager retained Apple IIe cards (such as Aux 64KB in Slot 3, Mouse card in Slot 5, etc.), which violate Apple IIgs hardware architecture.
+2. In `configureMachine()`, slot configuration had an early return for IIgs that skipped Slot 4 Mockingboard and Slot 7 SmartPort hard drive setup.
+3. 65816 CPU was not running peripheral device `cycleCountCallbacks`, preventing Mockingboard 6522 VIA timers from decrementing, and was not sampling peripheral hardware interrupts (`s6502.flagIRQ !== 0`).
+**Fix**:
+1. **Isolated Slot Definitions & Sanitization**:
+   - Created `src/common/slot_options.ts` defining allowed cards per machine:
+     - Slot 1: Built-in Printer (`none`) or `ssc`
+     - Slot 2: Built-in Modem (`none`)
+     - Slot 3: Built-in 80 Columns / Video (Strictly `none`; NO aux/RamWorks/VidHD cards)
+     - Slot 4: Built-in Mouse (`none`) or `mockingboard`
+     - Slot 5: Built-in 3.5" SmartPort Drive (Strictly `none`; NO Apple II mouse card)
+     - Slot 6: Built-in 5.25" Drive (`none`) or `disk2`
+     - Slot 7: Hard Drive / SmartPort (`none` or `smartport`)
+   - Added `DEFAULT_SLOT_CONFIG_GS` in `utility.ts` with slots 1-6 set to `none` and slot 7 to `smartport`.
+   - Added `sanitizeSlotConfig` to strip incompatible cards when loading or switching machine profiles.
+2. **UI & Storage Integration**:
+   - Updated `src/ui/devices/machineconfig.tsx`, `src/ui/localstorage.ts`, and `src/ui/controls/linkbuilder.tsx` so selecting Apple IIgs resets slots to `DEFAULT_SLOT_CONFIG_GS`.
+3. **Motherboard & Hardware Wiring**:
+   - In `src/worker/motherboard.ts` `configureMachine()`:
+     - Configured Slot 1 (`ssc`), Slot 4 (`mockingboard`), Slot 6 (`disk2`), and Slot 7 (`smartport`).
+     - Dynamically synchronized `$C02D` (`SLTROMSEL`) with active expansion cards.
+     - Kept internal aux RAM enabled (`setAuxCardEnabled(true)`) while disabling slot 3 card ROMs.
+   - In execution loop: invoked `processCycleCountCallbacks()` every instruction in IIgs mode to advance VIA timers.
+   - In `src/worker/cpu65816.ts`: sampled `s6502.flagIRQ !== 0` to trigger native hardware IRQs and wake `WAI`.
+   - In `src/worker/memory.ts`: extended `memGet24` slot and language card ROM mapping to Banks E0 and E1.
+**Result**: Apple IIgs slots strictly conform to hardware specs. Mockingboard in Slot 4 correctly ticks 6522 VIA timers and triggers IRQs. Verified with `gs_slots_mockingboard.test.ts`.
+
 ## Debugging Techniques Used
 - **Instruction Tracing**: Added a circular buffer in `motherboard.ts` to trace instructions when debugging specific loops.
 - **ROM Inspection**: Disassembled portions of `gsROM` via Node.js helper scripts to identify hardware polling loops (such as `SELIWM` and diagnostic entry points).

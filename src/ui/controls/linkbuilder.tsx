@@ -6,7 +6,7 @@ import { Droplist } from "../panels/droplist"
 import { diskImages } from "../devices/disk/diskimages"
 import CheckBox from "../panels/checkbox"
 import { getLowercaseMode, getColorMode, getCrtDistortion, getGhosting, getShowScanlines, getTheme, isEmbedMode, isGameMode } from "../ui_settings"
-import { DEFAULT_SLOT_CONFIG, UI_THEMES } from "../../common/utility"
+import { DEFAULT_SLOT_CONFIG, DEFAULT_SLOT_CONFIG_GS, UI_THEMES } from "../../common/utility"
 import { isAudioEnabled } from "../devices/audio/speaker"
 import { handleGetIsDebugging, handleGetMachineName, handleGetMemSize, handleGetSpeedMode, handleGetSlotConfig } from "../main2worker"
 import { useTranslation } from "../../i18n/useTranslation"
@@ -93,10 +93,12 @@ const LinkBuilder = () => {
   const machineValues = [
     t("linkBuilder.machines.enhanced"),
     t("linkBuilder.machines.unenhanced"),
-    t("linkBuilder.machines.apple2p")
+    t("linkBuilder.machines.apple2p"),
+    "Apple IIgs"
   ]
   // Derive MACHINE_NAME from local machine state so slot options stay in sync
-  const lbMachineName: MACHINE_NAME = machine === machineValues[2] ? "APPLE2P"
+  const lbMachineName: MACHINE_NAME = machine === machineValues[3] ? "APPLE2GS"
+    : machine === machineValues[2] ? "APPLE2P"
     : machine === machineValues[1] ? "APPLE2EU" : "APPLE2EE"
 
   const ramdiskValues = [
@@ -200,7 +202,8 @@ const LinkBuilder = () => {
     let hasVera = false
     SLOT_NUMBERS.forEach(slot => {
       const card = slotConfig[slot]
-      if (card !== DEFAULT_SLOT_CONFIG[slot]) {
+      const defaultCard = lbMachineName === "APPLE2GS" ? DEFAULT_SLOT_CONFIG_GS[slot] : DEFAULT_SLOT_CONFIG[slot]
+      if (card !== defaultCard) {
         params.push(`slot${slot}=${card}`)
         if (card === "vera") hasVera = true
       }
@@ -343,15 +346,19 @@ const LinkBuilder = () => {
                   values={machineValues}
                   setValue={(val: string) => {
                     setMachine(val)
-                    // Adjust slot 3 when crossing between II+ and IIe families
-                    const newIsIIp = val === machineValues[2]
-                    const wasIIp = lbMachineName === "APPLE2P"
-                    if (newIsIIp !== wasIIp) {
-                      setSlotConfig(prev => ({
-                        ...prev,
-                        3: newIsIIp ? "videoterm" : "aux"
-                      }))
-                      if (!newIsIIp) setRamdisk(ramdiskValues[0]) // reset to 64KB default
+                    if (val === "Apple IIgs") {
+                      setSlotConfig({ ...DEFAULT_SLOT_CONFIG_GS })
+                    } else {
+                      // Adjust slot 3 when crossing between II+ and IIe families
+                      const newIsIIp = val === machineValues[2]
+                      const wasIIp = lbMachineName === "APPLE2P"
+                      if (newIsIIp !== wasIIp) {
+                        setSlotConfig(prev => ({
+                          ...prev,
+                          3: newIsIIp ? "videoterm" : "aux"
+                        }))
+                        if (!newIsIIp) setRamdisk(ramdiskValues[0]) // reset to 64KB default
+                      }
                     }
                   }} />
 
