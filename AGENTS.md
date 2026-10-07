@@ -243,6 +243,21 @@ with the animated barber pole scan bar, identical to real Apple IIgs hardware!
 - Corrected `getPreferenceMachineName` in `src/ui/localstorage.ts` and imported `passSetSlotConfig` in `src/ui/inputparams.ts`.
 **Result**: A2DeskTop cleanly enters 80-column firmware, relocates into Aux memory, displays `Starting Apple IIgs DeskTop...`, transitions into Double Hi-Res graphics (`TEXT=false`, `HIRES=true`, `DHIRES=true`, `80COL=true`), and begins its event loop. Verified with `gs_trace_boot.test.ts`.
 
+### 22. Mount Disk & Reboot Crash (Bank E1 $E115FE & RTC State Machine on Reboot) — RESOLVED
+**Issue**: Mounting `A2DeskTop-1.5.po` in Slot 7 Drive 1 while the emulator was running at "Check startup device!" and then rebooting crashed into the "Sea of FF" at `E1:1688`.
+**Root causes**:
+1. **`megaIIAux` Power-on / Reset Fill Value**:
+   - In `src/worker/memory.ts`, `memoryReset()` filled `megaIIAux` (Bank E1) with `0xFF`.
+   - The Apple IIgs ROM routine at `FF:01F1` executes `LDA $E115FE; BPL $0205; JSL $E11688`.
+   - When `$E115FE` held `0xFFFF` (negative bit 15 set), the ROM bypassed normal initialization at `$0205` and jumped directly to `$E11688`. Since `$E11688` was uninitialized `0xFF`, the CPU crashed into an infinite loop of opcodes `0xFF`!
+   - On real hardware (and in `gssquared`), Bank E1 Aux RAM powers up with `0x00` / pattern `0xCC 0xCC 0x00 0x00`, where `$15FE` has bit 15 = 0.
+2. **Missing RTC / BRAM State Machine Reset (`IIgsClock.reset`)**:
+   - `iigsClock` sits on the serial bus ($C033/$C034). If the system was rebooted mid-transaction, subsequent BRAM reads failed framing, causing the ROM's Battery RAM checksum check at `FF:B583` (`CPX $03BC; CMP $03BE`) to fail with `SEC; RTL`, branching to the fatal error handler (`JML $00FA56`).
+**Fix**:
+1. Changed `megaIIAux.fill(0xFF)` to `megaIIAux.fill(0x00)` in `memoryReset()` and `iigsInitInterrupts()`.
+2. Implemented `reset(coldBoot = false)` on `IIgsClock` in `src/worker/iigs_clock.ts` to reset transaction state, control register, and restore cold boot signature.
+3. Added `src/worker/gs_desktop15_boot.test.ts` verifying mounting `c:\dev\emu\ap2\A2DeskTop-1.5.po` in Slot 7 Drive 1 after initial boot and rebooting into A2DeskTop Double Hi-Res graphics.
+
 ## Debugging Techniques Used
 - **Instruction Tracing**: Added a circular buffer in `motherboard.ts` to trace instructions when debugging specific loops.
 - **ROM Inspection**: Disassembled portions of `gsROM` via Node.js helper scripts to identify hardware polling loops (such as `SELIWM` and diagnostic entry points).

@@ -383,6 +383,9 @@ export const iigsInitInterrupts = () => {
     memSet24(0x00700c, 0xc8);
     memSet24(0x007008, 0x79);
     memSet24(0x00700a, 0xff);
+    megaIIAux.fill(0x00);
+    iigsClock.reset(true);
+
     // E1:$0010-$0013 = JML $FF79C8 (the ROM's minimal interrupt manager: it
     // reads $C023 / $7006 and RTIs, acknowledging the IRQ without re-entering)
     memSet24(0xE10010, 0x5c);
@@ -699,7 +702,7 @@ export const memoryReset = () => {
   memory.fill(0xFF, 0, 0x10000)
   // Everything past here is RamWorks memory
   memory.fill(0xFF, BaseMachineMemory)
-  megaIIAux.fill(0xFF)
+  megaIIAux.fill(0x00)
 
   // Real Apple II RAM does not power up as a uniform 0xFF: it settles into
   // a repeating 0xFF,0xFF,0x00,0x00 byte pattern (see js/util.ts's

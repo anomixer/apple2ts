@@ -53,6 +53,20 @@ class IIgsClock {
         this.updateSeconds();
     }
 
+    reset(coldBoot = false): void {
+        this.state = RTC_State.AWAIT_COMMAND;
+        this.ctlRegByte = RTC_CLOCK_ENABLE;
+        this.transactionStepCount = 0;
+        this.commandReg = [0, 0];
+        this.dataReg = 0;
+        if (coldBoot) {
+            for (let i = 0; i < 256; i++) this.bram[i] = i & 0xFF;
+            const sig = [0xcb, 0xd2, 0xc7, 0xc2, 0x10, 0xa2, 0xe8, 0x03];
+            for (let i = 0; i < 8; i++) this.bram[0xb0 + i] = sig[i];
+            this.updateSeconds();
+        }
+    }
+
     // ---- Data / control registers ($C033, $C034) -----------------------
 
     writeData(value: number): void {
