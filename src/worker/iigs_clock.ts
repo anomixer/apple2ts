@@ -1,153 +1,159 @@
 /**
- * iigs_clock.ts - Simple Apple IIgs clock chip emulation
- * 
- * Based on web-a2e by Mike Daley
- * The clock chip has 256 bytes of battery RAM and keeps time since 1904.
+ * iigs_clock.ts - Apple IIgs clock chip (CB serial bus) emulation
+ *
+ * Verbatim port of gssquared's RTC device (src/devices/rtc/RTC.hpp,
+ * rtc_pram.cpp): the clock chip sits on the CB serial bus and exposes
+ * $C033 (data) / $C034 (control). The system ROM's serial driver
+ * (ff:b635/ff:b669 in bank FF) drives command/address/data transactions
+ * over it to read and write the 256-byte battery RAM and the seconds
+ * registers.
+ *
+ * $C034 bits 7-5 (raw value >> 5): bit 2 = start transaction, bit 1 =
+ * read (vs write), bit 0 = clock enable. Reads of $C034 return the
+ * control byte shifted back into bits 7-5; bit 7 doubles as the
+ * "operation in progress" line the driver polls until clear.
  */
 
-// Clock control register bits
-const CONTROL_SELECT = 0x80;       // Chip select
-const CONTROL_TRANSACTION = 0x20;  // Start transaction
-const CONTROL_READ = 0x10;         // Read (vs write)
+// RTC_START_TRANS / RTC_READ_WRITE / RTC_CLOCK_ENABLE (gssquared RTC.hpp)
+const RTC_START_TRANS = 0b100;
+const RTC_READ_WRITE = 0b010;
+const RTC_CLOCK_ENABLE = 0b001;
 
-// Command types
-const RAM_COMMAND_MASK = 0x78;
-const RAM_COMMAND_MATCH = 0x38;
-const CLOCK_MASK = 0x73;
-const CLOCK_MATCH = 0x01;
+const UNIX_EPOCH_DELTA = 2082844800; // seconds between 1904 and 1970
 
-enum Step {
-    Command,
-    Address,
-    Data
-}
-
-enum Target {
-    None,
-    BatteryRam,
-    Seconds
+enum RTC_State {
+    AWAIT_COMMAND,
+    AWAIT_COMMAND2,
+    AWAIT_DATA,
 }
 
 class IIgsClock {
-    private batteryRam = new Uint8Array(256);
-    private seconds = 0;
-    private data = 0;
-    private control = 0;
-    private step = Step.Command;
-    private target = Target.None;
-    private address = 0;
+    private bram = new Uint8Array(256);
+    private seconds = 0; // seconds since 1904, kept in seconds_bytes
+    private lastSeconds = 0;
+    private commandReg: [number, number] = [0, 0];
+    private dataReg = 0;
+    private ctlRegByte = RTC_CLOCK_ENABLE;
+    private transactionStepCount = 0;
+    private state = RTC_State.AWAIT_COMMAND;
 
     constructor() {
-        // Initialize with current time (seconds since Jan 1, 1904)
-        const SECONDS_1904_TO_1970 = 2082844800;
-        this.seconds = Math.floor(Date.now() / 1000) + SECONDS_1904_TO_1970;
-        
-        // Initialize battery RAM with safe defaults
-        this.batteryRam[0x36] = 0x80; // Default fast speed
+        // gssquared RTC(): init_default_bram() then finish_construct().
+        // init_default_bram fills bram[i] = i; we then override entries
+        // 0xB0-0xB7 with the CB version signature block a real ROM3 IIgs
+        // holds in battery RAM. The ROM's CB serial driver (ff:b540) reads
+        // these over the serial bus (entry Y -> byte1=0x38|(Y>>5),
+        // byte2=0x40|((Y&0x1F)<<2) -> bram[((byte1&7)<<5)|((byte2&0x7C)>>2)])
+        // and copies them to $0310-$0317, which the signature check at
+        // ff:71a0 then compares against $FF7350-$FF7357 = cb d2 c7 c2 10
+        // a2 e8 03. Without this seed the check fails into "System Bad".
+        for (let i = 0; i < 256; i++) this.bram[i] = i & 0xFF;
+        const sig = [0xcb, 0xd2, 0xc7, 0xc2, 0x10, 0xa2, 0xe8, 0x03];
+        for (let i = 0; i < 8; i++) this.bram[0xb0 + i] = sig[i];
+        this.updateSeconds();
+    }
+
+    // ---- Data / control registers ($C033, $C034) -----------------------
+
+    writeData(value: number): void {
+        this.dataReg = value & 0xFF;
     }
 
     readData(): number {
-        return this.data;
-    }
-
-    writeData(value: number): void {
-        this.data = value & 0xFF;
-    }
-
-    readControl(): number {
-        // Bit 7 (0x80) = Operation in Progress (always 0 = operation complete)
-        // Bit 5 (0x20) = Transaction bit (always 0 = transaction complete)
-        // Return control register with these bits always clear
-        return this.control & ~(CONTROL_SELECT | CONTROL_TRANSACTION);
+        return this.dataReg;
     }
 
     writeControl(value: number): void {
-        this.control = value & 0xFF;
-
-        // Dropping select line ends transaction
-        if ((value & CONTROL_SELECT) === 0) {
-            this.step = Step.Command;
-            this.target = Target.None;
-            return;
-        }
-
-        if ((value & CONTROL_TRANSACTION) === 0) return;
-
-        const toChip = (value & CONTROL_READ) === 0;
-        
-        switch (this.step) {
-            case Step.Command:
-                if (toChip) this.takeCommand(this.data);
-                break;
-            case Step.Address:
-                if (toChip) this.takeAddress(this.data);
-                break;
-            case Step.Data:
-                this.transferData(toChip);
-                break;
-        }
-
-        // Clear transaction bit (operation complete)
-        this.control &= ~CONTROL_TRANSACTION;
+        this.writeControlReg((value >> 5) & 0b111);
     }
 
-    private takeCommand(command: number): void {
-        // Battery RAM access (3-step)
-        if ((command & RAM_COMMAND_MASK) === RAM_COMMAND_MATCH) {
-            this.address = (command & 0x07) << 5;
-            this.target = Target.BatteryRam;
-            this.step = Step.Address;
-            return;
-        }
-
-        // Clock register access (seconds since 1904)
-        if ((command & CLOCK_MASK) === CLOCK_MATCH) {
-            this.address = (command >> 2) & 0x03;
-            this.target = Target.Seconds;
-            this.step = Step.Data;
-            return;
-        }
-
-        // Unknown register - accept data but do nothing
-        this.target = Target.None;
-        this.step = Step.Data;
+    readControl(): number {
+        this.tickClock();
+        // rtc_pram read_C034: (rtcval << 5)
+        return (this.ctlRegByte & 0xFF) << 5;
     }
 
-    private takeAddress(command: number): void {
-        this.address = this.address | ((command >> 2) & 0x1F);
-        this.step = Step.Data;
-    }
+    // ---- gssquared RTC internals (verbatim logic) ----------------------
 
-    private transferData(toChip: boolean): void {
-        if (toChip) {
-            // Write to chip
-            switch (this.target) {
-                case Target.BatteryRam:
-                    this.batteryRam[this.address & 0xFF] = this.data;
+    private writeControlReg(cmd: number): void {
+        if (cmd & 0b101) {
+            switch (this.state) {
+                case RTC_State.AWAIT_COMMAND:
+                    this.commandReg[0] = this.dataReg;
+                    this.commandReg[1] = 0;
+                    // Two-byte command: first byte matches 0b0'0111'000
+                    // (mask 0x78, value 0x38) — the 256-byte BRAM form.
+                    if ((this.dataReg & 0x78) === 0x38) {
+                        this.state = RTC_State.AWAIT_COMMAND2;
+                    } else {
+                        this.state = RTC_State.AWAIT_DATA;
+                    }
                     break;
-                case Target.Seconds:
-                    const shift = (this.address & 0x03) * 8;
-                    this.seconds &= ~(0xFF << shift);
-                    this.seconds |= (this.data << shift);
+
+                case RTC_State.AWAIT_COMMAND2:
+                    this.commandReg[1] = this.dataReg;
+                    this.state = RTC_State.AWAIT_DATA;
+                    break;
+
+                case RTC_State.AWAIT_DATA:
+                    this.executeCommand();
+                    this.state = RTC_State.AWAIT_COMMAND;
                     break;
             }
-        } else {
-            // Read from chip
-            switch (this.target) {
-                case Target.BatteryRam:
-                    this.data = this.batteryRam[this.address & 0xFF];
-                    break;
-                case Target.Seconds:
-                    this.data = (this.seconds >> ((this.address & 0x03) * 8)) & 0xFF;
-                    break;
-                case Target.None:
-                    this.data = 0x00;
-                    break;
+            this.transactionStepCount = 2;
+        }
+        this.ctlRegByte = cmd;
+    }
+
+    private executeCommand(): void {
+        const cmd = this.commandReg[0];
+        this.updateSeconds();
+
+        // seconds registers: lo / next-to-lo / next-to-hi / hi
+        if ((cmd & 0b01111111) === 0b00000001) {
+            if (cmd & 0b10000000) this.dataReg = (this.seconds >>> 0) & 0xFF;
+            else this.seconds = (this.seconds & ~0xFF) | this.dataReg;
+        } else if ((cmd & 0b01111111) === 0b00000101) {
+            if (cmd & 0b10000000) this.dataReg = (this.seconds >>> 8) & 0xFF;
+            else this.seconds = (this.seconds & ~0xFF00) | ((this.dataReg & 0xFF) << 8);
+        } else if ((cmd & 0b01111111) === 0b00001001) {
+            if (cmd & 0b10000000) this.dataReg = (this.seconds >>> 16) & 0xFF;
+            else this.seconds = (this.seconds & ~0xFF0000) | ((this.dataReg & 0xFF) << 16);
+        } else if ((cmd & 0b01111111) === 0b00001101) {
+            if (cmd & 0b10000000) this.dataReg = (this.seconds >>> 24) & 0xFF;
+            else this.seconds = (this.seconds & ~0xFF000000) | ((this.dataReg & 0xFF) << 24);
+        } else if ((cmd & 0x73) === 0x41) {
+            // 4 RAM addresses - z010ab01  (mask 0b0'111'00'11 = 0x73)
+            const addr = (cmd & 0x30) >> 2; // (cmd & 0b0'000'11'00) >> 2
+            if (cmd & 0b10000000) this.dataReg = this.bram[addr & 0xFF];
+            else this.bram[addr & 0xFF] = this.dataReg;
+        } else if ((cmd & 0x43) === 0x41) {
+            // 16 RAM addresses - z1abcd01  (mask 0b0'1'0000'11 = 0x43)
+            const addr = (cmd & 0x3C) >> 2; // (cmd & 0b0'0'1111'00) >> 2
+            if (cmd & 0b10000000) this.dataReg = this.bram[addr & 0xFF];
+            else this.bram[addr & 0xFF] = this.dataReg;
+        } else if ((cmd & 0x78) === 0x38) {
+            // two byte command - 256-byte BRAM access (0b0'0111'000 = 0x38)
+            const addr = ((cmd & 0b111) << 5) | ((this.commandReg[1] & 0b01111100) >> 2);
+            if (cmd & 0b10000000) this.dataReg = this.bram[addr & 0xFF];
+            else this.bram[addr & 0xFF] = this.dataReg;
+        }
+        // else: unknown command - data_reg untouched
+    }
+
+    private tickClock(): void {
+        // ctl_reg.clock_enable_assert && ctl_reg.start_transaction
+        if ((this.ctlRegByte & RTC_CLOCK_ENABLE) && (this.ctlRegByte & RTC_START_TRANS)) {
+            this.transactionStepCount--;
+            if (this.transactionStepCount === 0) {
+                this.ctlRegByte &= ~RTC_START_TRANS;
             }
         }
-        
-        this.step = Step.Command;
-        this.target = Target.None;
+    }
+
+    private updateSeconds(): void {
+        const now = Math.floor(Date.now() / 1000);
+        this.seconds = (now + UNIX_EPOCH_DELTA) >>> 0;
     }
 }
 

@@ -15,6 +15,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons"
 import { OneDriveCloudDrive } from "./onedriveclouddrive"
 import { GoogleDrive } from "./googledrive"
+import { setDiskImageToLocalStorage } from "../../localstorage"
 import React from "react"
 import { CLOUD_SYNC, crc32, FILE_SUFFIXES_DISK, uint32toBytes } from "../../../common/utility"
 import PopupMenu from "../../controls/popupmenu"
@@ -129,6 +130,7 @@ const DiskDrive = (props: DiskDriveProps) => {
 
   const ejectDisk = (index: number) => {
     handleSetDiskData(index, new Uint8Array(), "", null, null, -1)
+    setDiskImageToLocalStorage(index, null)
   }
 
   const getDriveFileName = () => {

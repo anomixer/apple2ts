@@ -126,7 +126,29 @@ iigsRegisters[0x36] = 0x80; // Default fast speed
 let vblPending = false;
 let quarterSecondPending = false;
 export const iigsSignalVbl = () => { vblPending = true; };
+export const iigsGetVblPending = () => vblPending;
 export const iigsClearInterrupts = () => { vblPending = false; quarterSecondPending = false; };
+
+export const iigsInterruptPending = (): boolean => {
+  if (iigsADB.interruptPending()) return true;
+  if (vblPending && (iigsRegisters[0x41] & 0x08)) return true;
+  if (quarterSecondPending && (iigsRegisters[0x41] & 0x10)) return true;
+  return false;
+};
+
+// IWM (Integrated Woz Machine) state for Apple IIgs ($C0E0-$C0EF)
+let iwmQ6 = false;
+let iwmQ7 = false;
+let iwmMotorOn = false;
+let iwmDriveSelect = 0;
+let iwmMode = 0;
+export const iigsResetIwm = () => {
+  iwmQ6 = false;
+  iwmQ7 = false;
+  iwmMotorOn = false;
+  iwmDriveSelect = 0;
+  iwmMode = 0;
+};
 
 export const doSetRom = (machineName: MACHINE_NAME) => {
   currentMachineName = machineName
@@ -149,7 +171,9 @@ export const doSetRom = (machineName: MACHINE_NAME) => {
       console.log(`[DEBUG] gsROM (Mega II) length: ${gsROM.length}`);
       console.log(`[DEBUG] gsSystemROM length: ${gsSystemROM.length}`);
       console.log(`[DEBUG] Reset vector at FF:FFFC = ${gsSystemROM[0x1FFFC]?.toString(16).padStart(2,'0')} ${gsSystemROM[0x1FFFD]?.toString(16).padStart(2,'0')}`);
-      return // Skip standard Apple IIe ROM mapping setup
+      memory.set(gsSystemROM.subarray(0x1C000, 0x20000), ROMmemoryStart);
+      updateAddressTables();
+      return;
   }
   // For now, comment out the use of the Extended Debugging Monitor
   // It's unclear what the benefit is, especially since we have a separate
@@ -337,8 +361,10 @@ export const iigsInitInterrupts = () => {
     memSet24(0xE10011, 0xc8);
     memSet24(0xE10012, 0x79);
     memSet24(0xE10013, 0xff);
-    // INTEN = $08: enable the VBL interrupt source
-    iigsRegisters[0x41] = 0x08;
+    // Reset INTEN ($C041) to 0 at power-on / cold boot (interrupts disabled)
+    iigsRegisters[0x41] = 0x00;
+    iigsClearInterrupts();
+    iigsResetIwm();
 }
 
 
@@ -772,6 +798,53 @@ const memGetSoftSwitch = (addr: number): number => {
       }
   }
 
+  // Apple IIgs built-in IWM ($C0E0-$C0EF)
+  if (currentMachineName === "APPLE2GS" && addr >= 0xC0E0 && addr <= 0xC0EF) {
+    const reg = addr & 0x0F;
+    switch (reg) {
+      case 0x08: iwmMotorOn = false; break;
+      case 0x09: iwmMotorOn = true; break;
+      case 0x0A: iwmDriveSelect = 0; break;
+      case 0x0B: iwmDriveSelect = 1; break;
+      case 0x0C: iwmQ6 = false; break;
+      case 0x0D: iwmQ6 = true; break;
+      case 0x0E: iwmQ7 = false; break;
+      case 0x0F: iwmQ7 = true; break;
+    }
+    if (!iwmQ7) {
+      if (iwmQ6) {
+        // Read status register: bits 0-4 mode, bit 5 motor/enable
+        let status = iwmMode & 0x1F;
+        if (iwmMotorOn) status |= 0x20;
+        return status;
+      } else {
+        // Data register
+        checkSlotIO(addr);
+        return memory[ROMmemoryStart + addr - 0xC000];
+      }
+    } else {
+      if (iwmQ6) {
+        return 0;
+      } else {
+        // Handshake register: bit 7 (ready) | bit 6 (no underrun)
+        return 0xC0;
+      }
+    }
+  }
+
+  // Apple IIgs STATE register ($C068)
+  if (currentMachineName === "APPLE2GS" && addr === 0xC068) {
+    let val = 0;
+    if (SWITCHES.ALTZP.isSet) val |= 0x80;
+    if (SWITCHES.PAGE2.isSet) val |= 0x40;
+    if (SWITCHES.AUXRAMREAD.isSet) val |= 0x20;
+    if (SWITCHES.AUXRAMWRITE.isSet) val |= 0x10;
+    if (!SWITCHES.BSRREADRAM.isSet) val |= 0x08; // RDROM
+    if (SWITCHES.BSRBANK2.isSet) val |= 0x04;
+    if (SWITCHES.INTCXROM.isSet) val |= 0x01;
+    return val;
+  }
+
   if (addr >= 0xC090) {
     checkSlotIO(addr)
   } else {
@@ -909,6 +982,7 @@ const memSetSoftSwitch = (addr: number, value: number) => {
                 // (web-a2e: vblPending_ = false; quarterSecondPending_ = false)
                 vblPending = false;
                 quarterSecondPending = false;
+                (globalThis as any).__c047Writes = ((globalThis as any).__c047Writes || 0) + 1;
                 iigsRegisters[0x47] = value;
                 break;
 
@@ -919,6 +993,28 @@ const memSetSoftSwitch = (addr: number, value: number) => {
         }
         return;
     }
+
+    // Apple IIgs built-in IWM ($C0E0-$C0EF)
+    if (currentMachineName === "APPLE2GS" && addr >= 0xC0E0 && addr <= 0xC0EF) {
+        const reg = addr & 0x0F;
+        switch (reg) {
+            case 0x08: iwmMotorOn = false; break;
+            case 0x09: iwmMotorOn = true; break;
+            case 0x0A: iwmDriveSelect = 0; break;
+            case 0x0B: iwmDriveSelect = 1; break;
+            case 0x0C: iwmQ6 = false; break;
+            case 0x0D: iwmQ6 = true; break;
+            case 0x0E: iwmQ7 = false; break;
+            case 0x0F: iwmQ7 = true; break;
+        }
+        if (iwmQ6 && iwmQ7 && (reg & 1)) {
+            if (!iwmMotorOn) {
+                iwmMode = value & 0x1F;
+            }
+        }
+        checkSlotIO(addr, value);
+        return;
+    }
   if (addr === 0xC058 && videoTerm.enabled) {
     // Videx Soft Video Switch: AN0 off -> switch to 40-col display
     videoTerm.active = false
@@ -926,6 +1022,26 @@ const memSetSoftSwitch = (addr: number, value: number) => {
     // Videx Soft Video Switch: AN0 on -> switch to Videx 80-col display
     videoTerm.active = true
   }
+  // Apple IIgs STATE register ($C068)
+  if (currentMachineName === "APPLE2GS" && addr === 0xC068) {
+    SWITCHES.ALTZP.isSet = (value & 0x80) !== 0;
+    SWITCHES.PAGE2.isSet = (value & 0x40) !== 0;
+    SWITCHES.AUXRAMREAD.isSet = (value & 0x20) !== 0;
+    SWITCHES.AUXRAMWRITE.isSet = (value & 0x10) !== 0;
+    SWITCHES.INTCXROM.isSet = (value & 0x01) !== 0;
+
+    const bank2 = (value & 0x04) !== 0;
+    const readRom = (value & 0x08) !== 0;
+    const writeEnabled = SWITCHES.BSR_WRITE.isSet;
+    const bankBase = bank2 ? 0xC080 : 0xC088;
+    const select = readRom ? (writeEnabled ? 0x01 : 0x02)
+                           : (writeEnabled ? 0x03 : 0x00);
+    checkSoftSwitches(bankBase + select, false, (globalThis as any).s6502?.cycleCount ?? 0);
+    updateAddressTables();
+    iigsRegisters[0x68] = value;
+    return;
+  }
+
   // these are write-only soft switches that don't work like the others, since
   // we need the full byte of data being written
   if (addr === 0xC071 || addr === 0xC073) {

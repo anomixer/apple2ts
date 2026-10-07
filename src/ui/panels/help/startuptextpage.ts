@@ -33,6 +33,7 @@ ${i18n.t("startup.copyright", { year })}`
   case "APPLE2P": mode = "][+"; break
   case "APPLE2EU": mode = "][e unenhanced"; break
   case "APPLE2EE": mode = "//e enhanced"; break
+  case "APPLE2GS": mode = "IIgs"; break
   default:
   }
 

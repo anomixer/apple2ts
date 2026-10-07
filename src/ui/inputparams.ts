@@ -115,6 +115,8 @@ export const handleInputParams = (paramString = "") => {
       passSetMachineName("APPLE2P")
     } else if (machineName === "APPLE2EU") {
       passSetMachineName("APPLE2EU")
+    } else if (machineName === "APPLE2GS") {
+      passSetMachineName("APPLE2GS")
     } else {
       passSetMachineName("APPLE2EE")
     }
@@ -323,6 +325,11 @@ export const handleInputParams = (paramString = "") => {
         }
       }
     }, 100)
+  }
+
+  const bootParam = params.get("boot")
+  if (bootParam === "true" || bootParam === "1") {
+    passSetRunMode(RUN_MODE.NEED_BOOT)
   }
 
   return hasBasicProgram

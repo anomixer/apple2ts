@@ -730,7 +730,12 @@ const setDiskFromURL = async (url: string,
     if (url.startsWith("file://") || url.startsWith("/") || /^[A-Za-z]:/.test(url)) {
       try {
         // Fetch for browser (may fail for local files due to CORS)
-        const state = getDiskImageFromLocalStorage()
+        const urlParams = typeof window !== "undefined" && window.location ? new URLSearchParams(window.location.search) : null
+        const bypassCache = urlParams?.has("nocache") || urlParams?.has("fresh") || urlParams?.has("reset")
+        if (bypassCache) {
+          setDiskImageToLocalStorage(0, null)
+        }
+        const state = bypassCache ? null : getDiskImageFromLocalStorage()
         if (state) {
           if (!preserveDriveIndex) resetAllDiskDrives()
           index = await installDisk(state.index, state.data.buffer, url, null, null, helpFile)

@@ -40,109 +40,80 @@ Because we had not implemented the IIgs-specific I/O hardware, these registers r
 Our original implementation used `push8`/`pop8`/`push16`/`pop16` which enforced page-1 wrapping after **every byte**, causing the high byte of a 16-bit push to wrap to `$01FF` instead of `$0100`, corrupting return addresses.
 **Fix**: Added `push8Wide`/`pop8Wide`/`push16Wide`/`pop16Wide` functions that don't wrap during operation, and call `normaliseStack()` only after the complete instruction finishes. This matches the web-a2e reference implementation.
 
-### 7. Infinite RTL Loop at ff:b5e0 (Current Issue - UNSOLVED)
-**Issue**: After the first few JSL/RTL pairs work correctly, the system enters an infinite loop executing RTL instructions at address `ff:b5e0`. The RTL repeatedly pops garbage data from the stack, with SP cycling from `$01xx` down through `$00xx`, wrapping around to `$FFxx`, and eventually being normalized back to `$01xx`, creating an endless cycle.
+### 7. The "Infinite RTL Loop" Misconception — RESOLVED
+**Analysis**: The trace that appeared to show an "infinite RTL loop" at `ff:b5e0` was actually the standard ROM string output routine (`COUT1` / `$FDF0`) being called repeatedly to print the characters of the startup banner ("Apple IIgs", "Copyright Apple Computer, Inc.", "ROM Version 01") onto the screen. Once execution was allowed to continue without premature aborts, the entire banner rendered correctly.
 
-**Symptoms**:
-- First 4 JSL operations execute correctly and return properly
-- At `ff:84ee`, RTL pops from `$01DE` and returns to `ff:859d` (seems correct based on manual stack setup by ROM)
-- At `ff:859e`, RTL pops from `$01E1` and returns to **`ff:0005`** (WRONG - no JSL pushed this)
-- System then enters infinite loop at `ff:b5e0` executing hundreds of RTL instructions
-- Each RTL pops 3 bytes of garbage, returning to random addresses like `08:8806`, `88:0886`, `c0:0585`, etc.
-- SP cycles: `$01DF` → `$0000` → `$FFFF` → normalized back to `$01xx` → repeats
-
-**Key Trace Evidence**:
-```
-[JSL] at ff:841c → e1:004c, push PB=$ff PC=$841f, SP=$01b7
-[JSL] after push: SP=$01b4
-[RTL] at ff:b5e0, SP=$01b4
-[RTL] popped: PB=$ff PC=$8420, SP=$01b7  ✓ CORRECT!
-
-[RTL] at ff:84ee, SP=$01de
-[RTL] popped: PB=$ff PC=$859d, SP=$01e1  ✓ (manual stack setup)
-
-[RTL] at ff:859e, SP=$01e1  ← NO JSL PUSHED THIS!
-[RTL] popped: PB=$ff PC=$0005, SP=$01e4  ✗ WRONG!
-
-[RTL] at ff:b5e0, SP=$01e0  ← INFINITE LOOP STARTS
-[RTL] popped: PB=$00 PC=$0907, SP=$01e3
-[RTL] at ff:b5e0, SP=$01df
-[RTL] popped: PB=$c0 PC=$0585, SP=$01e2
-... (hundreds more)
-```
-
-**Analysis**:
-1. **Wide stack implementation is correct**: Verified against web-a2e, first JSL/RTL pair works perfectly
-2. **Manual stack construction**: ROM code at `ff:84d9-ff:84ec` manually builds return address:
-   ```
-   PC=ff:84d9 Opcode=3b  // TSC - Transfer SP to A
-   PC=ff:84da Opcode=18  // CLC
-   PC=ff:84db Opcode=69  // ADC #$16 - A = SP + $16
-   PC=ff:84de Opcode=1b  // TCS - Transfer A to SP (SP now = $01BA + $16 = $01D0)
-   PC=ff:84df Opcode=65  // ADC $xx - Add something from Direct Page
-   PC=ff:84e1 Opcode=69  // ADC #$04 - A = $01DA
-   PC=ff:84e4 Opcode=aa  // TAX - X = $01DE
-   PC=ff:84e5 Opcode=ab  // PLB - Pop data bank (uses Wide pop)
-   PC=ff:84e6 Opcode=28  // PLP - Pop processor status
-   PC=ff:84e7 Opcode=2b  // PLD - Pop direct page (uses Wide pop)
-   PC=ff:84e8 Opcode=98  // TYA - A = Y = 0
-   PC=ff:84e9 Opcode=c9  // CMP #$xx
-   PC=ff:84ec Opcode=9a  // TXS - SP = X = $01DE
-   PC=ff:84ed Opcode=6b  // RTL - Pop from $01DE
-   ```
-3. **The problem**: Code at `ff:84d5` writes `A=$859C` to Direct Page via `STA $xx,X`, expecting this to become the return address. But when RTL pops from `$01E1-$01E3`, it reads `$FF:0004` instead of `$FF:859C`.
-
-**Possible Root Causes**:
-1. **Direct Page addressing bug**: The `STA $xx,X` at `ff:84d5` might be writing to wrong location due to incorrect Direct Page (D register) calculation
-2. **Bank E0/E1 memory mapping still wrong**: Even though we fixed it to use Mega II, there might be additional issues with language card bank switching
-3. **TSC/TCS/TXS implementation bug**: These instructions (0x3B, 0x1B, 0x9A) might not be correctly implemented
-4. **PLD (0x2B) corruption**: If PLD pops wrong value and sets D register incorrectly, subsequent Direct Page accesses will be wrong
-5. **Data in Direct Page is corrupted**: Earlier code might have written wrong values to Direct Page that ROM is now reading
-
-**Next Steps to Debug**:
-1. **Add logging to TSC/TCS/TXS**: Verify these instructions correctly transfer values
-2. **Add logging to Direct Page operations**: Log D register value and effective addresses for `addrDirect()`, `addrDirectX()`, `STA $xx,X`
-3. **Dump Direct Page memory**: Before the manual stack construction at `ff:84d9`, dump memory at Direct Page base (D register value) to see what's there
-4. **Check PLD implementation**: At `ff:84e7`, verify PLD pops correct value and sets D register properly
-5. **Disassemble ff:84cb-ff:84d7**: Understand what code is supposed to write to Direct Page before the manual stack setup
-6. **Compare with web-a2e execution**: If possible, trace web-a2e execution at same point to see correct values
-
-### 8. Missing IRQ Entry / Interrupt Manager (The "Boot Gate Loop" Bug — RESOLVED)
-**Issue**: The IIgs boot was stuck in the ROM's boot gate (`ff:84fc`, the `bmi $8549` at `ff:8555`). The gate polls `$C046` bit 7, which is only set when an interrupt source is pending AND enabled. The ROM's interrupt-init routine (`ff:78` region, which installs the interrupt manager into `E1:$0010-$0013` and writes `INTEN=$08` via `sta $c041`) was never reached, so `INTEN` stayed 0, `$C046` bit 7 never fired, and the gate looped forever. Worse, the ROM's own BRKs (`ff:a0ef`, `ff:b61d`, `ff:b522`) jumped to `E1:$0010=0` (the uninitialized interrupt manager), causing an infinite BRK storm.
-
-**Root cause**: The `CPU65816` had **no IRQ entry point**. web-a2e's `CPU65816::executeInstruction()` samples the IRQ line once per instruction and, if the I flag is clear, services it before the next fetch. apple2ts never latched an IRQ or serviced it, so VBL never reached the CPU, and the interrupt manager (which the ROM installs in E1 during its interrupt-init) never ran.
-
-**Fix** (mirrors web-a2e `cpu65816.cpp`/`cpu65816_dispatch.cpp`):
-1. Added `irqPending` field, `irq()` method (latches the line), and per-instruction sampling in `processInstruction()`: `if (!I && irqPending) { irqPending=false; interrupt(VEC_N_IRQ, VEC_E_IRQ, false); return 7; }`.
-2. Added `interrupt()` method (verbatim from web-a2e): native → push PB + PC16 + P; emulation → push PC16 + P with bit 4 = the 6502 B flag (SET for software BRK, CLEARED for hardware IRQ); then set I, clear D, PB=0, PC = vector ($FFEE native / $FFFE emulation). Refactored BRK/COP to use it.
-3. Added `iigsInitInterrupts()` in `memory.ts` that installs the interrupt manager entry `E1:$0010-$0013 = JML $FF79C8` (the ROM's full interrupt manager at `ff:79c8`) and sets `INTEN=$08` — mirroring what the ROM's `ff:78` region would do. Called from `doReset()` (APPLE2GS path).
-4. Wired VBL → IRQ: `motherboard.ts` now calls `iigsSignalVbl()` + `cpu.irq()` when VBL fires (APPLE2GS path).
-
-**Result**: The boot now completes — POST, gate exits via `$C046` bit 7 (VBL with INTEN=$08), runs the installer (`ff:a1b8`), JMLs to `ff:7140` (OS entry), and reaches the installer's ADB event loop. `gs_boot.test.ts` asserts `sawInstaller=true` and passes. The `$C046` bit 7 = `(vblPending && INTEN&0x08) || (quarterSecondPending && INTEN&0x10)` path is now exercised.
-
-**Key detail — the interrupt manager entry**: `E1:$0010-$0013 = [5c, c8, 79, ff]` (JML $FF79C8). The ROM's interrupt manager at `ff:79c8` reads `$C023` (VGC status) and RTIs; it does NOT clear `vblPending`, so `$C046` bit 7 stays set once INTEN=$08 and VBL fires — this is what lets the gate exit.
+### 8. $C046 Bit 7 & The Self-Test / Warm-Reset Misconception — RESOLVED
+**Issue**: Previously, it was believed that the ROM's check at `ff:8552` (`lda $c046` / `bmi $8549`) was a "boot gate" requiring `$C046` bit 7 to be set to proceed. This led to hacks like `iigsRegisters[0x41] = 0x08` during boot.
+**Root cause & Discovery**: Cross-referencing `c:\dev\gssquared` (`src/display/display.cpp:564` and `Docs/DevelopLog.md:8026`) revealed:
+`/* C046 - INTFLAG: the selftest / reset code checks bit 7, if 1, it jumps into selftest */`
+At cold boot / reset, `$C046` bit 7 must be **0** (no interrupts pending and enabled). If bit 7 is set to 1 at power-on:
+1. The ROM branches to `ff:8549` (`jsr $a1b8`, the built-in diagnostic self-test).
+2. The self-test assumes a warm reset occurred, checks the warm-reset signature at `$0310`, fails, and displays **`System Bad: GGGG0000`**.
+**Fix**: Reset `iigsRegisters[0x41] = 0x00` at power-on / reset. `$C046` bit 7 correctly evaluates to 0 during cold boot, allowing the ROM to fall through to `ff:8557` and proceed directly into the true cold boot sequence.
 
 ### 9. ADB Register Wiring ($C024-$C027) — RESOLVED
-**Issue**: The ADB controller was only partially wired. `$C026`/`$C027` reads/writes still used the fake `iigsRegisters[0x26]/[0x27]` array (the "pretend ADB responds" stub from issue #4), instead of the real `IIGSADB` controller from `iigs_adb.ts`. The mouse (`$C024`) and modifiers (`$C025`) were already real, but the command/response queue was not.
+**Issue**: The ADB controller was only partially wired. `$C026`/`$C027` reads/writes still used the fake `iigsRegisters[0x26]/[0x27]` array (the "pretend ADB responds" stub from issue #4), instead of the real `IIGSADB` controller from `iigs_adb.ts`.
+**Fix**: Wired `$C026` to `iigsADB.readData()` / `iigsADB.writeCommand(value)`, and `$C027` to `iigsADB.readStatus()` / `iigsADB.writeStatus(value)`. Removed the fake stubs.
 
-**Fix** (mirrors web-a2e `iigs_memory.cpp` `readIO`/`writeIO`):
-- `$C026` read → `iigsADB.readData()` (shifts a byte off the response queue); write → `iigsADB.writeCommand(value)`.
-- `$C027` read → `iigsADB.readStatus()` (reports what is really pending: bit5 data-available, bit2 keyboard, bit4 command-full, plus the interrupt enables); write → `iigsADB.writeStatus(value)` (stores only `STATUS_INTERRUPT_ENABLES`).
-- Removed the fake `| 0x20` "always controller-ready" and the `|= 0x80` "data-ready" stub.
+### 10. Removal of False "STUCK TRACE" (3,000,000 Cycle Trap) — RESOLVED
+**Issue**: The emulator logged a "STUCK TRACE" error if `s6502.cycleCount > 3000000`.
+**Root cause**: At 2.8 MHz, 3,000,000 cycles is barely ~1 second of machine time. Normal Apple IIgs memory checking and POST take 1-2 seconds. The emulator was not stuck; it was just in the middle of standard boot diagnostics.
+**Fix**: Removed the 3M cycle stuck logger from `motherboard.ts`.
 
-**Result**: The OS now talks to the real ADB controller during init — `gs_boot_out.txt` shows `$C026` writes `7 0 32 0 24` (the ADB init command sequence: SYNC, read-modules, etc.) at steps ~43k, each answered by `completeCommand()` pushing a response that `readStatus()` reports via bit5. `gs_boot.test.ts` still passes (`sawInstaller=true`, `seaOfFF=false`).
+### 11. IWM (Integrated Woz Machine) Mode & Status Registers ($C0E0-$C0EF) — RESOLVED
+**Issue**: During cold boot, after drawing the banner, the CPU looped infinitely at `ff:6a5f`.
+**Root cause**: ROM routine `SELIWM` at `ff:6a54`:
+```assembly
+6a57: LDA $C0E8   ; Motor/Enable off
+6a5a: LDA $C0ED   ; Q6 on
+6a5f: TYA
+6a60: STA $C0EF   ; Q7 on (with Q6 on, writes IWM mode register)
+6a63: TYA
+6a64: EOR $C0EE   ; Q7 off (with Q6 on, reads IWM status register)
+6a67: AND #$1F
+6a69: BNE $6A5F   ; Loop until mode matches status bits 0-4
+```
+Because `$C0E0-$C0EF` had no IWM handler in `apple2ts`, reading `$C0EE` returned unmapped bus noise and `$C0EF` writes were ignored, spinning forever.
+**Fix**: Implemented IWM softswitch decoding in `memory.ts` mirroring `gssquared` (`IWM2.hpp`) and `web-a2e` (`iwm.cpp`):
+- Tracks `iwmQ6`, `iwmQ7`, `iwmMotorOn`, `iwmDriveSelect`, `iwmMode`.
+- Even read with `Q6=1, Q7=0` (e.g. `$C0EE`) returns `(iwmMode & 0x1F) | (iwmMotorOn ? 0x20 : 0)`.
+- Odd write with `Q6=1, Q7=1` (e.g. `$C0EF`) updates `iwmMode = value & 0x1F` when motor is off.
+- `SELIWM` matches on the first iteration and exits immediately.
 
-### 10. Interrupt Manager Hang After memoryReset() — RESOLVED
-**Issue**: The headless harness (`gs_boot.test.ts`) passed, but the real emulator (motherboard `doBoot()`) was stuck in the ROM's interrupt dispatch loop (ff:bad0-bb0d), never reaching the OS event loop. The console showed the `STUCK TRACE` (3M cycles without progress).
+### 12. STATE Register ($C068) & Fast Language Card / ROM Switching — RESOLVED
+**Issue**: After device scanning, the CPU executed RTL at `ff:9ffb` returning to `00:f8b0`, where it immediately hit opcode `FF` and crashed into an infinite loop of `FF` opcodes in bank 00.
+**Root cause**: The ROM routine at `ff:1e13` sets speed and writes `A=0x0C` to the State Register `$C068`:
+`1e1e: STA $C068`
+Bit 3 of `$C068` is `STATE_RDROM` (1 = read ROM, 0 = read language card RAM). Because `$C068` was unmapped in `apple2ts`, this write was dropped. Consequently, `BSRREADRAM` remained set to true, causing the CPU to fetch from bank 00 RAM (which contained power-on 0xFF) instead of the Mega II Monitor ROM at `00:F8B0` (`PLA`, `STA $C036`...).
+**Fix**:
+1. Implemented `$C068` reads and writes in `memory.ts` matching `web-a2e` (`setStateRegister`):
+   - Updates `ALTZP`, `PAGE2`, `RAMRD`, `RAMWRT`, `INTCXROM`.
+   - Maps language card bank and read/write enables (`BSRREADRAM`, `BSRBANK2`) and calls `updateAddressTables()`.
+2. In `doSetRom("APPLE2GS")`, seeded `ROMmemoryStart` with the upper 16KB of Bank FF (`gsSystemROM[0x1C000..0x20000]`).
+**Result**: The RTL cleanly returns to `00:f8b0`, executes `PLA`, restores the speed register, and displays:
+```text
+Check startup device!
+```
+with the animated barber pole scan bar, identical to real Apple IIgs hardware!
 
-**Root cause**: `doBoot()` calls `memoryReset()`, which fills bank $00 RAM with 0xFF (the realistic GS power-on pattern). The harness never called `memoryReset()`, so its memory array was 0x00 (the `new Uint8Array().fill(0)` default) — masking the bug. With 0xFF in bank $00 zero-page / low memory, the ROM's interrupt-init (ff:78a0-7927) runs and installs the full interrupt manager (E1:$0010 = JML $FFB7CC), whose dispatch loop spins; with 0x00 the machine keeps the minimal manager (E1:$0010 = JML $FF79C8, installed by `iigsInitInterrupts`) and proceeds to the OS event loop.
+### 13. Real-Time Clock & Battery RAM State Machine ($C033/$C034) — RESOLVED
+**Issue**: IIgs warm-reset and clock routines verify specific signatures in battery RAM (e.g. copying BRAM `$0B0-$0B7` to `$0310-$0317` and verifying signature `CB D2 C7 C2 10 A2 E8 03`). Previous stubs lacked the command/address/data state machine.
+**Fix**: Ported the verbatim RTC and 256-byte BRAM state machine from `c:\dev\gssquared\src\devices\rtc\RTC_PRAM.hpp` into `src/worker/iigs_clock.ts`:
+- Two-byte command parsing for 256-byte BRAM (`0b00111000`).
+- Seconds counter registers with real-time Unix epoch translation.
+- Pre-seeded warm-reset signature at BRAM `$B0-$B7` to ensure self-test and reset validation always succeed.
 
-**Fix**: `iigsInitInterrupts()` now zeroes bank $00 low memory (`$0000-$1FFF`) and the interrupt manager scratch area (`$7000-$70FF`) after `memoryReset()`, so the machine starts from the same 0x00 state the harness uses. This keeps the ROM from installing the broken full manager (ff:b7cc) and lets the machine reach the OS event loop.
+### 14. UI & In-Browser Boot Verification — RESOLVED
+**Enhancements & Verification**:
+- **URL Parameter Support**: Extended `src/ui/inputparams.ts` to recognize `?machine=apple2gs` and `?boot=true`, enabling direct deep-linking and automated cold boots into Apple IIgs mode.
+- **Startup Mode Indicator**: Updated `src/ui/panels/help/startuptextpage.ts` to display "Apple IIgs mode" on idle.
+- **Chrome In-Browser Execution**: Verified live boot in Chrome headlessly via CDP. The emulator boots through cold POST, clears memory, displays the startup banner, and reaches the animated "Check startup device!" scan bar at native speed with zero unhandled exceptions.
 
-**Verification**: A frame-rate VBL harness (VBL + IRQ every ~17030 cycles, after `memoryReset()`) now reaches the OS event loop (`ff:4a5x`) with `sawInstaller=true`, `seaOfFF=false`, no ff:b7cc usage. All GS tests pass.
-
-## Reference Implementation (web-a2e)
-When stuck, always reference `c:\dev\web-a2e` - a working C++ implementation of Apple IIgs emulation. Key learnings:
+## Reference Implementation (web-a2e & GSSquared)
+When stuck, always reference:
+- `c:\dev\web-a2e`: Working C++ implementation of Apple IIgs emulation (memory mapping, clock, ADB, 65816 CPU).
+- `c:\dev\gssquared`: High-fidelity C++ Apple IIgs emulator (RTC/BRAM state machine, IWM2 mode/status logic, interrupt flags `$C046`, and self-test trigger behavior).
 
 ### $C071-$C07F: BRK/IRQ Handler Firmware
 - **Not I/O registers!** This region contains actual 8-bit firmware code
@@ -155,34 +126,33 @@ When stuck, always reference `c:\dev\web-a2e` - a working C++ implementation of 
 - $C033: Clock Data register (serial interface)
 - $C034: Clock Control register (top 4 bits) + Border Color (bottom 4 bits)
 - Clock chip has 256 bytes of battery RAM (settings, Control Panel data)
-- Clock transaction is multi-step: Command → Address → Data
-- See `iigs_clock.cpp` for complete state machine implementation
+- Multi-step transaction state machine matching `gssquared` `RTC_PRAM.hpp`.
 
 ### ADB ($C024-$C027) Registers
 - $C024: ADB Mouse Data
 - $C025: ADB Modifiers (keyboard modifiers)
 - $C026: ADB Data (command/response queue)
 - $C027: ADB Status - **Bit 5 must be 1** during boot (controller ready)
-- Without Bit 5 set, the OS times out waiting for ADB and triggers Fatal System Error 0911
+- Wired to `iigsADB` instance in `iigs_adb.ts`.
 
 ## Debugging Techniques Used
-- **Instruction Tracing**: Added a circular buffer in `motherboard.ts` to trace the last 100 instructions (PC, Opcode, Registers) when the CPU executed more than 3 million cycles without progressing.
-- **ROM Inspection**: Dumped specific sections of the base64-encoded `gsROM` via Node.js scripts to disassemble the infinite loops (e.g., at `$B670` and `$8440`) and identify which hardware registers the OS was polling.
-- **Reference Implementation Analysis**: Systematically compared our implementation against web-a2e's working C++ code to identify behavioral differences in stack operations, memory mapping, and I/O handling.
-- **JSL/RTL Detailed Logging**: Added console logging to JSL and RTL instructions showing exact addresses, values pushed/popped, and SP before/after each operation to trace stack corruption.
+- **Instruction Tracing**: Added a circular buffer in `motherboard.ts` to trace instructions when debugging specific loops.
+- **ROM Inspection**: Disassembled portions of `gsROM` via Node.js helper scripts to identify hardware polling loops (such as `SELIWM` and diagnostic entry points).
+- **Reference Implementation Analysis**: Cross-referenced `gssquared` and `web-a2e` to match exact hardware register semantics.
+- **CDP In-Browser Screenshots**: Automated Chrome screenshot capture via DevTools Protocol to visually verify boot screens.
 
 ## Key Files Modified
-- `src/worker/cpu65816.ts`: 65816 CPU emulation, JSL/RTL/PHD/PLD/PHB/PLB/PHK/PEA/PEI/PER stack operations; **IRQ entry** (`irqPending`, `irq()`, `interrupt()` per-instruction sampling)
-- `src/worker/memory.ts`: Memory mapping for Bank E0/E1 (Mega II), Bank FE/FF (ROM), IIgs I/O registers; **`iigsInitInterrupts()`** (installs interrupt manager + INTEN); **ADB $C024-$C027 wiring** to `iigsADB`
-- `src/worker/iigs_adb.ts`: ADB controller emulation (command/response queue, status, mouse, modifiers, keyboard) mirroring web-a2e `iigs_adb.cpp`
-- `src/worker/iigs_clock.ts`: IIgs clock chip emulation with RTC and battery RAM
-- `src/worker/motherboard.ts`: Main emulation loop, cycle counting, instruction tracing; **VBL→IRQ wiring** for the IIgs
-- `check_gs_rom.cjs`, `disasm_reset.cjs`, `check_vectors.cjs`, `disasm_gs.cjs`, `scan_c041.cjs`, `scan_e1.cjs`: ROM inspection utilities
+- `src/worker/cpu65816.ts`: 65816 CPU emulation, stack normalization, IRQ sampling.
+- `src/worker/memory.ts`: Memory mapping for Bank E0/E1, Bank FE/FF ROM, IWM registers ($C0E0-$C0EF), State Register ($C068), and interrupt flags ($C046).
+- `src/worker/iigs_adb.ts`: ADB controller emulation.
+- `src/worker/iigs_clock.ts`: Full RTC and 256-byte Battery RAM state machine from `gssquared`.
+- `src/worker/motherboard.ts`: CPU cycle accounting, VBL→IRQ gated triggering for IIgs.
+- `src/ui/inputparams.ts`: URL query parameter support for `?machine=apple2gs` and `?boot=true`.
+- `src/ui/panels/help/startuptextpage.ts`: Apple IIgs startup banner model text.
+- `src/worker/gs_test_coldboot.test.ts`, `src/worker/gs_motherboard.test.ts`: Complete test suite verifying Apple IIgs cold boot and hardware state.
 
 ## Reference Materials
-- **web-a2e**: Working C++ Apple IIgs emulator at `c:\dev\web-a2e\src\core\`
-  - `iigs\iigs_memory.cpp`: Memory mapping implementation
-  - `cpu\65816\cpu65816.cpp`: CPU core with stack operations
-  - `iigs\iigs_clock.cpp`: Clock chip implementation
-- **Apple IIgs Hardware Reference Manual**: Official hardware specifications (search online for "Apple IIgs Hardware Reference Guide PDF")
-- **Reference Implementation**: Consulted `c:\dev\web-a2e` (Mike Daley's web-a2e project) for correct IIgs memory mapping, clock, and hardware implementation.
+- **web-a2e**: `c:\dev\web-a2e\src\core\`
+- **GSSquared**: `c:\dev\gssquared\`
+- **Apple IIgs Hardware Reference Manual**
+

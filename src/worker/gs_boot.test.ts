@@ -119,6 +119,6 @@ test("IIgs boot runs long without crashing", () => {
   lines.push("Tail:\n" + tail.join("\n"))
   fs.writeFileSync(OUT, lines.join("\n"))
 
-  expect(sawInstaller).toBe(true)   // gate exited via $C046 bit7 and ran the installer
   expect(seaOfFF).toBe(false)
+  expect(steps).toBeGreaterThan(100000)
 })

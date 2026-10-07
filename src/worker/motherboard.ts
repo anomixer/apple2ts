@@ -40,6 +40,7 @@ import { memory, memGet, getTextPage, getHires, memoryReset,
   memSet24,
   gsROM,
   iigsSignalVbl,
+  iigsInterruptPending,
   iigsInitInterrupts} from "./memory"
 import { setButtonState, handleGamepads } from "./devices/joystick"
 import { handleGameSetup } from "./games/game_mappings"
@@ -49,6 +50,7 @@ import { CPU6502Wrapper } from "./cpu6502_wrapper"
 import { CPU65816 } from "./cpu65816"
 
 let cpu: ICPU = new CPU6502Wrapper();
+export const getCPU = (): ICPU => cpu;
 import { enableSerialCard, resetSerial } from "./devices/superserial/serial"
 import { enableMouseCard } from "./devices/mouse"
 import { enablePassportCard, resetPassport } from "./devices/passport/passport"
@@ -1111,15 +1113,6 @@ const doAdvance6502 = () => {
   let cycleTotal = 0
   let currentLine = -1
 
-  if (s6502.cycleCount > 3000000 && !(self as any).didLogStuck) {
-      (self as any).didLogStuck = true;
-      (self as any).debugTraceEnabled = true;
-      setTimeout(() => {
-          (self as any).debugTraceEnabled = false;
-          console.error("STUCK TRACE:", (self as any).traceLog.join("\n"));
-      }, 500);
-  }
-
   for (;;) {
     let cycles = 0
     if (softCard.activeCpu === "Z80") {
@@ -1129,15 +1122,6 @@ const doAdvance6502 = () => {
     } else {
       cycles = cpu.processInstruction(tracing ? updateTrace : null)
       s6502.cycleCount += cycles
-      if ((self as any).debugTraceEnabled) {
-          if (!(self as any).traceLog) (self as any).traceLog = [];
-          const c = cpu as any;
-          if (c && c.PB !== undefined) {
-              const instrStr = `PC=${c.PB.toString(16).padStart(2,'0')}:${c.PC.toString(16).padStart(4,'0')} Op=${(c.opcode || 0).toString(16).padStart(2,'0')} A=${c.A.toString(16)} X=${c.X.toString(16)} Y=${c.Y.toString(16)} P=${c.P.toString(16)}`;
-              (self as any).traceLog.push(instrStr);
-              if ((self as any).traceLog.length > 100) (self as any).traceLog.shift();
-          }
-      }
     }
     if (!checkConditionalInputStop()) advanceKeySequence()
     if (advanceConditionalInputSequence()) {
@@ -1153,10 +1137,12 @@ const doAdvance6502 = () => {
       // so if it's set then vertical blanking needs to be activated.
       if (SWITCHES.VBLINV.isSet) {
         startVBL()
-        // IIgs: VBL is a hardware interrupt — signal it and raise the IRQ line.
+        // IIgs: VBL is a hardware interrupt — signal it and raise the IRQ line if enabled.
         if (machineName === "APPLE2GS") {
           iigsSignalVbl()
-          ;(cpu as any).irq?.()
+          if (iigsInterruptPending()) {
+            ;(cpu as any).irq?.()
+          }
         }
       }
     } else {
