@@ -162,7 +162,7 @@ const processTextPage = (ctx: CanvasRenderingContext2D,
   const isAltCharSet = machineName === "APPLE2P" ? false : handleGetAltCharSet()
   const colorFill = skinForeground ??
     ["#FFFFFF", "#FFFFFF", TEXT_GREEN, TEXT_AMBER, TEXT_WHITE, TEXT_WHITE][colorMode]
-  const hasMouseText = machineName === "APPLE2EE"
+  const hasMouseText = machineName === "APPLE2EE" || machineName === "APPLE2GS"
   const hasLowerCase = (nchars === 80) || (machineName !== "APPLE2P")
   const useApple2PlusMap = (nchars !== 80) && (machineName === "APPLE2P")
   const colors = [loresColors, loresColors, loresGreen, loresAmber, loresWhite][colorMode]
@@ -869,12 +869,14 @@ const processSuperHiRes = (hiddenContext: CanvasRenderingContext2D, colorMode: C
         }
       } else {
         // 640 mode
+        const quarterOffsets = [8, 12, 0, 4]
         for (let x = 0; x < outWidth; x++) {
           const srcX = Math.min(639, Math.floor((x * 640) / outWidth))
           const byteVal = shrData[lineOffset + (srcX >> 2)]
-          const shift = (3 - (srcX & 3)) * 2
+          const pixelInByte = srcX & 3
+          const shift = (3 - pixelInByte) * 2
           const color2Bit = (byteVal >> shift) & 0x03
-          const colorIndex = (srcX % 4) * 4 + color2Bit
+          const colorIndex = quarterOffsets[pixelInByte] + color2Bit
           const c = palIdx | colorIndex
 
           const px = rowOffset + x * 4

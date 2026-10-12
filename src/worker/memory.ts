@@ -3,6 +3,8 @@ import { s6502 } from "./instructions"
 import { romBase64 as romBase64p } from "./roms/rom_2+"
 import { romBase64 as romBase64e } from "./roms/rom_2e"
 import { romBase64 as romBase64u } from "./roms/rom_2e_unenhanced"
+import { romBase64 as romBase64gs } from "./roms/rom_gs"
+import { romGsSystemBase64 } from "./roms/rom_gs_system"
 // import { edmBase64 } from "./roms/edm_2e"
 import { Buffer } from "buffer"
 // import { isDebugging } from "./motherboard";
@@ -12,6 +14,8 @@ import { noSlotClock } from "./nsc"
 import { videoTerm } from "./devices/videoterm"
 import { vidhd } from "./devices/vidhd"
 import { isDebugging } from "./motherboard"
+import { iigsClock } from "./iigs_clock"
+import { iigsADB } from "./iigs_adb"
 
 // 0x00000: main memory
 // 0x10000...13FFF: ROM (including page $C0 soft switches)
@@ -47,6 +51,7 @@ const C800SlotSet = (slot: number) => {
 }
 
 export const RamWorksBankGet = () => {
+  if (currentMachineName === "APPLE2GS") return 0
   return memGetC000(0xC073)
 }
 
@@ -110,6 +115,74 @@ export const getCurrentMachineName = () => {
   return currentMachineName
 }
 
+export let gsROM = new Uint8Array(0);
+// Apple IIgs ROM 01 system ROM (128KB, banks $FE-$FF). gsROM is the Mega II
+// (IIe) ROM used by the //e machines; the IIgs boots from gsSystemROM.
+export let gsSystemROM = new Uint8Array(0);
+export const iigsRegisters = new Uint8Array(256);
+export const megaIIAux = new Uint8Array(65536);
+export const megaIIMain = new Uint8Array(65536);
+iigsRegisters[0x36] = 0x80; // Default fast speed
+export let iigsSlotRegister = 0b11110110; // $C02D SLTROMSEL: 1 = Your Card, 0 = Internal ROM (default: slots 7,6,5,4,2,1 = card)
+export const setIigsSlotRegister = (val: number) => { iigsSlotRegister = val; };
+// IIgs interrupt state, mirroring web-a2e's iigs_memory: $C046 reports which
+// sources are pending (bit3 VBL, bit4 quarter-second) plus bit7 = "a source
+// is pending AND enabled". The flags survive reads; only $C047 clears them.
+let vblPending = false;
+let quarterSecondPending = false;
+let sccRegSelect = [0, 0]; // [Channel B ($C038), Channel A ($C039)]
+let vgcIntReg = 0; // $C023: bit 0: ext int en, bit 1: scanline en, bit 2: 1-sec en, bit 5: scanline asserted, bit 6: 1-sec asserted, bit 7: vgc irq asserted
+
+export const iigsSignalVbl = () => { vblPending = true; };
+export const iigsSignalQuarterSecond = () => { quarterSecondPending = true; };
+export const iigsSignalOneSecond = () => {
+  vgcIntReg |= 0x40; // Bit 6 = 1-sec asserted
+  if (vgcIntReg & 0x04) { // Bit 2 = 1-sec enable
+    vgcIntReg |= 0x80;
+  }
+  iigsRegisters[0x23] = vgcIntReg;
+};
+export const iigsSignalScanline = () => {
+  vgcIntReg |= 0x20; // Bit 5 = scanline asserted
+  if (vgcIntReg & 0x02) { // Bit 1 = scanline enable
+    vgcIntReg |= 0x80;
+  }
+  iigsRegisters[0x23] = vgcIntReg;
+};
+export const iigsGetVblPending = () => vblPending;
+export const iigsClearInterrupts = () => {
+  vblPending = false;
+  quarterSecondPending = false;
+  sccRegSelect[0] = 0;
+  sccRegSelect[1] = 0;
+  vgcIntReg = 0;
+  iigsRegisters[0x23] = 0;
+  (globalThis as any).cpu?.clearIrq?.();
+};
+
+export const iigsInterruptPending = (): boolean => {
+  if (iigsADB.interruptPending()) return true;
+  if (vblPending && (iigsRegisters[0x41] & 0x08)) return true;
+  if (quarterSecondPending && (iigsRegisters[0x41] & 0x10)) return true;
+  if (vgcIntReg & 0x80) return true;
+  return false;
+};
+
+// IWM (Integrated Woz Machine) state for Apple IIgs ($C0E0-$C0EF)
+let iwmQ6 = false;
+let iwmQ7 = false;
+let iwmMotorOn = false;
+let iwmDriveSelect = 0;
+let iwmMode = 0;
+export const iigsGetIwmDriveSelect = () => iwmDriveSelect;
+export const iigsResetIwm = () => {
+  iwmQ6 = false;
+  iwmQ7 = false;
+  iwmMotorOn = false;
+  iwmDriveSelect = 0;
+  iwmMode = 0;
+};
+
 export const doSetRom = (machineName: MACHINE_NAME) => {
   currentMachineName = machineName
   let romStr = ""
@@ -123,6 +196,17 @@ export const doSetRom = (machineName: MACHINE_NAME) => {
     case "APPLE2EE":
       romStr = romBase64e
       break
+    case "APPLE2GS":
+      const rom64_gs = romBase64gs.replace(/[\n\r\s]/g, "");
+      gsROM = new Uint8Array(Buffer.from(rom64_gs, "base64"));
+      const rom64_sys = romGsSystemBase64.replace(/[\n\r\s]/g, "");
+      gsSystemROM = new Uint8Array(Buffer.from(rom64_sys, "base64"));
+      console.log(`[DEBUG] gsROM (Mega II) length: ${gsROM.length}`);
+      console.log(`[DEBUG] gsSystemROM length: ${gsSystemROM.length}`);
+      console.log(`[DEBUG] Reset vector at FF:FFFC = ${gsSystemROM[0x1FFFC]?.toString(16).padStart(2,'0')} ${gsSystemROM[0x1FFFD]?.toString(16).padStart(2,'0')}`);
+      memory.set(gsSystemROM.subarray(0x1C000, 0x20000), ROMmemoryStart);
+      updateAddressTables();
+      return;
   }
   // For now, comment out the use of the Extended Debugging Monitor
   // It's unclear what the benefit is, especially since we have a separate
@@ -147,6 +231,285 @@ export const doSetRom = (machineName: MACHINE_NAME) => {
   rom[0xFABB - 0xC000] = 0x05
   memory.set(rom, ROMmemoryStart)
 }
+
+export let gsRAM = new Uint8Array(8 * 1024 * 1024);
+
+export const memGet24 = (address: number): number => {
+    let bank = (address >> 16) & 0xFF;
+    const offset = address & 0xFFFF;
+    
+    // Apple IIgs ROM 01 mapping: the 128KB system ROM lives in banks $FE-$FF
+    // (FE at image offset 0, FF at 0x10000). The Mega II banks $E0/$E1 and the
+    // shadowed banks $00/$01 read the fast ROM in bank FF through their
+    // language-card window when RDROM is set — matching gssquared/web-a2e.
+    if (gsSystemROM && gsSystemROM.length > 0) {
+        if (bank >= 0xFE) {
+            return gsSystemROM[((bank & 1) << 16) | offset];
+        }
+        if (bank === 0x00 || bank === 0xE0 || bank === 0xE1) {
+            if (offset >= 0xD000 && !SWITCHES.BSRREADRAM.isSet) {
+                return gsSystemROM[0x10000 + offset];
+            }
+            // $C071-$C07F: BRK/IRQ firmware (JML to the interrupt manager).
+            // $C100-$CFFF: slot card space or internal ROM pages.
+            if (offset >= 0xC071 && offset <= 0xC07F) return gsSystemROM[0x10000 + offset];
+            if (offset >= 0xC100 && offset <= 0xCFFF) {
+                if (offset < 0xC800) {
+                    const slot = (offset >> 8) & 0x0F;
+                    manageC800(slot);
+                    if (SWITCHES.INTCXROM.isSet) return gsSystemROM[0x10000 + offset];
+                    const isCard = (slot === 3) ? SWITCHES.SLOTC3ROM.isSet : ((iigsSlotRegister & (1 << slot)) !== 0);
+                    if (isCard) return memGet(offset, false);
+                    return gsSystemROM[0x10000 + offset];
+                } else {
+                    if (offset === 0xCFFF) manageC800(0xFF);
+                    if (SWITCHES.INTCXROM.isSet || internalC8ROMIsActive()) return gsSystemROM[0x10000 + offset];
+                    return memGet(offset, false);
+                }
+            }
+        }
+    }
+
+    // Bank E0: Mega II Main
+    if (bank === 0xE0) {
+        if (offset >= 0xC000 && offset < 0xD000) {
+            return memGet(offset, false);
+        }
+        if (offset >= 0xD000) {
+            if (!SWITCHES.BSRREADRAM.isSet) {
+                return gsSystemROM ? gsSystemROM[0x10000 + offset] : (gsROM[(0xFF << 16) | offset] || 0);
+            }
+            if (offset < 0xE000 && !SWITCHES.BSRBANK2.isSet) {
+                return megaIIMain[offset - 0x1000];
+            }
+            return megaIIMain[offset];
+        }
+        return megaIIMain[offset];
+    }
+
+    // Bank E1: Mega II Aux
+    if (bank === 0xE1) {
+        // For $C000-$CFFF I/O region, use memGet which handles soft switches
+        if (offset >= 0xC000 && offset < 0xD000) {
+            return memGet(offset, false);
+        }
+        // For $D000-$FFFF, check if ROM is enabled via language card switches
+        if (offset >= 0xD000) {
+            // If RDROM is set, read from ROM
+            if (!SWITCHES.BSRREADRAM.isSet) {
+                return gsSystemROM ? gsSystemROM[0x10000 + offset] : (gsROM[(bank << 16) | offset] || 0);
+            }
+            // Otherwise read from language card RAM
+            if (offset < 0xE000 && !SWITCHES.BSRBANK2.isSet) {
+                return megaIIAux[offset - 0x1000];
+            }
+            return megaIIAux[offset];
+        }
+        // For $0000-$BFFF, direct RAM access
+        return megaIIAux[offset];
+    }
+
+    // Bank 00: Standard Apple IIe memory map (including ROM and Soft Switches)
+    if (bank === 0x00) {
+        return memGet(offset, false);
+    }
+    
+    // Bank 01: Direct, absolute access to Aux Memory (65816 Fast RAM Bank 01)
+    if (bank === 0x01) {
+        if (offset >= 0xC000 && offset < 0xD000) {
+            return memGet(offset, false); // I/O
+        }
+        if (offset >= 0xD000 && !(iigsRegisters[0x35] & 0x40)) {
+            // If RDROM is set, read from ROM
+            if (!SWITCHES.BSRREADRAM.isSet) {
+                return gsSystemROM ? gsSystemROM[0x10000 + offset] : (gsROM[(0xFF << 16) | offset] || 0);
+            }
+            // Language card region when shadowed
+            if (offset < 0xE000 && !SWITCHES.BSRBANK2.isSet) {
+                return memory[RamWorksMemoryStart + offset - 0x1000];
+            }
+            return memory[RamWorksMemoryStart + offset];
+        }
+        return memory[RamWorksMemoryStart + offset];
+    }
+    
+    // Bank 02-7F: 8MB of pure, linear 65816 Fast RAM
+    if (bank >= 0x02 && bank < 0x80) {
+        return gsRAM[(bank << 16) | offset];
+    }
+    
+    return 0;
+}
+
+export const memSet24 = (address: number, data: number) => {
+    let bank = (address >> 16) & 0xFF;
+    const offset = address & 0xFFFF;
+    
+
+    // Bank E0: Mega II Main
+    if (bank === 0xE0) {
+        if (offset >= 0xC000 && offset < 0xD000) {
+            memSet(offset, data);
+            return;
+        }
+        if (offset >= 0xD000) {
+            if (SWITCHES.BSR_WRITE.isSet) {
+                const targetOffset = (offset < 0xE000 && !SWITCHES.BSRBANK2.isSet) ? (offset - 0x1000) : offset;
+                megaIIMain[targetOffset] = data;
+            }
+            return;
+        }
+        megaIIMain[offset] = data;
+        return;
+    }
+
+    // Bank E1: Mega II Aux
+    if (bank === 0xE1) {
+        // I/O region
+        if (offset >= 0xC000 && offset < 0xD000) {
+            memSet(offset, data);
+            return;
+        }
+        // Language card region
+        if (offset >= 0xD000) {
+            // Check if language card RAM is writable
+            if (SWITCHES.BSR_WRITE.isSet) {
+                const targetOffset = (offset < 0xE000 && !SWITCHES.BSRBANK2.isSet) ? (offset - 0x1000) : offset;
+                megaIIAux[targetOffset] = data;
+            }
+            return;
+        }
+        // Regular RAM
+        megaIIAux[offset] = data;
+        return;
+    }
+
+    // Bank 00: Standard Apple IIe memory map with video shadowing to Mega II Main
+    if (bank === 0x00) {
+        memSet(offset, data);
+        if (offset >= 0x0400 && offset < 0x0800 && !(iigsRegisters[0x35] & 0x01)) {
+            megaIIMain[offset] = data;
+        } else if (offset >= 0x0800 && offset < 0x0C00 && !(iigsRegisters[0x35] & 0x20)) {
+            megaIIMain[offset] = data;
+        } else if (offset >= 0x2000 && offset < 0x4000 && !(iigsRegisters[0x35] & 0x02)) {
+            megaIIMain[offset] = data;
+        } else if (offset >= 0x4000 && offset < 0x6000 && !(iigsRegisters[0x35] & 0x04)) {
+            megaIIMain[offset] = data;
+        }
+        return;
+    }
+
+    // Bank 01: Direct, absolute access to Aux Memory (65816 Fast RAM Bank 01)
+    if (bank === 0x01) {
+        if (offset >= 0xC000 && offset < 0xD000) {
+            memSet(offset, data); // I/O
+            return;
+        }
+        if (offset >= 0xD000 && !(iigsRegisters[0x35] & 0x40)) {
+            // Language card region when shadowed
+            if (SWITCHES.BSR_WRITE.isSet) {
+                const targetOffset = (offset < 0xE000 && !SWITCHES.BSRBANK2.isSet) ? (offset - 0x1000) : offset;
+                memory[RamWorksMemoryStart + targetOffset] = data;
+            }
+            return;
+        }
+        memory[RamWorksMemoryStart + offset] = data;
+        // Super Hi-Res ($2000-$9FFF) shadowing into Mega II Bank E1
+        if (offset >= 0x2000 && offset < 0xA000 && !(iigsRegisters[0x35] & 0x08)) {
+            megaIIAux[offset] = data;
+        }
+        return;
+    }
+    
+    // Bank 02-7F: 8MB of pure, linear 65816 Fast RAM
+    if (bank >= 0x02 && bank < 0x80) {
+        gsRAM[(bank << 16) | offset] = data;
+    }
+}
+
+// The IIgs ROM installs its interrupt manager (JML $FF79C8) into E1:$0010-$0013
+// and enables VBL interrupts during its interrupt-init routine (ff:78 region).
+// That routine is never reached by the observed boot path, so the ROM's own
+// BRKs (ff:a0ef/ff:b61d) storm into E1:$0010=0. Installing the manager + INTEN
+// here mirrors what the ROM would do, so interrupts are serviced instead.
+export const iigsInitInterrupts = () => {
+    // The IIgs ROM's interrupt-init (ff:78a0-7927) and interrupt manager read
+    // bank $00 zero-page / low memory, which memoryReset() fills with 0xFF.
+    // With 0xFF in those locations the ROM's interrupt-init installs the full
+    // interrupt manager (JML $FFB7CC) whose dispatch loop spins and never
+    // reaches the OS event loop. Zero the low memory the boot path reads so
+    // the machine proceeds like the harness (which starts from a zeroed
+    // memory array).
+    for (let i = 0; i < 0x2000; i++) memSet24(0x000000 + i, 0);
+    // Bank $00:$7000-$70FF is the interrupt manager's scratch area.
+    for (let i = 0; i < 0x100; i++) memSet24(0x007000 + i, 0);
+    // The ROM's interrupt-init reads $700C (JML low) / $7008 (mid) / $700A
+    // (high) and writes them to E1:0011-13, so E1:0010 becomes JML <that
+    // address>. Pre-set them to $FF79C8 so that routine produces the same
+    // interrupt manager entry we install below, instead of JML $FFFFFF.
+    memSet24(0x00700c, 0xc8);
+    memSet24(0x007008, 0x79);
+    memSet24(0x00700a, 0xff);
+    megaIIAux.fill(0x00);
+    megaIIMain.fill(0x00);
+    iigsClock.reset(true);
+
+    // E1:$0010-$0013 = JML $FF79C8 (the ROM's minimal interrupt manager: it
+    // reads $C023 / $7006 and RTIs, acknowledging the IRQ without re-entering)
+    memSet24(0xE10010, 0x5c);
+    memSet24(0xE10011, 0xc8);
+    memSet24(0xE10012, 0x79);
+    memSet24(0xE10013, 0xff);
+
+    // Apple IIgs Toolbox Dispatchers in Bank E1 ($E10000..$E1000F)
+    // Matches ROM FE:0051..005F (JML $FE00AF, JML $FE00A3, JML $FE0075, JML $FE0069)
+    memSet24(0xE10000, 0x5c); memSet24(0xE10001, 0xaf); memSet24(0xE10002, 0x00); memSet24(0xE10003, 0xfe);
+    memSet24(0xE10004, 0x5c); memSet24(0xE10005, 0xa3); memSet24(0xE10006, 0x00); memSet24(0xE10007, 0xfe);
+    memSet24(0xE10008, 0x5c); memSet24(0xE10009, 0x75); memSet24(0xE1000A, 0x00); memSet24(0xE1000B, 0xfe);
+    memSet24(0xE1000C, 0x5c); memSet24(0xE1000D, 0x69); memSet24(0xE1000E, 0x00); memSet24(0xE1000F, 0xfe);
+
+    // Apple IIgs Interrupt Dispatchers in Bank E1 ($E10014..$E1007F)
+    // By default, every vector is initialized to JML $FFB5DE (SEC; RTL - unclaimed)
+    for (let addr = 0xE10014; addr <= 0xE1007C; addr += 4) {
+      memSet24(addr, 0x5c);
+      memSet24(addr + 1, 0xde);
+      memSet24(addr + 2, 0xb5);
+      memSet24(addr + 3, 0xff);
+    }
+
+    // VBL Task Dispatcher at $E10030: JML $FE9874
+    // (VBLStartUp handler in ROM: increments $E100DC, runs queue, and clears $C047)
+    memSet24(0xE10030, 0x5c);
+    memSet24(0xE10031, 0x74);
+    memSet24(0xE10032, 0x98);
+    memSet24(0xE10033, 0xfe);
+
+    // System Task / Event Dispatcher at $E10070: JML $FFB5E2 (CLC; RTL)
+    memSet24(0xE10070, 0x5c);
+    memSet24(0xE10071, 0xe2);
+    memSet24(0xE10072, 0xb5);
+    memSet24(0xE10073, 0xff);
+
+    // VBL interrupt active flag at $E100D7 (bit 3 set = VBL active & claimed)
+    memSet24(0xE100D7, 0x08);
+
+    // Matches ROM FE:0061..0067 copied to $E10180..$E10187
+    memSet24(0xE10180, 0x22); memSet24(0xE10181, 0x68); memSet24(0xE10182, 0x00); memSet24(0xE10183, 0xe1);
+    memSet24(0xE10184, 0x5c); memSet24(0xE10185, 0x0b); memSet24(0xE10186, 0xbf); memSet24(0xE10187, 0xff);
+
+    // Apple IIgs Tool Locator function table pointers ($E103C0..$E103CA)
+    // Initialized by TLStartUp ($FE0011..$FE0030) pointing to ROM Tool tables
+    memSet24(0xE103C0, 0x2f); memSet24(0xE103C1, 0x01); memSet24(0xE103C2, 0xfe);
+    memSet24(0xE103C4, 0xef); memSet24(0xE103C5, 0x01); memSet24(0xE103C6, 0xfe);
+    memSet24(0xE103C8, 0x2f); memSet24(0xE103C9, 0x01); memSet24(0xE103CA, 0xfe);
+    // Reset INTEN ($C041) to 0 at power-on / cold boot (interrupts disabled)
+    iigsRegisters[0x41] = 0x00;
+    iigsSlotRegister = 0b11110110;
+    iigsRegisters[0x2D] = iigsSlotRegister;
+    iigsClearInterrupts();
+    iigsResetIwm();
+}
+
 
 export const setRamWorks = (size: number) => {
   // Clamp to 64K...16M and make sure it is a multiple of 64K
@@ -255,6 +618,9 @@ const updateWriteBankSwitchedRamTable = () => {
 
 const slotIsActive = (slot: number) => {
   if (SWITCHES.INTCXROM.isSet) return false
+  if (currentMachineName === "APPLE2GS") {
+    return (slot !== 3) ? ((iigsSlotRegister & (1 << slot)) !== 0) : SWITCHES.SLOTC3ROM.isSet
+  }
   // SLOTC3ROM switch only has an effect if INTCXROM is off
   return (slot !== 3) ? true : SWITCHES.SLOTC3ROM.isSet
 }
@@ -429,6 +795,8 @@ export const memoryReset = () => {
   memory.fill(0xFF, 0, 0x10000)
   // Everything past here is RamWorks memory
   memory.fill(0xFF, BaseMachineMemory)
+  megaIIAux.fill(0x00)
+  megaIIMain.fill(0x00)
 
   // Real Apple II RAM does not power up as a uniform 0xFF: it settles into
   // a repeating 0xFF,0xFF,0x00,0x00 byte pattern (see js/util.ts's
@@ -504,6 +872,180 @@ const memGetSoftSwitch = (addr: number): number => {
     // Videx Soft Video Switch: AN0 on -> switch to Videx 80-col display
     videoTerm.active = true
   }
+  
+  // Apple IIgs: $C071-$C07F is firmware, not I/O! It holds the 8-bit BRK/IRQ
+  // handler code that jumps to the 16-bit interrupt manager in bank $E1.
+  // This must read from Bank $FF ROM (not Bank $FE).
+  if (currentMachineName === "APPLE2GS" && addr >= 0xC071 && addr <= 0xC07F) {
+      if (gsSystemROM && gsSystemROM.length > 0) {
+          // Bank FF of the system ROM (128KB image: FE@0, FF@0x10000)
+          return gsSystemROM[0x10000 + addr];
+      }
+  }
+  
+  // Apple IIgs hardware registers ($C020-$C04F)
+  if (currentMachineName === "APPLE2GS" && addr >= 0xC020 && addr <= 0xC04F) {
+      // Handle specific IIgs hardware
+      switch (addr) {
+          case 0xC024: // ADB Mouse Data
+              return iigsADB.readMouseData();
+
+          case 0xC025: // ADB Modifiers
+              return iigsADB.readModifiers();
+
+          case 0xC027: // ADB Status
+              // Bit 5 = data available, Bit 2 = keyboard data. The controller
+              // finishes commands instantly, so it reports what is really
+              // pending. The firmware polls bit 5 before every read, and the
+              // OS waits for it during ADB init, so the ADB must produce
+              // responses to the init commands (writeCommand -> completeCommand).
+              return iigsADB.readStatus();
+
+          case 0xC023: // VGC interrupt status
+              return vgcIntReg;
+
+          case 0xC02E: // Vertical counter
+          case 0xC02F: // Horizontal / Vertical counter
+              vgcIntReg &= ~0x20;
+              if (!((vgcIntReg & 0x04) && (vgcIntReg & 0x40))) {
+                  vgcIntReg &= ~0x80;
+              }
+              iigsRegisters[0x23] = vgcIntReg;
+              if (!iigsInterruptPending()) {
+                  (globalThis as any).cpu?.clearIrq?.();
+              }
+              return iigsRegisters[addr & 0xFF];
+
+          case 0xC026: // ADB Data
+              return iigsADB.readData();
+
+          case 0xC029: // NEWVIDEO
+              return iigsRegisters[0x29];
+
+          case 0xC02D: // SLTROMSEL
+              return iigsSlotRegister;
+
+          case 0xC033: // Clock Data
+              return iigsClock.readData();
+
+          case 0xC034: // Clock Control (top 4 bits) + Border Color (bottom 4 bits)
+              return iigsClock.readControl();
+
+          case 0xC038: { // SCC Channel B Control
+              const reg = sccRegSelect[0];
+              sccRegSelect[0] = 0;
+              if (reg === 0) return 0x04; // RR0: Tx buffer empty
+              return 0x00; // All other registers including RR3 (interrupt pending) return 0
+          }
+
+          case 0xC039: { // SCC Channel A Control
+              const reg = sccRegSelect[1];
+              sccRegSelect[1] = 0;
+              if (reg === 0) return 0x04; // RR0: Tx buffer empty
+              return 0x00; // All other registers including RR3 (interrupt pending) return 0
+          }
+
+          case 0xC03A: // SCC Channel B Data
+          case 0xC03B: // SCC Channel A Data
+              return 0x00;
+
+          case 0xC03C: // DOC Sound Control
+              return (iigsRegisters[0x3C] & 0x70) | 0x0F;
+
+          case 0xC03D: // DOC Sound Data ($E0 IRQ status = 0xFF / bit 7 set = no sound IRQ pending)
+              return 0xFF;
+
+          case 0xC03E: // DOC Sound Address Low
+              return iigsRegisters[0x3E];
+
+          case 0xC03F: // DOC Sound Address High
+              return iigsRegisters[0x3F];
+
+          case 0xC041: // INTEN
+              return iigsRegisters[0x41] & 0x1F;
+
+          case 0xC046: {
+              // $C046 INTFLAG (web-a2e interruptStatusRegister): bit3 = VBL
+              // pending, bit4 = quarter-second pending, bit7 = "some source is
+              // pending AND enabled in $C041". Flags report what happened
+              // regardless of the enable bits; only a $C047 write clears them.
+              // The boot gate at ff:8552/ff:8555 does `lda $c046` in 8-bit
+              // accumulator mode and `bmi` on bit 7 to take the interrupt
+              // manager installer at ff:8549 -> ff:854b (jsr $a1b8), which
+              // copies the E1 interrupt stubs into E1:$0010/$0080. Without a
+              // pending VBL the installer is skipped, E1:$0010 stays 0x00
+              // (BRK) and every interrupt storms.
+              let val = 0;
+              if (vblPending) val |= 0x08;
+              if (quarterSecondPending) val |= 0x10;
+              const en = iigsRegisters[0x41];
+              if ((vblPending && (en & 0x08)) || (quarterSecondPending && (en & 0x10))) {
+                  val |= 0x80;
+              }
+              // ADB interrupt is NOT gated by INTEN (web-a2e: adb.interruptPending()
+              // only needs its own enable bits from $C027 writes).
+              if (iigsADB.interruptPending()) val |= 0x80;
+              return val;
+          }
+
+          case 0xC047:
+              vblPending = false;
+              quarterSecondPending = false;
+              return iigsRegisters[0x47] | 0x80;
+
+          default:
+              // Other IIgs registers - just echo what was written
+              return iigsRegisters[addr & 0xFF];
+      }
+  }
+
+  // Apple IIgs built-in IWM ($C0E0-$C0EF)
+  if (currentMachineName === "APPLE2GS" && addr >= 0xC0E0 && addr <= 0xC0EF) {
+    const reg = addr & 0x0F;
+    switch (reg) {
+      case 0x08: iwmMotorOn = false; break;
+      case 0x09: iwmMotorOn = true; break;
+      case 0x0A: iwmDriveSelect = 0; break;
+      case 0x0B: iwmDriveSelect = 1; break;
+      case 0x0C: iwmQ6 = false; break;
+      case 0x0D: iwmQ6 = true; break;
+      case 0x0E: iwmQ7 = false; break;
+      case 0x0F: iwmQ7 = true; break;
+    }
+    if (!iwmQ7) {
+      if (iwmQ6) {
+        // Read status register: bits 0-4 mode, bit 5 motor/enable
+        let status = iwmMode & 0x1F;
+        if (iwmMotorOn) status |= 0x20;
+        return status;
+      } else {
+        // Data register
+        checkSlotIO(addr);
+        return memory[ROMmemoryStart + addr - 0xC000];
+      }
+    } else {
+      if (iwmQ6) {
+        return 0;
+      } else {
+        // Handshake register: bit 7 (ready) | bit 6 (no underrun)
+        return 0xC0;
+      }
+    }
+  }
+
+  // Apple IIgs STATE register ($C068)
+  if (currentMachineName === "APPLE2GS" && addr === 0xC068) {
+    let val = 0;
+    if (SWITCHES.ALTZP.isSet) val |= 0x80;
+    if (SWITCHES.PAGE2.isSet) val |= 0x40;
+    if (SWITCHES.AUXRAMREAD.isSet) val |= 0x20;
+    if (SWITCHES.AUXRAMWRITE.isSet) val |= 0x10;
+    if (!SWITCHES.BSRREADRAM.isSet) val |= 0x08; // RDROM
+    if (SWITCHES.BSRBANK2.isSet) val |= 0x04;
+    if (SWITCHES.INTCXROM.isSet) val |= 0x01;
+    return val;
+  }
+
   if (addr >= 0xC090) {
     checkSlotIO(addr)
   } else {
@@ -607,11 +1149,137 @@ export const memGetRaw = (addr: number): number => {
 }
 
 const memSetSoftSwitch = (addr: number, value: number) => {
-  if (addr === 0xC029 && vidhd.enabled) {
-    vidhd.writeSoftSwitch(value)
-    SWITCHES.NEWVIDEO.isSet = (value & 0x80) !== 0
-    return
-  }
+    // C029 (NEWVIDEO) - used by both Apple IIgs and VidHD
+    if (addr === 0xC029) {
+      if (vidhd.enabled || (gsROM && gsROM.length > 0)) {
+        vidhd.writeSoftSwitch(value)
+      }
+      SWITCHES.NEWVIDEO.isSet = (value & 0x80) !== 0
+      iigsRegisters[0x29] = value
+      return
+    }
+    
+    // Apple IIgs hardware registers ($C020-$C04F)
+    if (currentMachineName === "APPLE2GS" && addr >= 0xC020 && addr <= 0xC04F) {
+        // Handle specific IIgs hardware writes
+        switch (addr) {
+            case 0xC023: // VGC interrupt control
+                vgcIntReg = (vgcIntReg & 0xF8) | (value & 0x07);
+                if (((vgcIntReg & 0x02) && (vgcIntReg & 0x20)) || ((vgcIntReg & 0x04) && (vgcIntReg & 0x40))) {
+                    vgcIntReg |= 0x80;
+                } else {
+                    vgcIntReg &= ~0x80;
+                }
+                iigsRegisters[0x23] = vgcIntReg;
+                if (!iigsInterruptPending()) {
+                    (globalThis as any).cpu?.clearIrq?.();
+                }
+                break;
+
+            case 0xC026: // ADB Data (command/response queue)
+                iigsADB.writeCommand(value);
+                break;
+
+            case 0xC027: // ADB Status (interrupt enables)
+                iigsADB.writeStatus(value);
+                break;
+            
+            case 0xC02D: // SLTROMSEL
+                iigsSlotRegister = value & 0xFE;
+                iigsRegisters[0x2D] = iigsSlotRegister;
+                updateAddressTables();
+                break;
+
+            case 0xC032: // VGC interrupt clear
+                if ((value & 0x40) === 0) vgcIntReg &= ~0x40;
+                if ((value & 0x20) === 0) vgcIntReg &= ~0x20;
+                if (((vgcIntReg & 0x02) && (vgcIntReg & 0x20)) || ((vgcIntReg & 0x04) && (vgcIntReg & 0x40))) {
+                    vgcIntReg |= 0x80;
+                } else {
+                    vgcIntReg &= ~0x80;
+                }
+                iigsRegisters[0x23] = vgcIntReg;
+                iigsRegisters[0x32] = value;
+                if (!iigsInterruptPending()) {
+                    (globalThis as any).cpu?.clearIrq?.();
+                }
+                break;
+
+            case 0xC033: // Clock Data
+                iigsClock.writeData(value);
+                break;
+            
+            case 0xC034: // Clock Control + Border Color
+                iigsClock.writeControl(value);
+                iigsRegisters[0x34] = value; // Also store for border color
+                break;
+
+            case 0xC038: // SCC Channel B Control
+                if (sccRegSelect[0] === 0) {
+                    sccRegSelect[0] = value & 0x0F;
+                } else {
+                    sccRegSelect[0] = 0;
+                }
+                break;
+
+            case 0xC039: // SCC Channel A Control
+                if (sccRegSelect[1] === 0) {
+                    sccRegSelect[1] = value & 0x0F;
+                } else {
+                    sccRegSelect[1] = 0;
+                }
+                break;
+
+            case 0xC03A: // SCC Channel B Data
+            case 0xC03B: // SCC Channel A Data
+                break;
+
+            case 0xC041: // INTEN
+                iigsRegisters[0x41] = value & 0x1F;
+                if (!iigsInterruptPending()) {
+                    (globalThis as any).cpu?.clearIrq?.();
+                }
+                break;
+
+            case 0xC047: // CLEARINT - clears the pending interrupt flags
+                vblPending = false;
+                quarterSecondPending = false;
+                (globalThis as any).__c047Writes = ((globalThis as any).__c047Writes || 0) + 1;
+                iigsRegisters[0x47] = value;
+                if (!iigsInterruptPending()) {
+                    (globalThis as any).cpu?.clearIrq?.();
+                }
+                break;
+
+            default:
+                // Other IIgs registers - just store the value
+                iigsRegisters[addr & 0xFF] = value;
+                break;
+        }
+        return;
+    }
+
+    // Apple IIgs built-in IWM ($C0E0-$C0EF)
+    if (currentMachineName === "APPLE2GS" && addr >= 0xC0E0 && addr <= 0xC0EF) {
+        const reg = addr & 0x0F;
+        switch (reg) {
+            case 0x08: iwmMotorOn = false; break;
+            case 0x09: iwmMotorOn = true; break;
+            case 0x0A: iwmDriveSelect = 0; break;
+            case 0x0B: iwmDriveSelect = 1; break;
+            case 0x0C: iwmQ6 = false; break;
+            case 0x0D: iwmQ6 = true; break;
+            case 0x0E: iwmQ7 = false; break;
+            case 0x0F: iwmQ7 = true; break;
+        }
+        if (iwmQ6 && iwmQ7 && (reg & 1)) {
+            if (!iwmMotorOn) {
+                iwmMode = value & 0x1F;
+            }
+        }
+        checkSlotIO(addr, value);
+        return;
+    }
   if (addr === 0xC058 && videoTerm.enabled) {
     // Videx Soft Video Switch: AN0 off -> switch to 40-col display
     videoTerm.active = false
@@ -619,9 +1287,29 @@ const memSetSoftSwitch = (addr: number, value: number) => {
     // Videx Soft Video Switch: AN0 on -> switch to Videx 80-col display
     videoTerm.active = true
   }
+  // Apple IIgs STATE register ($C068)
+  if (currentMachineName === "APPLE2GS" && addr === 0xC068) {
+    SWITCHES.ALTZP.isSet = (value & 0x80) !== 0;
+    SWITCHES.PAGE2.isSet = (value & 0x40) !== 0;
+    SWITCHES.AUXRAMREAD.isSet = (value & 0x20) !== 0;
+    SWITCHES.AUXRAMWRITE.isSet = (value & 0x10) !== 0;
+    SWITCHES.INTCXROM.isSet = (value & 0x01) !== 0;
+
+    const bank2 = (value & 0x04) !== 0;
+    const readRom = (value & 0x08) !== 0;
+    const writeEnabled = SWITCHES.BSR_WRITE.isSet;
+    const bankBase = bank2 ? 0xC080 : 0xC088;
+    const select = readRom ? (writeEnabled ? 0x01 : 0x02)
+                           : (writeEnabled ? 0x03 : 0x00);
+    checkSoftSwitches(bankBase + select, false, (globalThis as any).s6502?.cycleCount ?? 0);
+    updateAddressTables();
+    iigsRegisters[0x68] = value;
+    return;
+  }
+
   // these are write-only soft switches that don't work like the others, since
   // we need the full byte of data being written
-  if (addr === 0xC071 || addr === 0xC073) {
+  if (currentMachineName !== "APPLE2GS" && (addr === 0xC071 || addr === 0xC073)) {
     // Out of range bank index?
     if (value > RamWorksMaxBank) return
     // The 0th bank is also AUX memory
@@ -917,6 +1605,9 @@ export const getHgr2Memory = () => {
 }
 
 export const getShr = (): Uint8Array => {
+  if (gsROM && gsROM.length > 0) {
+    return vidhd.extractShrBuffer(megaIIAux, 0)
+  }
   if (!vidhd.enabled || !vidhd.active) {
     return new Uint8Array()
   }

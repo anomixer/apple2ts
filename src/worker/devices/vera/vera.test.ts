@@ -3,7 +3,7 @@ import { enableVera, resetVera, initVera, sdcard_attach_image, sdcard_detach_ima
 import { video_step, video_get_framebuffer, video_reset } from "./video"
 import { vera_spi_step, sdcard_set_write_protected, sdcard_clear_changes, sdcard_get_write_seq } from "./sdcard"
 import { memGet, memSet } from "../../memory"
-import { doBoot } from "../../motherboard"
+import { doBoot, doSetMachineName } from "../../motherboard"
 import { s6502, setPC } from "../../instructions"
 import { processInstruction } from "../../cpu6502"
 import { getVeraSpriteDemoAssembly, getVeraMode7DemoAssembly, buildVeraDemo } from "./vera_demos"
@@ -17,6 +17,7 @@ describe("VERA Graphics & Sound Card Emulation on Apple II", () => {
   })
 
   beforeEach(() => {
+    doSetMachineName("APPLE2EE")
     doBoot()
     initVera()
     resetVera()

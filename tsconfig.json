@@ -13,7 +13,8 @@
       "@types/google.picker",
       "@types/jest",
       "@types/w3c-web-serial",
-      "@types/wicg-file-system-access"
+      "@types/wicg-file-system-access",
+      "node"
     ],
     "allowJs": true,
     "skipLibCheck": true,
@@ -31,4 +32,7 @@
     "noEmit": true,
     "jsx": "react-jsx"
   },
+  "include": [
+    "src/**/*"
+  ]
 }

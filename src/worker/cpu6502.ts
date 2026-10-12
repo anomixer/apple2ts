@@ -206,7 +206,7 @@ export const resetCycleCountCallbacks = () => {
   cycleCountCallbacks.length = 0
   cycleCountCBdata.length = 0
 }
-const processCycleCountCallbacks = () => {
+export const processCycleCountCallbacks = () => {
   for (let i = 0; i < cycleCountCallbacks.length; i++) {
     cycleCountCallbacks[i](cycleCountCBdata[i])    
   }

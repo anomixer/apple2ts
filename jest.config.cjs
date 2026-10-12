@@ -5,7 +5,7 @@ module.exports = {
   // transform .js. Without that, whitelisting an ESM package below has no effect.
   preset: "ts-jest/presets/js-with-ts",
   testEnvironment: "jsdom",
-  testPathIgnorePatterns: ["/node_modules/", "/tools/", "<rootDir>/\\.worktrees/"],
+  testPathIgnorePatterns: ["/node_modules/", "/tools/", "<rootDir>/\\.worktrees/", "<rootDir>/\\.kilo/"],
   moduleNameMapper: {
     "\\.(css)$": "<rootDir>/src/test/stylemock.cjs",
   },

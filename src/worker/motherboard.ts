@@ -1,7 +1,7 @@
 // Chris Torrence, 2022
 import { passMachineState, passSoftSwitchDescriptions, passWorkerOperationResult } from "./worker2main"
-import { s6502, setState6502, reset6502, setCycleCount, setPC, getStackString, get6502Instructions } from "./instructions"
-import { hiresAddressToLine, RUN_MODE, TEST_DEBUG, DEFAULT_SLOT_CONFIG, HEATMAP_STATE, MEMORY_DUMP_STATE, AUTO_SNAPSHOT } from "../common/utility"
+import { s6502, setState6502, setCycleCount, setPC, getStackString, get6502Instructions } from "./instructions"
+import { hiresAddressToLine, RUN_MODE, TEST_DEBUG, DEFAULT_SLOT_CONFIG, DEFAULT_SLOT_CONFIG_GS, HEATMAP_STATE, MEMORY_DUMP_STATE, AUTO_SNAPSHOT } from "../common/utility"
 import { resetFloppyDrives, doPauseDrive, getHardDriveState } from "./devices/drivestate"
 // import { slot_omni } from "./roms/slot_omni_cx00"
 import { SWITCHES, overrideSoftSwitch, resetSoftSwitches, setVideo7Override,
@@ -35,10 +35,27 @@ import { memory, memGet, getTextPage, getHires, memoryReset,
   getMainMemory,
   getAuxMemory,
   getHgr1Memory,
-  getHgr2Memory} from "./memory"
+  getHgr2Memory,
+  memGet24,
+  memSet24,
+  gsROM,
+  iigsSignalVbl,
+  iigsSignalQuarterSecond,
+  iigsSignalOneSecond,
+  iigsInterruptPending,
+  iigsInitInterrupts,
+  iigsClearInterrupts,
+  setIigsSlotRegister,
+  iigsRegisters} from "./memory"
 import { setButtonState, handleGamepads } from "./devices/joystick"
 import { handleGameSetup } from "./games/game_mappings"
-import { breakpointMap, clearInterrupts, doSetBreakpointSkipOnce, doSetMemoryWriteWatchpoint as setCpuMemoryWriteWatchpoint, processInstruction, resetCycleCountCallbacks, setStepOut, getHeatMapCPU, getHeatMapCPUMax, resetHeatMapCPU } from "./cpu6502"
+import { breakpointMap, clearInterrupts, doSetBreakpointSkipOnce, doSetMemoryWriteWatchpoint as setCpuMemoryWriteWatchpoint, resetCycleCountCallbacks, processCycleCountCallbacks, setStepOut, getHeatMapCPU, getHeatMapCPUMax, resetHeatMapCPU } from "./cpu6502"
+import { ICPU } from "./icpu"
+import { CPU6502Wrapper } from "./cpu6502_wrapper"
+import { CPU65816 } from "./cpu65816"
+
+let cpu: ICPU = new CPU6502Wrapper();
+export const getCPU = (): ICPU => cpu;
 import { enableSerialCard, resetSerial } from "./devices/superserial/serial"
 import { enableMouseCard } from "./devices/mouse"
 import { enablePassportCard, resetPassport } from "./devices/passport/passport"
@@ -67,12 +84,15 @@ import { hasHardDriveMounted } from "./devices/drivestate"
 import { findMemory, getMemoryView, resolveMemoryRangeRequest } from "./memory_view"
 
 let speedMode = 0
+let iigsQuarterSecCounter = 0
+let iigsOneSecCounter = 0
 let cpuSpeed = 0
 export let isDebugging = false
 let appMode = "default"
 let showDebugTab = false
 let refreshTime = 16.6881 // = 17030 / 1020.488
 let cpuCyclesPerRefresh = 17030
+export const getCpuCyclesPerRefresh = () => cpuCyclesPerRefresh
 let cpuRunMode = RUN_MODE.IDLE
 export const getCpuRunMode = () => cpuRunMode
 
@@ -304,6 +324,47 @@ export const configureMachine = () => {
     clearSlot(s)
   }
 
+  // Apple IIgs uses a completely different architecture
+  // It has built-in hardware and native slot management
+  if (machineName === "APPLE2GS") {
+    disableVideoTerm()
+    disableVidHD()
+    setAuxCardEnabled(true)
+
+    // Slot 1: SSC (if configured)
+    if (currentSlotConfig[1] === "ssc") {
+      enableSerialCard()
+    }
+    // Slot 4: Mockingboard (if configured)
+    if (currentSlotConfig[4] === "mockingboard") {
+      enableMockingboard(true, 4)
+    }
+    // Slot 6: 5.25" Disk II (if configured)
+    if (currentSlotConfig[6] === "disk2") {
+      enableDiskDrive()
+    }
+    // Slot 7: SmartPort / Hard Drive (if configured)
+    if (currentSlotConfig[7] === "smartport") {
+      enableHardDrive()
+    }
+
+    // Sync $C02D (SLTROMSEL) with configured peripheral cards
+    let slotReg = 0
+    for (let s = 1; s <= 7; s++) {
+      if (s === 3) continue // slot 3 is always internal video
+      if ((currentSlotConfig as any)[s] !== "none") {
+        slotReg |= (1 << s)
+      }
+    }
+    setIigsSlotRegister(slotReg)
+    iigsRegisters[0x2D] = slotReg
+
+    get6502Instructions()
+    return
+  }
+
+  // Apple IIe/II+ configuration continues below...
+
   // Ensure Slot 3 is configured properly: on IIe default to 'aux', 'vidhd' or 'none', on II+ allow 'videoterm', 'vidhd' or 'none'
   if (machineName === "APPLE2P") {
     if (currentSlotConfig[3] !== "none" && currentSlotConfig[3] !== "videoterm" && currentSlotConfig[3] !== "vidhd") {
@@ -447,6 +508,7 @@ export const doBoot = () => {
     enableHardDrive()
   }
 
+  if (machineName === "APPLE2GS") iigsInitInterrupts()
   doReset()
   // This is a hack. If we don't currently have a hard drive image on boot,
   // temporarily disable the hard drive and then re-enable it later.
@@ -465,7 +527,10 @@ export const doReset = () => {
   resetSoftSwitches()
   // Reset banked RAM
   memGet(0xC082, false)
-  reset6502()
+  cpu.reset()
+  if (machineName === "APPLE2GS") {
+    iigsClearInterrupts()
+  }
   resetMachine()
   // Otherwise Heat Map data survives a reset/reboot indefinitely (it was
   // previously cleared only by doSetCycleCount, a time-travel-only path),
@@ -501,12 +566,33 @@ export const doReset = () => {
 // Note that making the cyclesPerRefresh too large can cause games to be
 // less responsive to keyboard input, since we're checking the keyboard
 // less often.
+const IIE_CYCLES_PER_REFRESH = [
+  Math.round(17030 * 0.1),
+  Math.round(17030 * 0.5),
+  17030,
+  17030 * 2,
+  17030 * 3,
+  17030 * 4,
+  17030 * 24,
+]
+
+const GS_CYCLES_PER_REFRESH = [
+  Math.round(17030 * 0.1),            // -2: Snail (0.1 MHz)
+  Math.round(17030 * 0.5),            // -1: Slow (0.5 MHz)
+  17030,                              //  0: Normal (1.02 MHz)
+  Math.round(2800000 * 0.0166881),   //  1: 2.8 MHz (46727 cycles)
+  Math.round(7100000 * 0.0166881),   //  2: 7.1 MHz (118486 cycles)
+  Math.round(14300000 * 0.0166881),  //  3: Fast / 14.3 MHz (238640 cycles)
+  Math.round(17030 * 24),             //  4: Warp (unthrottled)
+]
+
 export const doSetSpeedMode = (speedModeIn: number, operationId?: number) => {
   speedMode = speedModeIn
   // speedMode = -2 is slowest, but add 2 to it to make the arrays be zero based.
   // speedMode = 0 is still 1 MHz, so no risk of backwards compatibility issues.
   refreshTime = (speedMode === 4) ? 0 : 16.6881
-  cpuCyclesPerRefresh = 17030 * ([0.1, 0.5, 1, 2, 3, 4, 24])[speedMode + 2]
+  const cyclesTable = (machineName === "APPLE2GS") ? GS_CYCLES_PER_REFRESH : IIE_CYCLES_PER_REFRESH
+  cpuCyclesPerRefresh = cyclesTable[speedMode + 2]
   resetRefreshCounter()
   updateExternalMachineState()
   if (operationId !== undefined) passWorkerOperationResult(operationId)
@@ -607,7 +693,20 @@ export const doLoadBinary = (
 
 export const doSetMachineName = (name: MACHINE_NAME, reset = true, publishState = true) => {
   machineName = name
-  if (name === "APPLE2P") {
+  
+  if (machineName === "APPLE2GS") {
+    cpu = new CPU65816(memGet24, memSet24)
+    ;(cpu as CPU65816).setVectorReadCallback((address: number) => {
+      // 65816 vector pull (VP) always reads from Bank $FF ROM on Apple IIgs
+      return memGet24(0xFF0000 | (address & 0xFFFF))
+    })
+  } else {
+    cpu = new CPU6502Wrapper()
+  }
+
+  if (name === "APPLE2GS") {
+    currentSlotConfig = { ...DEFAULT_SLOT_CONFIG_GS }
+  } else if (name === "APPLE2P") {
     if (currentSlotConfig[3] !== "none" && currentSlotConfig[3] !== "videoterm" && currentSlotConfig[3] !== "vidhd") {
       currentSlotConfig[3] = "videoterm"
     }
@@ -619,6 +718,9 @@ export const doSetMachineName = (name: MACHINE_NAME, reset = true, publishState 
   didConfiguration = false
   doSetRom(machineName)
   configureMachine()
+  const cyclesTable = (machineName === "APPLE2GS") ? GS_CYCLES_PER_REFRESH : IIE_CYCLES_PER_REFRESH
+  cpuCyclesPerRefresh = cyclesTable[speedMode + 2]
+  if (machineName === "APPLE2GS") iigsInitInterrupts()
   if (reset) doReset()
   if (publishState) updateExternalMachineState()
 }
@@ -722,7 +824,7 @@ export const doStepInto = () => {
   }
   // Remove all tracelog values if we are no longer tracing.
   if (!tracing) clearTracelog()
-  if (processInstruction(tracing ? updateTrace : null) !== -1) {
+  if (cpu.processInstruction(tracing ? updateTrace : null) !== -1) {
     doSetRunMode(RUN_MODE.PAUSED, true, undefined, {reason: "step"})
   }
 }
@@ -733,12 +835,11 @@ export const doStepOver = () => {
     doBoot()
     cpuRunMode = RUN_MODE.PAUSED
   }
-  // If we're at a JSR then briefly step in, then step out.
   if (memGet(s6502.PC, false) === 0x20) {
     // Remove all tracelog values if we are no longer tracing.
     if (!tracing) clearTracelog()
-    const cycles = processInstruction(tracing ? updateTrace : null)
-    if (cycles !== -1) doStepOut()
+    // If we're at a JSR then briefly step in, then step out.
+    if (cpu.processInstruction(tracing ? updateTrace : null) !== -1) doStepOut()
   } else {
     // Otherwise just do a single step.
     doStepInto()
@@ -795,7 +896,9 @@ export const doSetRunMode = (
     executionPauseReason = stop?.reason ?? "explicit"
     executionBreakpointAddress = stop?.breakpointAddress ?? null
     executionMemoryWrite = stop?.memoryWrite ?? null
-  } else if (cpuRunMode === RUN_MODE.IDLE && (executionState !== "paused" || executionPauseReason !== "idle")
+  } else if (
+    cpuRunMode === RUN_MODE.IDLE
+    && (executionState !== "paused" || executionPauseReason !== "idle")
   ) {
     executionSequence++
     executionState = "paused"
@@ -1009,7 +1112,7 @@ export const getExternalMachineState = () => {
     timeTravelThumbnails: getTimeTravelThumbnails(),
     tracelog: cpuRunMode === RUN_MODE.PAUSED ? getTracelog() : [],
     veraSlot: veraSlot,
-    vidhdActive: vidhd.active,
+    vidhdActive: vidhd.active || ((gsROM && gsROM.length > 0) ? SWITCHES.NEWVIDEO.isSet : false),
     zeroPage: getZeroPage(),
   }
   return state
@@ -1069,6 +1172,7 @@ const doAdvance6502 = () => {
   }
   let cycleTotal = 0
   let currentLine = -1
+
   for (;;) {
     let cycles = 0
     if (softCard.activeCpu === "Z80") {
@@ -1076,7 +1180,11 @@ const doAdvance6502 = () => {
       cycles = Math.max(1, Math.round(stepT / 2))
       s6502.cycleCount += cycles
     } else {
-      cycles = processInstruction(tracing ? updateTrace : null)
+      cycles = cpu.processInstruction(tracing ? updateTrace : null)
+      s6502.cycleCount += cycles
+      if (machineName === "APPLE2GS") {
+        processCycleCountCallbacks()
+      }
     }
     if (!checkConditionalInputStop()) advanceKeySequence()
     if (advanceConditionalInputSequence()) {
@@ -1085,17 +1193,39 @@ const doAdvance6502 = () => {
     }
     if (cycles < 0) break
     cycleTotal += cycles
-    const cycleInFrame = s6502.cycleCount % 17030
-    if (cycleInFrame < 4550) {
+    const isIIgs = (machineName === "APPLE2GS")
+    const frameCycles = isIIgs ? 46727 : 17030
+    const vblCycles = isIIgs ? 12460 : 4550
+    const cycleInFrame = s6502.cycleCount % frameCycles
+    if (cycleInFrame < vblCycles) {
       // Return "low" for 70 scan lines out of 262 (70 * 65 cycles = 4550)
       // Note that VBLINV is the inverse of the vertical blanking status,
       // so if it's set then vertical blanking needs to be activated.
       if (SWITCHES.VBLINV.isSet) {
         startVBL()
+        // IIgs: VBL is a hardware interrupt — signal it and raise the IRQ line if enabled.
+        if (isIIgs) {
+          iigsSignalVbl()
+          iigsQuarterSecCounter++
+          if (iigsQuarterSecCounter >= 15) {
+            iigsQuarterSecCounter = 0
+            iigsSignalQuarterSecond()
+          }
+          iigsOneSecCounter++
+          if (iigsOneSecCounter >= 60) {
+            iigsOneSecCounter = 0
+            iigsSignalOneSecond()
+          }
+          if (iigsInterruptPending()) {
+            cpu.irq?.()
+          } else {
+            cpu.clearIrq?.()
+          }
+        }
       }
     } else {
       endVBL()
-      const line = Math.floor((cycleInFrame - 4550) / 65)
+      const line = Math.floor((cycleInFrame - vblCycles) / (isIIgs ? 178 : 65))
       if (line !== currentLine && line < 192) {
         currentLine = line
         exportMemoryToHiresLine(line)
