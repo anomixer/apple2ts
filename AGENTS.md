@@ -280,6 +280,71 @@ with the animated barber pole scan bar, identical to real Apple IIgs hardware!
 - GS/OS 6.0.1 successfully loads `PRO.FST`, `DRIVERS`, `SYSTEM.SETUP`, `TOOLS` (`TOOL034`), control panels, and launches `/SYSTEM/START` (the official Apple IIgs Finder).
 - Finder renders the full Super Hi-Res desktop with menu bar, clock, volume icon, trash can, and dialog window. Verified in `test_gsos601.test.ts`.
 
+### 24. SmartPort Device Reporting (Spurious "can't read this disk" for empty drives) — RESOLVED
+**Issue**: After booting GS/OS 6.0.1, the Finder immediately showed a modal
+`GS/OS can't read this disk (in device .DEV2). Do you want to initialize it?`
+dialog. Slot 7 drive 2 was empty, but GS/OS still enumerated and probed it.
+**Root cause**: `handleSmartPortDeviceStatus` / `handleSmartPortDeviceInformationBlock`
+in `src/worker/devices/harddrivedata.ts` lied about the hardware:
+- Unit 0 (driver status) always advertised `2` SmartPort devices.
+- Units 1 and 2 always reported status byte `0xF0` ("device on line / disk in
+  drive", bit 4 set) even when no media was mounted, so the OS dutifully tried
+  to read blocks from an empty drive and reported the failure to the user.
+- The DIB advertised device subtype `$20`, and the block count was written into
+  bytes that the SmartPort spec defines as the block size.
+**Fix** (values cross-checked against `gssquared/src/devices/pdblock3/pdblock3.cpp`):
+- Added `SP_STATUS_ONLINE = 0b1111_0000`, `SP_STATUS_WRITEPROT = 0b1011_0100`,
+  `SP_STATUS_OFFLINE = 0b1110_0000` and return `SP_STATUS_OFFLINE` whenever the
+  unit has no media, so GS/OS skips it.
+- Unit 0 keeps reporting the card's maximum unit count (`SP_MAX_UNIT`), matching
+  gssquared's `PDB3_MAX_UNITS`; emptiness is expressed through the status byte,
+  not by shrinking the count.
+- Write-protect is now honoured via `getHardDriveState(unit).isWriteProtected`.
+- Device subtype for a hard disk is `0x20` (3.5" drive is `0x40`); the extended
+  SmartPort bits (`0xC0`) used by gssquared's BAZFAST3 DIB are deliberately NOT
+  set — see below.
+- Added `fixBlockCount32MB()`: 0x10000 blocks (32MB) is unrepresentable in 16
+  bits and must report 0xFFFF, as gssquared does.
+- Implemented the missing SmartPort commands: WriteBlock (case 2), Format
+  rejection (case 3) and Control/Eject (case 4, returns success for fixed disks
+  per SmartPort TN #2). Error codes now use the ProDOS-16 set from gssquared's
+  `pdb_structures.hpp`: 0x27 I/O, 0x28 no device, 0x2B write-protected, 0x2F
+  device offline.
+**Note — extended SmartPort**: advertising subtype `$C0` makes GS/OS switch to
+the *extended* command set, whose parameter lists carry a 3-byte pointer. We only
+decode the standard 2-byte form in `processSmartPortAccess()`, so enabling it
+stalls the boot on the "Welcome to the IIgs" screen. Do not set those bits
+until the extended parameter-list parsing exists.
+
+### 25. GS/OS Boot Stall in the Browser (Stale `cpu.irqPending`) — RESOLVED
+**Issue**: `GSOS601.po` mounted to Slot 7 drive 1 booted all the way to the GS/OS
+welcome screen but never progressed to the Finder, then dropped back into the
+ROM boot loop ("Check startup device!"). This only happened in the real browser
+worker; the jest harness booted to the Finder every time.
+**Root cause**: In the run loop in `src/worker/motherboard.ts`, the IIgs IRQ line
+was only re-evaluated **inside the vertical-blanking window**:
+```
+if (cycleInFrame < vblCycles) { if (SWITCHES.VBLINV.isSet) { iigsSignalVbl(); ...
+  if (iigsInterruptPending()) cpu.irq() else cpu.clearIrq() } }
+```
+On real hardware the IRQ line is **level driven** by `$C046` bit 7 ("a source is
+pending AND enabled"), so it drops the instant the handler acknowledges via
+`$C047` — regardless of whether we are inside the VBL window. Sampling only
+during VBL let `cpu.irqPending` stay asserted across the long non-VBL portion of
+each frame. The next time GS/OS cleared its I flag (at `00:6890`, cycle ~940K),
+the CPU took a spurious hardware IRQ into `$C074` (the ROM's IRQ firmware, which
+`JML`s to the Bank $E1 interrupt manager), and the machine never returned to the
+boot path.
+**Fix**: Move the `iigsInterruptPending() ? cpu.irq() : cpu.clearIrq()` update out
+of the VBL branch so the IRQ line is re-evaluated every instruction, matching the
+level-triggered `$C046` behaviour.
+**Verification**:
+- `src/worker/gsos_boot.test.ts` boots `GSOS601.po` cold and asserts the
+  Super Hi-Res page 1 is a fully drawn Finder desktop (top menu-bar row and
+  bottom trash-can row both non-empty), which the welcome screen does not satisfy.
+- Verified in headless Chrome against the Vite dev server: the Finder desktop
+  renders with menu bar, clock, `MDVOL2`, `APPLEDISK5 25A/25B`, `GSHK` and Trash.
+
 ## Debugging Techniques Used
 - **Instruction Tracing**: Added a circular buffer in `motherboard.ts` to trace instructions when debugging specific loops.
 - **ROM Inspection**: Disassembled portions of `gsROM` via Node.js helper scripts to identify hardware polling loops (such as `SELIWM` and diagnostic entry points).

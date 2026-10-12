@@ -1216,11 +1216,6 @@ const doAdvance6502 = () => {
             iigsOneSecCounter = 0
             iigsSignalOneSecond()
           }
-          if (iigsInterruptPending()) {
-            cpu.irq?.()
-          } else {
-            cpu.clearIrq?.()
-          }
         }
       }
     } else {
@@ -1229,6 +1224,19 @@ const doAdvance6502 = () => {
       if (line !== currentLine && line < 192) {
         currentLine = line
         exportMemoryToHiresLine(line)
+      }
+    }
+    // The IIgs IRQ line is level-driven by $C046 bit 7 ("a source is pending
+    // AND enabled"), not latched. Re-evaluate it every instruction rather than
+    // only inside the VBL window: as soon as the handler acknowledges via
+    // $C047 the line drops. Sampling it only during VBL let a stale
+    // cpu.irqPending survive across VBL windows and fire a spurious IRQ the
+    // next time the I flag was cleared, which derailed the GS/OS boot.
+    if (isIIgs) {
+      if (iigsInterruptPending()) {
+        cpu.irq?.()
+      } else {
+        cpu.clearIrq?.()
       }
     }
     if (cyclesToRun > 0 && (s6502.cycleCount - cycleToRunStart) >= cyclesToRun) {

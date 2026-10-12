@@ -105,33 +105,59 @@ export const enableHardDrive = (enable = true) => {
 }
 
 
+// Number of SmartPort units we emulate. Unit 1 and 2 map onto hard drive 1 and 2.
+const SP_MAX_UNIT = 2
+
+// Status byte for a block device:
+// Bit   Function
+//  7    1 = block device; 0 = character device
+//  6    1 = write allowed
+//  5    1 = read allowed
+//  4    1 = device on line or disk in drive
+//  3    1 = format allowed
+//  2    1 = media write-protected (block devices only)
+//  1    Reserved; must = 0
+//  0    1 = device currently open (character devices only)
+// Values match gssquared pdblock3.cpp get_drive_info() / status code $00.
+const SP_STATUS_ONLINE = 0b1111_0000     // 0xF0
+const SP_STATUS_WRITEPROT = 0b1011_0100   // 0xB4
+const SP_STATUS_OFFLINE = 0b1110_0000     // 0xE0, no disk in drive: bit 4 clear
+
+// ProDOS-16 SmartPort error codes (gssquared pdb_structures.hpp)
+const SP_ERROR_IO = 0x27
+const SP_ERROR_NO_DEVICE = 0x28
+const SP_ERROR_WRITE_PROTECTED = 0x2B
+const SP_ERROR_DEVICE_OFFLINE = 0x2F
+
+// 0x10000 blocks means 32MB, which the real driver cannot express in 16 bits.
+const fixBlockCount32MB = (nblocks: number) => nblocks === 0x10000 ? 0xFFFF : nblocks
+
+const getSmartPortStatusByte = (unitNumber: number, dataLen: number) => {
+  if (dataLen === 0) return SP_STATUS_OFFLINE
+  return getHardDriveState(unitNumber)?.isWriteProtected ? SP_STATUS_WRITEPROT : SP_STATUS_ONLINE
+}
+
+
 const handleSmartPortDeviceStatus = (unitNumber: number, bufferAddr: number) => {
   if (unitNumber === 0) {
-    // Store number of SmartPort devices in the status buffer.
-    memSet(bufferAddr, 2)
-  } else if (unitNumber <= 2) {
-    // Status byte
-    // Bit   Function
-    //  7    1 = block device; 0 = character device
-    //  6    1 = write allowed
-    //  5    1 = read allowed
-    //  4    1 = device on line or disk in drive
-    //  3    1 = format allowed
-    //  2    1 = media write-protected (block devices only)
-    //  1    Reserved; must = 0
-    //  0    1 = device currently open (character devices only)
-    memSet(bufferAddr, 0xF0)
+    // SmartPort Driver Status: report how many units this card can ever hold,
+    // not how many currently have media. Empty units report "offline" below.
+    memSet(bufferAddr, SP_MAX_UNIT)
+  } else if (unitNumber <= SP_MAX_UNIT) {
     // We assume that the unit number is the same as the drive number.
     const [,, dataLen] = getHardDriveData(unitNumber)
-    const nblocks = dataLen / 512
+    // An empty drive must report "not on line" (bit 4 clear), otherwise the
+    // OS assumes it can read blocks and faults when the media is missing.
+    memSet(bufferAddr, getSmartPortStatusByte(unitNumber, dataLen))
+    const nblocks = fixBlockCount32MB(dataLen / 512)
     memSet(bufferAddr + 1, nblocks & 0xFF)
-    memSet(bufferAddr + 2, nblocks >>> 8)
-    memSet(bufferAddr + 3, 0x00)
+    memSet(bufferAddr + 2, (nblocks >>> 8) & 0xFF)
+    memSet(bufferAddr + 3, (nblocks >>> 16) & 0xFF)
     // We transferred 4 bytes
     setX(4)
     setY(0)
   } else {
-    setAccumulator(0x28)  // bad drive/unit number
+    setAccumulator(SP_ERROR_NO_DEVICE)  // bad drive/unit number
     setX(0)
     setY(0)
     setCarry()
@@ -142,16 +168,23 @@ const handleSmartPortDeviceStatus = (unitNumber: number, bufferAddr: number) => 
 const handleSmartPortDeviceInformationBlock = (unitNumber: number, bufferAddr: number) => {
   // We assume that the unit number is the same as the drive number.
   const [,, dataLen] = getHardDriveData(unitNumber)
-  const nblocks = dataLen / 512
+  const nblocks = fixBlockCount32MB(dataLen / 512)
   // claim we are a 3.5" drive if 1600 or less blocks
   const deviceType = nblocks > 1600 ? 0x02 : 0x01  // 1 = 3.5 drive 2 = hard disk
-  const subType    = deviceType == 0x02 ? 0x20 : 0x40 // 0x40 = Apple 3.5 drive 0x20 = fixed HD
-  // status byte as above
-  memSet(bufferAddr, 0xF0)
-  // then block size for 3 bytes
+  // GS/OS treats device type $05 as SCSI and demands a SCSI driver, so a hard
+  // disk must report type $02.
+  // Device subtype. Do NOT set the extended-SmartPort bits ($C0) that
+  // gssquared's BAZFAST3 DIB uses: GS/OS then switches to the extended command
+  // set, whose parameter lists carry a 3-byte pointer. We only decode the
+  // standard 2-byte form in processSmartPortAccess(), so advertising extended
+  // support stalls the boot on the "Welcome to the IIgs" screen.
+  const subType    = deviceType === 0x02 ? 0x20 : 0x40
+  // status byte as above. An empty drive reports "not on line" (bit 4 clear).
+  memSet(bufferAddr, getSmartPortStatusByte(unitNumber, dataLen))
+  // then block count for 3 bytes
   memSet(bufferAddr + 1, nblocks & 0xFF)
-  memSet(bufferAddr + 2, nblocks >>> 8)
-  memSet(bufferAddr + 3, 0x00)
+  memSet(bufferAddr + 2, (nblocks >>> 8) & 0xFF)
+  memSet(bufferAddr + 3, (nblocks >>> 16) & 0xFF)
   // id string
   const a2ts = "Apple2TS SP"
   memSet(bufferAddr + 4, a2ts.length)
@@ -167,11 +200,15 @@ const handleSmartPortDeviceInformationBlock = (unitNumber: number, bufferAddr: n
   // device subtype
   memSet(bufferAddr + 22, subType)
   // fw version
-  memSet(bufferAddr + 23, 0x01)
+  memSet(bufferAddr + 23, 0x03)
   memSet(bufferAddr + 24, 0x00)
   // We transferred 25 bytes
   setX(25)
   setY(0)
+  if (dataLen === 0) {
+    setAccumulator(SP_ERROR_DEVICE_OFFLINE)
+    setCarry()
+  }
 }
 
 
@@ -235,8 +272,15 @@ const processSmartPortAccess = () => {
         65536 * memGet(spParamList + 6)
       const blockStart = 512 * block
       const [dd, offset, dataLen] = getHardDriveData(unitNumber)
-      if (dataLen === 0 || blockStart + 512 > dataLen) {
-        setAccumulator(0x27)  // ProDOS I/O ERROR ($27)
+      if (dataLen === 0) {
+        // No media in the drive. Report "device offline" so the OS knows the
+        // difference between "drive is empty" and "read failed".
+        setAccumulator(SP_ERROR_DEVICE_OFFLINE)
+        setCarry(true)
+        return
+      }
+      if (blockStart + 512 > dataLen) {
+        setAccumulator(SP_ERROR_IO)
         setCarry(true)
         return
       }
@@ -244,9 +288,48 @@ const processSmartPortAccess = () => {
       setMemoryBlock(bufferAddr, dataRead)
       break
     }
-    case 2:
+    case 2: {  // WriteBlock
+      if (memGet(spParamList, false) !== 0x03) {
+        console.error(`Incorrect SmartPort parameter count at address ${spParamList}`)
+        setCarry()
+        return
+      }
+      const block = memGet(spParamList + 4) + 256 * memGet(spParamList + 5) +
+        65536 * memGet(spParamList + 6)
+      const blockStart = 512 * block
+      const ds = getHardDriveState(unitNumber)
+      const [dd, offset, dataLen] = getHardDriveData(unitNumber)
+      if (dataLen === 0) {
+        setAccumulator(SP_ERROR_DEVICE_OFFLINE)
+        setCarry(true)
+        return
+      }
+      if (blockStart + 512 > dataLen) {
+        setAccumulator(SP_ERROR_IO)
+        setCarry(true)
+        return
+      }
+      if (ds.isWriteProtected) {
+        setAccumulator(SP_ERROR_WRITE_PROTECTED)
+        setCarry(true)
+        return
+      }
+      const dataWrite = getDataBlock(bufferAddr, 512)
+      dd.set(dataWrite, blockStart + offset)
+      ds.diskHasChanges = true
+      ds.lastAppleWriteTime = Date.now()
+      break
+    }
+    case 3:  // Format
+      console.error("SmartPort format not implemented")
+      setAccumulator(SP_ERROR_IO)
+      setCarry()
+      return
+    case 4:  // Control/Eject. SmartPort TN #2: fixed disks return success.
+      return
     default:
       console.error(`SmartPort command ${spCommand} not implemented`)
+      setAccumulator(SP_ERROR_NO_DEVICE)
       setCarry()
       return
   }
