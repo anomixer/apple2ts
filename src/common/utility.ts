@@ -32,6 +32,7 @@ export enum MSG_WORKER {
   CLICK,
   DRIVE_PROPS,
   DRIVE_SOUND,
+  ERRORMSG,
   GET_MEMORY_RESPONSE,
   SAVE_STATE,
   RUMBLE,
@@ -175,6 +176,13 @@ export enum UI_THEME {
   MINIMAL,
 }
 
+export enum ERROR_CODE {
+  INFO,
+  WARNING,
+  ERROR,
+  QUESTION,
+}
+
 export const UI_THEMES = [
   { value: UI_THEME.CLASSIC, name: "Classic", queryValue: "classic" },
   { value: UI_THEME.DARK, name: "Dark", queryValue: "dark" },
@@ -243,12 +251,6 @@ export enum CLOUD_SYNC {
   PENDING,
   INPROGRESS,
   FAILED
-}
-
-export enum DISASSEMBLE_VISIBLE {
-  RESET,
-  ADDRESS,
-  CURRENT_PC
 }
 
 export enum ADDR_MODE {

@@ -691,3 +691,16 @@ type DownloadedExportDisk = {
   buffer: Uint8Array,
   filename: string,
 }
+
+type ErrorMsg = {
+  message: string,
+  code?: number,
+}
+
+type DialogMessageContext = {
+  title: string,
+  message: string,
+  code: number,
+  actionCancel: () => void,
+  actionConfirm: () => void,
+}

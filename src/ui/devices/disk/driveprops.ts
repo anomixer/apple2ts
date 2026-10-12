@@ -1,4 +1,3 @@
-import { getBlobFromDiskData } from "./diskdrive"
 import { diskImages } from "./diskimages"
 import * as fflate from "fflate"
 import { OneDriveCloudDrive } from "./onedriveclouddrive"
@@ -9,9 +8,8 @@ import {
   MAX_DRIVES,
   RUN_MODE,
 } from "../../../common/utility"
-
+import { clearDialogMessageContext, hasDialogMessageContext, showGlobalProgressModal } from "../../ui_utilities"
 import { passSetDriveNewData, requestSetDriveNewData, passSetDriveProps, passSetBinaryBlock, passPasteText, handleGetRunMode, passSetRunMode } from "../../main2worker"
-import { showGlobalProgressModal } from "../../ui_utilities"
 import { internetArchiveUrlProtocol, getDiskImageUrlFromIdentifier } from "./internetarchive_utils"
 import { newReleases } from "./newreleases"
 import { DiskBookmarks } from "./diskbookmarks"
@@ -25,6 +23,7 @@ import {
   getHelpFileUrl,
   readHelpResponseText
 } from "./helpfile"
+import { getBlobFromDiskData } from "./diskdrive"
 
 // Technically, all of these properties should be in the main2worker.ts file,
 // since they just maintain the state that needs to be passed to/from the
@@ -302,6 +301,8 @@ const setDiskOrFileFromBuffer = (
     return { mountedDrive: index, workerOperation }
   }
 
+  clearDialogMessageContext()
+
   if (fname.endsWith(".bin")) {
     passSetBinaryBlock(binaryRunAddress, new Uint8Array(buffer), true)
   } else if (fname.endsWith(".bas") || fname.endsWith(".a")) {
@@ -339,11 +340,13 @@ const setDiskOrFileFromBuffer = (
       preserveDriveIndex,
       false,
     )
-    const shouldBoot = bootsExplicitDrive || handleGetRunMode() === RUN_MODE.IDLE
-    if (shouldBoot) {
-      passSetRunMode(RUN_MODE.NEED_BOOT)
-    } else {
-//      props.updateDisplay()
+    const needsBoot = bootsExplicitDrive || handleGetRunMode() === RUN_MODE.IDLE
+
+    if (needsBoot) {
+      setTimeout(() => {
+        if (!hasDialogMessageContext()) {
+          passSetRunMode(RUN_MODE.NEED_BOOT)
+        }}, 10)
     }
   }
 
@@ -1099,7 +1102,7 @@ export const prepWritableFile = async (index: number, writableFileHandle: Writab
 
 const resetAllDiskDrives = () => {
   for (let i=0; i < MAX_DRIVES; i++) {
-    handleSetDiskData(i, new Uint8Array(), "", null, null, -1)
+    setDiskData(i, new Uint8Array(), "", null, null, -1)
   }
 }
 
@@ -1125,6 +1128,7 @@ export const handleSetDiskFromFile = async (disk: string,
   callback?: (buffer: ArrayBuffer | null) => void,
   onLoadSuccess?: () => void,
   preserveDriveIndex = false) => {
+  clearDialogMessageContext()
   const configuredHelpFile = findCatalogHelpFile(disk)
   let data: ArrayBuffer
   try {
@@ -1159,7 +1163,7 @@ export const handleSetDiskFromFile = async (disk: string,
       }
     }
 
-    handleSetDiskData(
+    setDiskData(
       driveIndex,
       new Uint8Array(data),
       disk,
@@ -1175,10 +1179,12 @@ export const handleSetDiskFromFile = async (disk: string,
     )
 
     if (needsBoot) {
-      passSetRunMode(RUN_MODE.NEED_BOOT)
+      setTimeout(() => {
+        if (!hasDialogMessageContext()) {
+          passSetRunMode(RUN_MODE.NEED_BOOT)
+        }}, 10)
     }
     onLoadSuccess?.()
-
   }
 }
 
