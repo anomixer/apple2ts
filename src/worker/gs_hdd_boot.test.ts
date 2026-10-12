@@ -1,7 +1,7 @@
 import { doSetMachineName, doSetRunMode, doBoot, resetCpuSpeedForTesting, getCPU } from "./motherboard"
 import { getTextPageAsString, memGet24, iigsSlotRegister } from "./memory"
 import { doSetEmuDriveNewData } from "./devices/drivestate"
-import { DriveProps, RUN_MODE } from "../common/utility"
+import { RUN_MODE } from "../common/utility"
 import { setIsTesting } from "./worker2main"
 import * as fs from "fs"
 import * as path from "path"
@@ -28,7 +28,6 @@ test("Apple IIgs Slot 7 Hard Drive boot", () => {
       lastAppleWriteTime: 0,
       cloudData: null,
       writableFileHandle: null,
-      lastLocalFileTime: 0,
       lastLocalFileWriteTime: 0,
     }
     doSetEmuDriveNewData(props)

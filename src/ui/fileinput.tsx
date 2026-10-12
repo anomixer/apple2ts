@@ -55,7 +55,7 @@ const FileInput = (props: DisplayProps & { onLoadSuccess?: () => void }) => {
       //   }
       // }
       const newIndex = handleSetDiskOrFileFromBuffer(index,
-        await file.arrayBuffer(), filename, null, writableFileHandle)
+        await file.arrayBuffer(), filename, null, writableFileHandle, undefined, true)
       if (writableFileHandle) prepWritableFile(newIndex, writableFileHandle)
       notifyLoadSuccess()
     }

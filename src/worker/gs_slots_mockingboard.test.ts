@@ -2,9 +2,8 @@ import { DEFAULT_SLOT_CONFIG_GS } from "../common/utility"
 import { getSlotOptions, sanitizeSlotConfig } from "../common/slot_options"
 import { doSetRom, memGet24, memSet24, memoryReset, iigsSlotRegister } from "./memory"
 import { CPU65816 } from "./cpu65816"
-import { doSetMachineName, doSetSlotConfig, getSlotConfig, configureMachine } from "./motherboard"
+import { doSetMachineName, doSetSlotConfig, getSlotConfig } from "./motherboard"
 import { s6502 } from "./instructions"
-import { enableMockingboard } from "./devices/mockingboard"
 
 describe("Apple IIgs Slot Management & Hardware Compatibility", () => {
   test("Apple IIgs slot options restrict slots per GS architecture", () => {

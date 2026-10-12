@@ -26,12 +26,10 @@ export {
   sanitizeSlotConfig,
 } from "../../common/slot_options"
 import {
-  RAM_OPTIONS,
   SLOT_NUMBERS,
   type SlotNumber,
   type SlotOption,
   getSlotOptions,
-  sanitizeSlotConfig,
 } from "../../common/slot_options"
 
 const getAuxCardLabel = (sizeKb: number): string => {

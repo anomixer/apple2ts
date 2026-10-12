@@ -121,21 +121,50 @@ export let gsROM = new Uint8Array(0);
 export let gsSystemROM = new Uint8Array(0);
 export const iigsRegisters = new Uint8Array(256);
 export const megaIIAux = new Uint8Array(65536);
+export const megaIIMain = new Uint8Array(65536);
 iigsRegisters[0x36] = 0x80; // Default fast speed
 export let iigsSlotRegister = 0b11110110; // $C02D SLTROMSEL: 1 = Your Card, 0 = Internal ROM (default: slots 7,6,5,4,2,1 = card)
+export const setIigsSlotRegister = (val: number) => { iigsSlotRegister = val; };
 // IIgs interrupt state, mirroring web-a2e's iigs_memory: $C046 reports which
 // sources are pending (bit3 VBL, bit4 quarter-second) plus bit7 = "a source
 // is pending AND enabled". The flags survive reads; only $C047 clears them.
 let vblPending = false;
 let quarterSecondPending = false;
+let sccRegSelect = [0, 0]; // [Channel B ($C038), Channel A ($C039)]
+let vgcIntReg = 0; // $C023: bit 0: ext int en, bit 1: scanline en, bit 2: 1-sec en, bit 5: scanline asserted, bit 6: 1-sec asserted, bit 7: vgc irq asserted
+
 export const iigsSignalVbl = () => { vblPending = true; };
+export const iigsSignalQuarterSecond = () => { quarterSecondPending = true; };
+export const iigsSignalOneSecond = () => {
+  vgcIntReg |= 0x40; // Bit 6 = 1-sec asserted
+  if (vgcIntReg & 0x04) { // Bit 2 = 1-sec enable
+    vgcIntReg |= 0x80;
+  }
+  iigsRegisters[0x23] = vgcIntReg;
+};
+export const iigsSignalScanline = () => {
+  vgcIntReg |= 0x20; // Bit 5 = scanline asserted
+  if (vgcIntReg & 0x02) { // Bit 1 = scanline enable
+    vgcIntReg |= 0x80;
+  }
+  iigsRegisters[0x23] = vgcIntReg;
+};
 export const iigsGetVblPending = () => vblPending;
-export const iigsClearInterrupts = () => { vblPending = false; quarterSecondPending = false; };
+export const iigsClearInterrupts = () => {
+  vblPending = false;
+  quarterSecondPending = false;
+  sccRegSelect[0] = 0;
+  sccRegSelect[1] = 0;
+  vgcIntReg = 0;
+  iigsRegisters[0x23] = 0;
+  (globalThis as any).cpu?.clearIrq?.();
+};
 
 export const iigsInterruptPending = (): boolean => {
   if (iigsADB.interruptPending()) return true;
   if (vblPending && (iigsRegisters[0x41] & 0x08)) return true;
   if (quarterSecondPending && (iigsRegisters[0x41] & 0x10)) return true;
+  if (vgcIntReg & 0x80) return true;
   return false;
 };
 
@@ -145,6 +174,7 @@ let iwmQ7 = false;
 let iwmMotorOn = false;
 let iwmDriveSelect = 0;
 let iwmMode = 0;
+export const iigsGetIwmDriveSelect = () => iwmDriveSelect;
 export const iigsResetIwm = () => {
   iwmQ6 = false;
   iwmQ7 = false;
@@ -216,7 +246,7 @@ export const memGet24 = (address: number): number => {
         if (bank >= 0xFE) {
             return gsSystemROM[((bank & 1) << 16) | offset];
         }
-        if (bank === 0x00 || bank === 0x01 || bank === 0xE0 || bank === 0xE1) {
+        if (bank === 0x00 || bank === 0xE0 || bank === 0xE1) {
             if (offset >= 0xD000 && !SWITCHES.BSRREADRAM.isSet) {
                 return gsSystemROM[0x10000 + offset];
             }
@@ -240,9 +270,25 @@ export const memGet24 = (address: number): number => {
         }
     }
 
-    // Bank E0/E1: Mega II (the Apple IIe inside the IIgs)
-    // Bank E0 = Mega II Main, Bank E1 = Mega II Aux
-    if (bank === 0xE0 || bank === 0xE1) {
+    // Bank E0: Mega II Main
+    if (bank === 0xE0) {
+        if (offset >= 0xC000 && offset < 0xD000) {
+            return memGet(offset, false);
+        }
+        if (offset >= 0xD000) {
+            if (!SWITCHES.BSRREADRAM.isSet) {
+                return gsSystemROM ? gsSystemROM[0x10000 + offset] : (gsROM[(0xFF << 16) | offset] || 0);
+            }
+            if (offset < 0xE000 && !SWITCHES.BSRBANK2.isSet) {
+                return megaIIMain[offset - 0x1000];
+            }
+            return megaIIMain[offset];
+        }
+        return megaIIMain[offset];
+    }
+
+    // Bank E1: Mega II Aux
+    if (bank === 0xE1) {
         // For $C000-$CFFF I/O region, use memGet which handles soft switches
         if (offset >= 0xC000 && offset < 0xD000) {
             return memGet(offset, false);
@@ -251,26 +297,16 @@ export const memGet24 = (address: number): number => {
         if (offset >= 0xD000) {
             // If RDROM is set, read from ROM
             if (!SWITCHES.BSRREADRAM.isSet) {
-                return gsROM[(bank << 16) | offset] || 0;
+                return gsSystemROM ? gsSystemROM[0x10000 + offset] : (gsROM[(bank << 16) | offset] || 0);
             }
             // Otherwise read from language card RAM
-            if (bank === 0xE1) {
-                if (!SWITCHES.BSRBANK2.isSet) {
-                    return megaIIAux[offset - 0x1000];
-                }
-                return megaIIAux[offset];
-            } else {
-                if (!SWITCHES.BSRBANK2.isSet) {
-                    return memory[offset - 0x1000];
-                }
-                return memory[offset];
+            if (offset < 0xE000 && !SWITCHES.BSRBANK2.isSet) {
+                return megaIIAux[offset - 0x1000];
             }
-        }
-        // For $0000-$BFFF, direct RAM access
-        if (bank === 0xE1) {
             return megaIIAux[offset];
         }
-        return memory[offset];
+        // For $0000-$BFFF, direct RAM access
+        return megaIIAux[offset];
     }
 
     // Bank 00: Standard Apple IIe memory map (including ROM and Soft Switches)
@@ -282,6 +318,17 @@ export const memGet24 = (address: number): number => {
     if (bank === 0x01) {
         if (offset >= 0xC000 && offset < 0xD000) {
             return memGet(offset, false); // I/O
+        }
+        if (offset >= 0xD000 && !(iigsRegisters[0x35] & 0x40)) {
+            // If RDROM is set, read from ROM
+            if (!SWITCHES.BSRREADRAM.isSet) {
+                return gsSystemROM ? gsSystemROM[0x10000 + offset] : (gsROM[(0xFF << 16) | offset] || 0);
+            }
+            // Language card region when shadowed
+            if (offset < 0xE000 && !SWITCHES.BSRBANK2.isSet) {
+                return memory[RamWorksMemoryStart + offset - 0x1000];
+            }
+            return memory[RamWorksMemoryStart + offset];
         }
         return memory[RamWorksMemoryStart + offset];
     }
@@ -298,8 +345,26 @@ export const memSet24 = (address: number, data: number) => {
     let bank = (address >> 16) & 0xFF;
     const offset = address & 0xFFFF;
     
-    // Bank E0/E1: Mega II (Apple IIe inside IIgs)
-    if (bank === 0xE0 || bank === 0xE1) {
+
+    // Bank E0: Mega II Main
+    if (bank === 0xE0) {
+        if (offset >= 0xC000 && offset < 0xD000) {
+            memSet(offset, data);
+            return;
+        }
+        if (offset >= 0xD000) {
+            if (SWITCHES.BSR_WRITE.isSet) {
+                const targetOffset = (offset < 0xE000 && !SWITCHES.BSRBANK2.isSet) ? (offset - 0x1000) : offset;
+                megaIIMain[targetOffset] = data;
+            }
+            return;
+        }
+        megaIIMain[offset] = data;
+        return;
+    }
+
+    // Bank E1: Mega II Aux
+    if (bank === 0xE1) {
         // I/O region
         if (offset >= 0xC000 && offset < 0xD000) {
             memSet(offset, data);
@@ -309,34 +374,28 @@ export const memSet24 = (address: number, data: number) => {
         if (offset >= 0xD000) {
             // Check if language card RAM is writable
             if (SWITCHES.BSR_WRITE.isSet) {
-                if (bank === 0xE1) {
-                    if (!SWITCHES.BSRBANK2.isSet) {
-                        megaIIAux[offset - 0x1000] = data;
-                    } else {
-                        megaIIAux[offset] = data;
-                    }
-                } else {
-                    if (!SWITCHES.BSRBANK2.isSet) {
-                        memory[offset - 0x1000] = data;
-                    } else {
-                        memory[offset] = data;
-                    }
-                }
+                const targetOffset = (offset < 0xE000 && !SWITCHES.BSRBANK2.isSet) ? (offset - 0x1000) : offset;
+                megaIIAux[targetOffset] = data;
             }
             return;
         }
         // Regular RAM
-        if (bank === 0xE1) {
-            megaIIAux[offset] = data;
-            return;
-        }
-        memory[offset] = data;
+        megaIIAux[offset] = data;
         return;
     }
 
-    // Bank 00: Standard Apple IIe memory map
+    // Bank 00: Standard Apple IIe memory map with video shadowing to Mega II Main
     if (bank === 0x00) {
         memSet(offset, data);
+        if (offset >= 0x0400 && offset < 0x0800 && !(iigsRegisters[0x35] & 0x01)) {
+            megaIIMain[offset] = data;
+        } else if (offset >= 0x0800 && offset < 0x0C00 && !(iigsRegisters[0x35] & 0x20)) {
+            megaIIMain[offset] = data;
+        } else if (offset >= 0x2000 && offset < 0x4000 && !(iigsRegisters[0x35] & 0x02)) {
+            megaIIMain[offset] = data;
+        } else if (offset >= 0x4000 && offset < 0x6000 && !(iigsRegisters[0x35] & 0x04)) {
+            megaIIMain[offset] = data;
+        }
         return;
     }
 
@@ -344,6 +403,14 @@ export const memSet24 = (address: number, data: number) => {
     if (bank === 0x01) {
         if (offset >= 0xC000 && offset < 0xD000) {
             memSet(offset, data); // I/O
+            return;
+        }
+        if (offset >= 0xD000 && !(iigsRegisters[0x35] & 0x40)) {
+            // Language card region when shadowed
+            if (SWITCHES.BSR_WRITE.isSet) {
+                const targetOffset = (offset < 0xE000 && !SWITCHES.BSRBANK2.isSet) ? (offset - 0x1000) : offset;
+                memory[RamWorksMemoryStart + targetOffset] = data;
+            }
             return;
         }
         memory[RamWorksMemoryStart + offset] = data;
@@ -384,6 +451,7 @@ export const iigsInitInterrupts = () => {
     memSet24(0x007008, 0x79);
     memSet24(0x00700a, 0xff);
     megaIIAux.fill(0x00);
+    megaIIMain.fill(0x00);
     iigsClock.reset(true);
 
     // E1:$0010-$0013 = JML $FF79C8 (the ROM's minimal interrupt manager: it
@@ -399,6 +467,31 @@ export const iigsInitInterrupts = () => {
     memSet24(0xE10004, 0x5c); memSet24(0xE10005, 0xa3); memSet24(0xE10006, 0x00); memSet24(0xE10007, 0xfe);
     memSet24(0xE10008, 0x5c); memSet24(0xE10009, 0x75); memSet24(0xE1000A, 0x00); memSet24(0xE1000B, 0xfe);
     memSet24(0xE1000C, 0x5c); memSet24(0xE1000D, 0x69); memSet24(0xE1000E, 0x00); memSet24(0xE1000F, 0xfe);
+
+    // Apple IIgs Interrupt Dispatchers in Bank E1 ($E10014..$E1007F)
+    // By default, every vector is initialized to JML $FFB5DE (SEC; RTL - unclaimed)
+    for (let addr = 0xE10014; addr <= 0xE1007C; addr += 4) {
+      memSet24(addr, 0x5c);
+      memSet24(addr + 1, 0xde);
+      memSet24(addr + 2, 0xb5);
+      memSet24(addr + 3, 0xff);
+    }
+
+    // VBL Task Dispatcher at $E10030: JML $FE9874
+    // (VBLStartUp handler in ROM: increments $E100DC, runs queue, and clears $C047)
+    memSet24(0xE10030, 0x5c);
+    memSet24(0xE10031, 0x74);
+    memSet24(0xE10032, 0x98);
+    memSet24(0xE10033, 0xfe);
+
+    // System Task / Event Dispatcher at $E10070: JML $FFB5E2 (CLC; RTL)
+    memSet24(0xE10070, 0x5c);
+    memSet24(0xE10071, 0xe2);
+    memSet24(0xE10072, 0xb5);
+    memSet24(0xE10073, 0xff);
+
+    // VBL interrupt active flag at $E100D7 (bit 3 set = VBL active & claimed)
+    memSet24(0xE100D7, 0x08);
 
     // Matches ROM FE:0061..0067 copied to $E10180..$E10187
     memSet24(0xE10180, 0x22); memSet24(0xE10181, 0x68); memSet24(0xE10182, 0x00); memSet24(0xE10183, 0xe1);
@@ -703,6 +796,7 @@ export const memoryReset = () => {
   // Everything past here is RamWorks memory
   memory.fill(0xFF, BaseMachineMemory)
   megaIIAux.fill(0x00)
+  megaIIMain.fill(0x00)
 
   // Real Apple II RAM does not power up as a uniform 0xFF: it settles into
   // a repeating 0xFF,0xFF,0x00,0x00 byte pattern (see js/util.ts's
@@ -807,8 +901,26 @@ const memGetSoftSwitch = (addr: number): number => {
               // responses to the init commands (writeCommand -> completeCommand).
               return iigsADB.readStatus();
 
+          case 0xC023: // VGC interrupt status
+              return vgcIntReg;
+
+          case 0xC02E: // Vertical counter
+          case 0xC02F: // Horizontal / Vertical counter
+              vgcIntReg &= ~0x20;
+              if (!((vgcIntReg & 0x04) && (vgcIntReg & 0x40))) {
+                  vgcIntReg &= ~0x80;
+              }
+              iigsRegisters[0x23] = vgcIntReg;
+              if (!iigsInterruptPending()) {
+                  (globalThis as any).cpu?.clearIrq?.();
+              }
+              return iigsRegisters[addr & 0xFF];
+
           case 0xC026: // ADB Data
               return iigsADB.readData();
+
+          case 0xC029: // NEWVIDEO
+              return iigsRegisters[0x29];
 
           case 0xC02D: // SLTROMSEL
               return iigsSlotRegister;
@@ -818,6 +930,39 @@ const memGetSoftSwitch = (addr: number): number => {
 
           case 0xC034: // Clock Control (top 4 bits) + Border Color (bottom 4 bits)
               return iigsClock.readControl();
+
+          case 0xC038: { // SCC Channel B Control
+              const reg = sccRegSelect[0];
+              sccRegSelect[0] = 0;
+              if (reg === 0) return 0x04; // RR0: Tx buffer empty
+              return 0x00; // All other registers including RR3 (interrupt pending) return 0
+          }
+
+          case 0xC039: { // SCC Channel A Control
+              const reg = sccRegSelect[1];
+              sccRegSelect[1] = 0;
+              if (reg === 0) return 0x04; // RR0: Tx buffer empty
+              return 0x00; // All other registers including RR3 (interrupt pending) return 0
+          }
+
+          case 0xC03A: // SCC Channel B Data
+          case 0xC03B: // SCC Channel A Data
+              return 0x00;
+
+          case 0xC03C: // DOC Sound Control
+              return (iigsRegisters[0x3C] & 0x70) | 0x0F;
+
+          case 0xC03D: // DOC Sound Data ($E0 IRQ status = 0xFF / bit 7 set = no sound IRQ pending)
+              return 0xFF;
+
+          case 0xC03E: // DOC Sound Address Low
+              return iigsRegisters[0x3E];
+
+          case 0xC03F: // DOC Sound Address High
+              return iigsRegisters[0x3F];
+
+          case 0xC041: // INTEN
+              return iigsRegisters[0x41] & 0x1F;
 
           case 0xC046: {
               // $C046 INTFLAG (web-a2e interruptStatusRegister): bit3 = VBL
@@ -1010,6 +1155,7 @@ const memSetSoftSwitch = (addr: number, value: number) => {
         vidhd.writeSoftSwitch(value)
       }
       SWITCHES.NEWVIDEO.isSet = (value & 0x80) !== 0
+      iigsRegisters[0x29] = value
       return
     }
     
@@ -1017,6 +1163,19 @@ const memSetSoftSwitch = (addr: number, value: number) => {
     if (currentMachineName === "APPLE2GS" && addr >= 0xC020 && addr <= 0xC04F) {
         // Handle specific IIgs hardware writes
         switch (addr) {
+            case 0xC023: // VGC interrupt control
+                vgcIntReg = (vgcIntReg & 0xF8) | (value & 0x07);
+                if (((vgcIntReg & 0x02) && (vgcIntReg & 0x20)) || ((vgcIntReg & 0x04) && (vgcIntReg & 0x40))) {
+                    vgcIntReg |= 0x80;
+                } else {
+                    vgcIntReg &= ~0x80;
+                }
+                iigsRegisters[0x23] = vgcIntReg;
+                if (!iigsInterruptPending()) {
+                    (globalThis as any).cpu?.clearIrq?.();
+                }
+                break;
+
             case 0xC026: // ADB Data (command/response queue)
                 iigsADB.writeCommand(value);
                 break;
@@ -1031,6 +1190,21 @@ const memSetSoftSwitch = (addr: number, value: number) => {
                 updateAddressTables();
                 break;
 
+            case 0xC032: // VGC interrupt clear
+                if ((value & 0x40) === 0) vgcIntReg &= ~0x40;
+                if ((value & 0x20) === 0) vgcIntReg &= ~0x20;
+                if (((vgcIntReg & 0x02) && (vgcIntReg & 0x20)) || ((vgcIntReg & 0x04) && (vgcIntReg & 0x40))) {
+                    vgcIntReg |= 0x80;
+                } else {
+                    vgcIntReg &= ~0x80;
+                }
+                iigsRegisters[0x23] = vgcIntReg;
+                iigsRegisters[0x32] = value;
+                if (!iigsInterruptPending()) {
+                    (globalThis as any).cpu?.clearIrq?.();
+                }
+                break;
+
             case 0xC033: // Clock Data
                 iigsClock.writeData(value);
                 break;
@@ -1040,12 +1214,41 @@ const memSetSoftSwitch = (addr: number, value: number) => {
                 iigsRegisters[0x34] = value; // Also store for border color
                 break;
 
+            case 0xC038: // SCC Channel B Control
+                if (sccRegSelect[0] === 0) {
+                    sccRegSelect[0] = value & 0x0F;
+                } else {
+                    sccRegSelect[0] = 0;
+                }
+                break;
+
+            case 0xC039: // SCC Channel A Control
+                if (sccRegSelect[1] === 0) {
+                    sccRegSelect[1] = value & 0x0F;
+                } else {
+                    sccRegSelect[1] = 0;
+                }
+                break;
+
+            case 0xC03A: // SCC Channel B Data
+            case 0xC03B: // SCC Channel A Data
+                break;
+
+            case 0xC041: // INTEN
+                iigsRegisters[0x41] = value & 0x1F;
+                if (!iigsInterruptPending()) {
+                    (globalThis as any).cpu?.clearIrq?.();
+                }
+                break;
+
             case 0xC047: // CLEARINT - clears the pending interrupt flags
-                // (web-a2e: vblPending_ = false; quarterSecondPending_ = false)
                 vblPending = false;
                 quarterSecondPending = false;
                 (globalThis as any).__c047Writes = ((globalThis as any).__c047Writes || 0) + 1;
                 iigsRegisters[0x47] = value;
+                if (!iigsInterruptPending()) {
+                    (globalThis as any).cpu?.clearIrq?.();
+                }
                 break;
 
             default:

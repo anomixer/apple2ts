@@ -1,8 +1,8 @@
-import { doSetMachineName, doSetRunMode, doBoot, resetCpuSpeedForTesting, getCPU } from "./motherboard"
-import { memGet24, memory } from "./memory"
+import { doSetMachineName, doSetRunMode, doBoot, resetCpuSpeedForTesting } from "./motherboard"
+import { memory } from "./memory"
 import { SWITCHES } from "./softswitches"
 import { doSetEmuDriveNewData } from "./devices/drivestate"
-import { DriveProps, RUN_MODE } from "../common/utility"
+import { RUN_MODE } from "../common/utility"
 import { setIsTesting } from "./worker2main"
 import * as fs from "fs"
 
@@ -53,7 +53,6 @@ describe("Apple IIgs A2DeskTop 1.5 Boot Verification", () => {
       lastAppleWriteTime: 0,
       cloudData: null,
       writableFileHandle: null,
-      lastLocalFileTime: 0,
       lastLocalFileWriteTime: 0,
     }
     const accepted = doSetEmuDriveNewData(props)

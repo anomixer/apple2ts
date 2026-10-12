@@ -1,4 +1,4 @@
-import { doSetMachineName, doSetRunMode, doSetCyclesToRun, doBoot, resetCpuSpeedForTesting, getCPU } from "./motherboard"
+import { doSetMachineName, doSetRunMode, doBoot, resetCpuSpeedForTesting, getCPU } from "./motherboard"
 import { getTextPageAsString, memGet24, iigsRegisters, iigsGetVblPending } from "./memory"
 import { RUN_MODE } from "../common/utility"
 import { setIsTesting } from "./worker2main"

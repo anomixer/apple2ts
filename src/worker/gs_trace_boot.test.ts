@@ -2,7 +2,7 @@ import { doSetMachineName, doSetRunMode, doBoot, resetCpuSpeedForTesting } from 
 import { memGet24, memory } from "./memory"
 import { SWITCHES } from "./softswitches"
 import { doSetEmuDriveNewData } from "./devices/drivestate"
-import { DriveProps, RUN_MODE } from "../common/utility"
+import { RUN_MODE } from "../common/utility"
 import { setIsTesting } from "./worker2main"
 import * as fs from "fs"
 import * as path from "path"
@@ -28,7 +28,6 @@ test("Apple IIgs boots ProDOS 8 and A2DeskTop from Slot 7 hard drive into DHIRES
       lastAppleWriteTime: 0,
       cloudData: null,
       writableFileHandle: null,
-      lastLocalFileTime: 0,
       lastLocalFileWriteTime: 0,
     }
     doSetEmuDriveNewData(props)

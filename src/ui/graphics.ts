@@ -843,12 +843,14 @@ const processSuperHiRes = (hiddenContext: CanvasRenderingContext2D, colorMode: C
         }
       } else {
         // 640 mode
+        const quarterOffsets = [8, 12, 0, 4]
         for (let x = 0; x < outWidth; x++) {
           const srcX = Math.min(639, Math.floor((x * 640) / outWidth))
           const byteVal = shrData[lineOffset + (srcX >> 2)]
-          const shift = (3 - (srcX & 3)) * 2
+          const pixelInByte = srcX & 3
+          const shift = (3 - pixelInByte) * 2
           const color2Bit = (byteVal >> shift) & 0x03
-          const colorIndex = (srcX % 4) * 4 + color2Bit
+          const colorIndex = quarterOffsets[pixelInByte] + color2Bit
           const c = palIdx | colorIndex
 
           const px = rowOffset + x * 4

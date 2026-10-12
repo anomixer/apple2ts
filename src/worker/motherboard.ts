@@ -40,10 +40,12 @@ import { memory, memGet, getTextPage, getHires, memoryReset,
   memSet24,
   gsROM,
   iigsSignalVbl,
+  iigsSignalQuarterSecond,
+  iigsSignalOneSecond,
   iigsInterruptPending,
   iigsInitInterrupts,
   iigsClearInterrupts,
-  iigsSlotRegister,
+  setIigsSlotRegister,
   iigsRegisters} from "./memory"
 import { setButtonState, handleGamepads } from "./devices/joystick"
 import { handleGameSetup } from "./games/game_mappings"
@@ -82,6 +84,8 @@ import { hasHardDriveMounted } from "./devices/drivestate"
 import { findMemory, getMemoryView, resolveMemoryRangeRequest } from "./memory_view"
 
 let speedMode = 0
+let iigsQuarterSecCounter = 0
+let iigsOneSecCounter = 0
 let cpuSpeed = 0
 export let isDebugging = false
 let appMode = "default"
@@ -348,11 +352,11 @@ export const configureMachine = () => {
     let slotReg = 0
     for (let s = 1; s <= 7; s++) {
       if (s === 3) continue // slot 3 is always internal video
-      if (currentSlotConfig[s] !== "none") {
+      if ((currentSlotConfig as any)[s] !== "none") {
         slotReg |= (1 << s)
       }
     }
-    iigsSlotRegister = slotReg
+    setIigsSlotRegister(slotReg)
     iigsRegisters[0x2D] = slotReg
 
     get6502Instructions()
@@ -692,6 +696,10 @@ export const doSetMachineName = (name: MACHINE_NAME, reset = true, publishState 
   
   if (machineName === "APPLE2GS") {
     cpu = new CPU65816(memGet24, memSet24)
+    ;(cpu as CPU65816).setVectorReadCallback((address: number) => {
+      // 65816 vector pull (VP) always reads from Bank $FF ROM on Apple IIgs
+      return memGet24(0xFF0000 | (address & 0xFFFF))
+    })
   } else {
     cpu = new CPU6502Wrapper()
   }
@@ -1185,24 +1193,39 @@ const doAdvance6502 = () => {
     }
     if (cycles < 0) break
     cycleTotal += cycles
-    const cycleInFrame = s6502.cycleCount % 17030
-    if (cycleInFrame < 4550) {
+    const isIIgs = (machineName === "APPLE2GS")
+    const frameCycles = isIIgs ? 46727 : 17030
+    const vblCycles = isIIgs ? 12460 : 4550
+    const cycleInFrame = s6502.cycleCount % frameCycles
+    if (cycleInFrame < vblCycles) {
       // Return "low" for 70 scan lines out of 262 (70 * 65 cycles = 4550)
       // Note that VBLINV is the inverse of the vertical blanking status,
       // so if it's set then vertical blanking needs to be activated.
       if (SWITCHES.VBLINV.isSet) {
         startVBL()
         // IIgs: VBL is a hardware interrupt — signal it and raise the IRQ line if enabled.
-        if (machineName === "APPLE2GS") {
+        if (isIIgs) {
           iigsSignalVbl()
+          iigsQuarterSecCounter++
+          if (iigsQuarterSecCounter >= 15) {
+            iigsQuarterSecCounter = 0
+            iigsSignalQuarterSecond()
+          }
+          iigsOneSecCounter++
+          if (iigsOneSecCounter >= 60) {
+            iigsOneSecCounter = 0
+            iigsSignalOneSecond()
+          }
           if (iigsInterruptPending()) {
-            ;(cpu as any).irq?.()
+            cpu.irq?.()
+          } else {
+            cpu.clearIrq?.()
           }
         }
       }
     } else {
       endVBL()
-      const line = Math.floor((cycleInFrame - 4550) / 65)
+      const line = Math.floor((cycleInFrame - vblCycles) / (isIIgs ? 178 : 65))
       if (line !== currentLine && line < 192) {
         currentLine = line
         exportMemoryToHiresLine(line)

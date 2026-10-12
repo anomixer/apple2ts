@@ -16,7 +16,6 @@
 
 // RTC_START_TRANS / RTC_READ_WRITE / RTC_CLOCK_ENABLE (gssquared RTC.hpp)
 const RTC_START_TRANS = 0b100;
-const RTC_READ_WRITE = 0b010;
 const RTC_CLOCK_ENABLE = 0b001;
 
 const UNIX_EPOCH_DELTA = 2082844800; // seconds between 1904 and 1970
@@ -30,7 +29,6 @@ enum RTC_State {
 class IIgsClock {
     private bram = new Uint8Array(256);
     private seconds = 0; // seconds since 1904, kept in seconds_bytes
-    private lastSeconds = 0;
     private commandReg: [number, number] = [0, 0];
     private dataReg = 0;
     private ctlRegByte = RTC_CLOCK_ENABLE;

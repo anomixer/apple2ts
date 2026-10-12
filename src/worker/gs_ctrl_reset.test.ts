@@ -1,5 +1,5 @@
 import { doSetMachineName, doSetRunMode, doBoot, doReset, resetCpuSpeedForTesting, getCPU } from "./motherboard"
-import { getTextPageAsString, memGet24, iigsRegisters } from "./memory"
+import { getTextPageAsString, memGet24 } from "./memory"
 import { iigsADB } from "./iigs_adb"
 import { RUN_MODE } from "../common/utility"
 import { setIsTesting } from "./worker2main"

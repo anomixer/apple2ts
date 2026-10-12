@@ -258,6 +258,28 @@ with the animated barber pole scan bar, identical to real Apple IIgs hardware!
 2. Implemented `reset(coldBoot = false)` on `IIgsClock` in `src/worker/iigs_clock.ts` to reset transaction state, control register, and restore cold boot signature.
 3. Added `src/worker/gs_desktop15_boot.test.ts` verifying mounting `c:\dev\emu\ap2\A2DeskTop-1.5.po` in Slot 7 Drive 1 after initial boot and rebooting into A2DeskTop Double Hi-Res graphics.
 
+### 23. Apple IIgs GS/OS 6.0.1 Boot to Finder Desktop (Language Card Shadowing & Fatal Error 0308) — RESOLVED
+**Issue**: Booting Apple IIgs GS/OS 6.0.1 (`GSOS601.po`) crashed during driver loading with `Fatal system error -> 0308` (`hbQueueBadErr`).
+**Root causes**:
+1. **False Language Card Shadowing from Fast RAM Bank 01 to Mega II Bank E1**:
+   - In `src/worker/memory.ts`, `memSet24` for Bank 01 (`bank === 0x01 && offset >= 0xD000`) had a rogue write: `megaIIAux[targetOffset] = data`.
+   - In Apple IIgs architecture (`c:\dev\gssquared\src\mmus\mmu_iigs.hpp` `shadow_is_enabled`), Language Card ($D000-$FFFF) is **never shadowed** into Mega II memory. Fast RAM Banks 00/01 and Mega II Banks E0/E1 maintain independent Language Card RAM spaces.
+   - During boot, `START.GS.OS` stored the startup volume prefix (Prefix #32, e.g. `MDVOL2`) at `$E1:D6F7`.
+   - Subsequent `MVN $01, $7E` relocations unpacking drivers into Fast RAM Bank 01 clobbered `megaIIAux[0xC6F7]` (Bank 1 of Language Card) with code opcode `0x5C 0xA0` (`JML`).
+   - When `GS.OS` loaded Prefix #32 at `00:F569` (`LDA [$FC]` pointing to `$E1:D6F7`), it read length `0xA05C` (41,052 bytes!) instead of the actual length byte `0x0007`.
+   - The subsequent memory copy loop (`TAX; LDA [$FC],Y; STA [$E8],Y; INY; DEX; BNE`) overwrote 41,052 bytes of system memory, clobbering the VBL task queue signature `$A55A` at `$007441`. The ROM VBL handler detected the corrupted signature and invoked `SysFailMgr` with Error 0308.
+2. **Bank E0 / Bank 00 Separation**:
+   - Bank E0 previously aliased to Bank 00. Dedicated `megaIIMain` (64KB) implemented for Bank E0, cleanly isolating Mega II Main RAM from Fast RAM Bank 00 while mirroring Text/Hi-Res shadowing per `$C035`.
+**Fix**:
+- Removed the rogue `megaIIAux` write from Bank 01's Language Card handler in `src/worker/memory.ts`.
+- Bank 01 writes only to `memory[RamWorksMemoryStart + targetOffset]`. Direct writes to Bank E1 (`bank === 0xE1`) remain the sole writer to `megaIIAux` Language Card RAM.
+**Result**:
+- Prefix #32 at `$E1:D6F7` retains the valid 7-byte string `MDVOL2`.
+- The string copy loop transfers exactly 7 bytes without corrupting `$007441`.
+- Fatal Error 0308 is completely eliminated.
+- GS/OS 6.0.1 successfully loads `PRO.FST`, `DRIVERS`, `SYSTEM.SETUP`, `TOOLS` (`TOOL034`), control panels, and launches `/SYSTEM/START` (the official Apple IIgs Finder).
+- Finder renders the full Super Hi-Res desktop with menu bar, clock, volume icon, trash can, and dialog window. Verified in `test_gsos601.test.ts`.
+
 ## Debugging Techniques Used
 - **Instruction Tracing**: Added a circular buffer in `motherboard.ts` to trace instructions when debugging specific loops.
 - **ROM Inspection**: Disassembled portions of `gsROM` via Node.js helper scripts to identify hardware polling loops (such as `SELIWM` and diagnostic entry points).
@@ -266,7 +288,8 @@ with the animated barber pole scan bar, identical to real Apple IIgs hardware!
 
 ## Key Files Modified
 - `src/worker/cpu65816.ts`: 65816 CPU emulation, stack normalization, IRQ sampling, peripheral `specialJumpTable` execution, 65816 ADC/SBC decimal mode.
-- `src/worker/memory.ts`: Memory mapping for Bank E0/E1, dedicated `megaIIAux` allocation, Bank FE/FF ROM, IWM registers ($C0E0-$C0EF), State Register ($C068), Slot Register ($C02D), interrupt flags ($C046), and slot C800 strobe management.
+- `src/worker/memory.ts`: Memory mapping for Bank E0/E1, dedicated `megaIIMain` and `megaIIAux` (64KB each), Bank FE/FF ROM, IWM registers ($C0E0-$C0EF), State Register ($C068), Slot Register ($C02D), interrupt flags ($C046), slot C800 strobe management, and Fast RAM vs Mega II Language Card isolation.
+- `src/worker/devices/harddrivedata.ts`: SmartPort and ProDOS hard drive block hooks ($C7C0/$C7C3), block read/write operations for GS/OS.
 - `src/worker/iigs_adb.ts`: ADB controller emulation.
 - `src/worker/iigs_clock.ts`: Full RTC and 256-byte Battery RAM state machine from `gssquared`.
 - `src/worker/motherboard.ts`: CPU cycle accounting, VBL→IRQ gated triggering for IIgs, separation of cold boot memory init from warm reset.
@@ -277,6 +300,24 @@ with the animated barber pole scan bar, identical to real Apple IIgs hardware!
 - `src/ui/localstorage.ts`: Persistence for machine profiles and slot sanitization.
 - `src/worker/gs_speed.test.ts`: Apple IIgs speed modes test.
 - `src/worker/gs_trace_boot.test.ts`: Regression test verifying ProDOS 8 and A2DeskTop boot into Double Hi-Res graphics.
+- `src/worker/gs_desktop15_boot.test.ts`: Regression test verifying mounting `A2DeskTop-1.5.po` and rebooting.
+- `src/worker/test_gsos601.test.ts`: Regression test verifying cold boot of GS/OS 6.0.1 (`GSOS601.po`) directly into the Finder desktop in Super Hi-Res mode.
+
+## Current Status & Milestones Achieved
+1. **Apple IIgs Cold Boot POST & Diagnostics**:
+   - Complete cold boot POST, memory clearing, startup banner, and barber pole scan bar.
+   - Clean Ctrl-Reset to Applesoft BASIC prompt `]`.
+2. **Peripheral & Slot Subsystem**:
+   - Slot 7 SmartPort Hard Drive / HDV emulation with ProDOS block hook ($C7C0) and 16-bit SmartPort dispatcher hook ($C7C3).
+   - Mockingboard VIA timers and IRQs ticking smoothly on 65816.
+   - Pure slot sanitization strictly enforcing IIgs hardware architecture.
+3. **ProDOS 8 & 8-bit Software Compatibility**:
+   - Boots standard ProDOS disks, ProDOS 2.4.2, and A2DeskTop 1.5 into 80-column Double Hi-Res mode with MouseText.
+4. **GS/OS 6.0.1 16-bit Operating System**:
+   - Unpacks via `START.GS.OS` OMF relocator to Bank 7E and relocates 14 blocks into Banks 00, 01, E0, and E1.
+   - Transitions cleanly from ProDOS 8 block access to 16-bit SmartPort calls.
+   - Successfully loads `PRO.FST`, `DRIVERS`, `SYSTEM.SETUP`, `TOOLS` (QuickDraw, Window Manager, `TOOL034`), control panels, and desk accessories (`TIME`, `CHRONOS II`).
+   - Launches `/SYSTEM/START` (official Apple IIgs Finder) and renders the full 640x200 Super Hi-Res desktop with menu bar, clock, disk icons, trash can, mouse pointer, and system modal dialogs.
 
 ## Reference Materials
 - **GSSquared**: `c:\dev\gssquared\` (Primary reference: `RTC_PRAM.hpp`, `IWM2.hpp`, `display.cpp`, `DevelopLog.md`, `mmu_iie.cpp`, `computer.cpp`)
