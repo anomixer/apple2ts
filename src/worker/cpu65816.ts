@@ -16,6 +16,77 @@ export enum Status816 {
 }
 
 // Vectors
+
+// Addressing mode identifiers, used only for cycle accounting. See
+// addCycles() on CPU65816 for why this exists.
+enum ADDR_MODE_816 {
+    IMMEDIATE,
+    DIRECT,
+    DIRECT_X,
+    DIRECT_Y,
+    DIRECT_INDIRECT,          // (dp)
+    DIRECT_INDIRECT_LONG,    // [dp]
+    ABSOLUTE,
+    ABSOLUTE_X,
+    ABSOLUTE_Y,
+    ABSOLUTE_LONG,
+    ABSOLUTE_LONG_X,
+    DIRECT_INDEXED_INDIRECT, // (dp,X)
+    DIRECT_INDIRECT_INDEXED, // (dp),Y
+    DIRECT_INDIRECT_LONG_INDEXED, // [dp],Y
+    STACK_RELATIVE,          // d,S
+    STACK_RELATIVE_INDIRECT_INDEXED, // (d,S),Y
+    ABSOLUTE_INDIRECT,       // JMP (abs)
+    ABSOLUTE_INDEXED_INDIRECT, // JMP (abs,X)
+    ABSOLUTE_INDIRECT_LONG,  // JML [abs]
+    ACCUMULATOR,
+    NONE,
+}
+
+// Internal (no bus activity) cycles per addressing mode, i.e. published WDC
+// cycle count minus the number of bus accesses made below. The values hold for
+// both 8-bit and 16-bit operands because a 16-bit access is charged two bus
+// cycles, exactly as on real hardware. `indexed` is true when an index registro
+// register participates, which is what earns the page-crossing cycle.
+const ADDR_CYCLES_816: {read: number, write: number, rmw: number}[] = [
+    /* IMMEDIATE                    */ {read: 0, write: 0, rmw: 0},
+    /* DIRECT                       */ {read: 0, write: 0, rmw: 1},
+    /* DIRECT_X                     */ {read: 1, write: 1, rmw: 2},
+    /* DIRECT_Y                     */ {read: 1, write: 1, rmw: 2},
+    /* DIRECT_INDIRECT              */ {read: 0, write: 0, rmw: 2},
+    /* DIRECT_INDIRECT_LONG         */ {read: 0, write: 0, rmw: 1},
+    /* ABSOLUTE                     */ {read: 0, write: 0, rmw: 1},
+    /* ABSOLUTE_X                   */ {read: 0, write: 0, rmw: 1},
+    /* ABSOLUTE_Y                   */ {read: 0, write: 0, rmw: 1},
+    /* ABSOLUTE_LONG                */ {read: 0, write: 0, rmw: 1},
+    /* ABSOLUTE_LONG_X              */ {read: 0, write: 0, rmw: 2},
+    /* DIRECT_INDEXED_INDIRECT      */ {read: 1, write: 1, rmw: 2},
+    /* DIRECT_INDIRECT_INDEXED      */ {read: 0, write: 0, rmw: 2},
+    /* DIRECT_INDIRECT_LONG_INDEXED */ {read: 0, write: 0, rmw: 1},
+    /* STACK_RELATIVE               */ {read: 1, write: 1, rmw: 2},
+    /* STACK_RELATIVE_IND_INDEXED   */ {read: 2, write: 2, rmw: 2},
+    /* ABSOLUTE_INDIRECT            */ {read: 0, write: 0, rmw: 0},
+    /* ABSOLUTE_INDEXED_INDIRECT    */ {read: 1, write: 0, rmw: 0},
+    /* ABSOLUTE_INDIRECT_LONG       */ {read: 0, write: 0, rmw: 0},
+    /* ACCUMULATOR                  */ {read: 0, write: 0, rmw: 0},
+    /* NONE                         */ {read: 0, write: 0, rmw: 0},
+]
+
+// Modes where an index register is added to an address that is *not* just the
+// direct page. These earn the page-crossing cycle on reads and an unconditional
+// extra cycle on writes and read-modify-writes, because the CPU has to perform
+// the index add even when it does not cross a page.
+//
+// The direct page indexed modes (dp,X / dp,Y) are deliberately absent: their
+// index add is charged in the table above, and in emulation mode the access
+// wraps inside page zero so it costs exactly what the 6502's zp,X costs.
+const INDEXED_ADDR_MODES_816 = new Set<ADDR_MODE_816>([
+    ADDR_MODE_816.ABSOLUTE_X,
+    ADDR_MODE_816.ABSOLUTE_Y,
+    ADDR_MODE_816.DIRECT_INDIRECT_INDEXED,
+    ADDR_MODE_816.DIRECT_INDIRECT_LONG_INDEXED,
+    ADDR_MODE_816.STACK_RELATIVE_INDIRECT_INDEXED,
+])
 export const VEC_E_NMI = 0xFFFA;
 export const VEC_E_RESET = 0xFFFC;
 export const VEC_E_IRQ = 0xFFFE;
@@ -56,6 +127,23 @@ export class CPU65816 implements ICPU {
     public stopped: boolean = false;
     public waiting: boolean = false;
     public irqPending: boolean = false;
+
+    // --- Cycle accounting ---
+    // The 65816's published cycle count equals the number of bus accesses plus a
+    // handful of internal (no bus activity) cycles per addressing mode. Every
+    // read8()/write8() below already charges its bus cycle, so all we have to do
+    // is charge the internal cycles. apple2ts's own 6502 core does this with an
+    // explicit per-instruction table, but the 65816's operand width, bank
+    // registers and extra addressing modes make a flat table far too big, so the
+    // mode-relative approach mirrors gssquared's cpus/base_6502.cpp instead.
+    private cycles = 0;
+    private addrMode = ADDR_MODE_816.DIRECT;
+    private addrCrossed = false;
+    private blockMoveFirst = false;
+
+    private addCycles(count: number) {
+        this.cycles += count;
+    }
 
     private readMemory: ReadCallback;
     private writeMemory: WriteCallback;
@@ -137,6 +225,9 @@ export class CPU65816 implements ICPU {
     }
 
     public processInstruction(traceCallback?: ((str: string) => void) | null): number {
+        this.cycles = 0
+        this.addrMode = ADDR_MODE_816.NONE
+        this.addrCrossed = false
         if (this.stopped) return 1; // Burn 1 cycle
         // WAI: wait for an interrupt to arrive, not to be taken. Once one is
         // pending, fall through and service it (web-a2e: waiting_ cleared then
@@ -152,7 +243,9 @@ export class CPU65816 implements ICPU {
         if (!this.getFlag(Status816.I) && hasHardwareIrq) {
             this.irqPending = false;
             this.interrupt(VEC_N_IRQ, VEC_E_IRQ, false);
-            return 7;
+            // Two dummy fetches, three pushes and the vector pair: 7 cycles in
+            // emulation mode and 8 in native mode, which pushes PB as well.
+            return this.emulationMode ? 7 : 8;
         }
 
         const pc = this.PC;
@@ -199,9 +292,8 @@ export class CPU65816 implements ICPU {
         }
         
         this.executeOpcode(opcode);
-        
-        // Return 1 cycle for now as placeholder
-        return 1;
+
+        return this.cycles;
     }
 
     private executeOpcode(opcode: number) {
@@ -427,34 +519,34 @@ export class CPU65816 implements ICPU {
                 break;
 
             // --- INX, DEX, INY, DEY ---
-            case 0xE8: this.opINX(); break;
-            case 0xCA: this.opDEX(); break;
-            case 0xC8: this.opINY(); break;
-            case 0x88: this.opDEY(); break;
+            case 0xE8: this.opINX(); this.simple(); break;
+            case 0xCA: this.opDEX(); this.simple(); break;
+            case 0xC8: this.opINY(); this.simple(); break;
+            case 0x88: this.opDEY(); this.simple(); break;
 
             // --- Flags ---
-            case 0x18: this.setFlag(Status816.C, false); break; // CLC
-            case 0x38: this.setFlag(Status816.C, true); break;  // SEC
-            case 0x58: this.setFlag(Status816.I, false); break; // CLI
-            case 0x78: this.setFlag(Status816.I, true); break;  // SEI
-            case 0xB8: this.setFlag(Status816.V, false); break; // CLV
-            case 0xD8: this.setFlag(Status816.D, false); break; // CLD
-            case 0xF8: this.setFlag(Status816.D, true); break;  // SED
+            case 0x18: this.setFlag(Status816.C, false); this.simple(); break; // CLC
+            case 0x38: this.setFlag(Status816.C, true); this.simple(); break;  // SEC
+            case 0x58: this.setFlag(Status816.I, false); this.simple(); break; // CLI
+            case 0x78: this.setFlag(Status816.I, true); this.simple(); break;  // SEI
+            case 0xB8: this.setFlag(Status816.V, false); this.simple(); break; // CLV
+            case 0xD8: this.setFlag(Status816.D, false); this.simple(); break; // CLD
+            case 0xF8: this.setFlag(Status816.D, true); this.simple(); break;  // SED
 
             // --- Register Transfers ---
-            case 0xAA: this.opTransfer('A', 'X'); break; // TAX
-            case 0x8A: this.opTransfer('X', 'A'); break; // TXA
-            case 0xA8: this.opTransfer('A', 'Y'); break; // TAY
-            case 0x98: this.opTransfer('Y', 'A'); break; // TYA
-            case 0xBA: this.opTransfer('S', 'X'); break; // TSX
-            case 0x9A: this.opTransfer('X', 'S'); break; // TXS
-            case 0x9B: this.opTransfer('X', 'Y'); break; // TXY
-            case 0xBB: this.opTransfer('Y', 'X'); break; // TYX
-            case 0x5B: this.opTCD(); break; // TCD
-            case 0x7B: this.opTDC(); break; // TDC
-            case 0x3B: this.opTSC(); break; // TSC
-            case 0x1B: this.opTCS(); break; // TCS
-            case 0xEB: this.opXBA(); break; // XBA
+            case 0xAA: this.opTransfer('A', 'X'); this.simple(); break; // TAX
+            case 0x8A: this.opTransfer('X', 'A'); this.simple(); break; // TXA
+            case 0xA8: this.opTransfer('A', 'Y'); this.simple(); break; // TAY
+            case 0x98: this.opTransfer('Y', 'A'); this.simple(); break; // TYA
+            case 0xBA: this.opTransfer('S', 'X'); this.simple(); break; // TSX
+            case 0x9A: this.opTransfer('X', 'S'); this.simple(); break; // TXS
+            case 0x9B: this.opTransfer('X', 'Y'); this.simple(); break; // TXY
+            case 0xBB: this.opTransfer('Y', 'X'); this.simple(); break; // TYX
+            case 0x5B: this.opTCD(); this.simple(); break; // TCD
+            case 0x7B: this.opTDC(); this.simple(); break; // TDC
+            case 0x3B: this.opTSC(); this.simple(); break; // TSC
+            case 0x1B: this.opTCS(); this.simple(); break; // TCS
+            case 0xEB: this.opXBA(); this.simple(); break; // XBA
 
             // --- Stack Operations ---
             case 0x48: this.opPush('A'); break; // PHA
@@ -518,43 +610,56 @@ export class CPU65816 implements ICPU {
             // --- Jumps and Returns ---
             case 0x4C: this.PC = this.addrAbsolute() & 0xFFFF; break; // JMP abs
             case 0x6C: this.PC = this.addrAbsoluteIndirect() & 0xFFFF; break; // JMP (abs)
-            case 0x7C: this.PC = this.addrAbsoluteIndexedIndirect() & 0xFFFF; break; // JMP (abs,X)
-            case 0x5C: 
+            case 0x7C: this.PC = this.addrAbsoluteIndexedIndirect() & 0xFFFF; this.phantomRead(); break; // JMP (abs,X)
+            case 0x5C:
                 const jmpLong = this.addrAbsoluteLong();
                 this.PC = jmpLong & 0xFFFF;
                 this.PB = (jmpLong >> 16) & 0xFF;
                 break; // JML
-            case 0xDC: 
+            case 0xDC:
                 const jmpLongInd = this.addrAbsoluteIndirectLong();
                 this.PC = jmpLongInd & 0xFFFF;
                 this.PB = (jmpLongInd >> 16) & 0xFF;
                 break; // JML [abs]
-            
+
             case 0x20: // JSR abs
+                this.addrMode = ADDR_MODE_816.NONE
                 this.push16((this.PC + 1) & 0xFFFF);
+                // The 65816 pushes the return address before reading the target.
+                this.phantomRead();
                 this.PC = this.addrAbsolute() & 0xFFFF;
                 break;
             case 0xFC: // JSR (abs,X)
+                this.addrMode = ADDR_MODE_816.NONE
                 this.push16((this.PC + 1) & 0xFFFF);
+                this.phantomRead();
+                this.phantomRead();
                 this.PC = this.addrAbsoluteIndexedIndirect() & 0xFFFF;
                 break;
             case 0x22: // JSL
+                this.addrMode = ADDR_MODE_816.NONE
                 const jslTarget = this.addrAbsoluteLong();
                 this.push8Wide(this.PB);
                 this.push16Wide((this.PC - 1) & 0xFFFF); // PC is already incremented by 3 for abs long
                 this.normaliseStack();
+                this.phantomRead();
                 this.PB = (jslTarget >> 16) & 0xFF;
                 this.PC = jslTarget & 0xFFFF;
                 break;
-            
+
             case 0x60: // RTS
+                this.phantomRead();
                 this.PC = (this.pop16() + 1) & 0xFFFF;
+                this.phantomRead();
+                this.phantomRead();
                 break;
             case 0x6B: // RTL
                 // Pop in reverse order of push: PC (2 bytes) then PB (1 byte)
+                this.phantomRead();
                 this.PC = (this.pop16Wide() + 1) & 0xFFFF;
                 this.PB = this.pop8Wide();
                 this.normaliseStack();
+                this.phantomRead();
                 break;
             case 0x40: // RTI
                 this.opPop('P');
@@ -563,16 +668,19 @@ export class CPU65816 implements ICPU {
                 break;
 
             // --- Misc ---
-            case 0xEA: break; // NOP
-            case 0x42: this.fetch8(); break; // WDM (consumes 1 byte)
-            case 0xDB: this.stopped = true; break; // STP
-            case 0xCB: this.waiting = true; break; // WAI
+            case 0xEA: this.simple(); break; // NOP
+            case 0x42: this.fetch8(); this.simple(); break; // WDM (consumes 1 byte)
+            case 0xDB: this.stopped = true; this.simple(); break; // STP
+            case 0xCB: this.waiting = true; this.simple(); break; // WAI
             case 0x00: // BRK (software interrupt; pushes the B flag set)
                 this.PC = (this.PC + 1) & 0xFFFF; // BRK is a 2-byte instruction
+                // BRK fetches the byte after the opcode before pushing.
+                this.phantomRead();
                 this.interrupt(VEC_N_BRK, VEC_E_IRQ, true);
                 break;
             case 0x02: // COP
                 this.PC = (this.PC + 1) & 0xFFFF;
+                this.phantomRead();
                 this.interrupt(VEC_N_COP, VEC_E_COP, true);
                 break;
             case 0x54: // MVN
@@ -586,6 +694,14 @@ export class CPU65816 implements ICPU {
                 const from = (srcBank << 16) | this.X;
                 const to = (destBank << 16) | this.Y;
                 this.write8(to, this.read8(from));
+                // The first pass takes two extra cycles (the operand bytes get
+                // re-fetched on every subsequent pass), later ones just one.
+                const isFirstPass = !this.blockMoveFirst;
+                this.blockMoveFirst = true;
+                this.phantomRead();
+                if (isFirstPass) {
+                    this.phantomRead();
+                }
                 if (opcode === 0x54) {
                     this.X = (this.X + 1) & 0xFFFF;
                     this.Y = (this.Y + 1) & 0xFFFF;
@@ -600,18 +716,23 @@ export class CPU65816 implements ICPU {
                 this.A = (this.A - 1) & 0xFFFF;
                 if (this.A !== 0xFFFF) {
                     this.PC = (this.PC - 3) & 0xFFFF; // re-execute the same MVN
+                } else {
+                    this.blockMoveFirst = false;
                 }
                 break;
             }
-            
+
             case 0xFB: // XCE (Exchange Carry and Emulation bit)
                 this.opXCE();
+                this.simple();
                 break;
             case 0xC2: // REP (Reset Processor Status Bits)
                 this.opREP();
+                this.simple();
                 break;
             case 0xE2: // SEP (Set Processor Status Bits)
                 this.opSEP();
+                this.simple();
                 break;
             // --- STZ ---
             case 0x64: this.opSTZ(this.addrDirect()); break;
@@ -648,6 +769,7 @@ export class CPU65816 implements ICPU {
 
     private opLDA(address: number) {
         const eightBit = this.getFlag(Status816.M);
+        this.chargeAddress("read", eightBit ? 1 : 2);
         const value = this.read8or16(address, eightBit);
         if (eightBit) {
             this.A = (this.A & 0xFF00) | (value & 0xFF);
@@ -662,11 +784,13 @@ export class CPU65816 implements ICPU {
 
     private opSTA(address: number) {
         const eightBit = this.getFlag(Status816.M);
+        this.chargeAddress("write", eightBit ? 1 : 2);
         this.write8or16(address, this.A, eightBit);
     }
 
     private opORA(address: number) {
         const eightBit = this.getFlag(Status816.M);
+        this.chargeAddress("read", eightBit ? 1 : 2);
         const value = this.read8or16(address, eightBit);
         if (eightBit) {
             this.A = (this.A & 0xFF00) | ((this.A | value) & 0xFF);
@@ -681,6 +805,7 @@ export class CPU65816 implements ICPU {
 
     private opAND(address: number) {
         const eightBit = this.getFlag(Status816.M);
+        this.chargeAddress("read", eightBit ? 1 : 2);
         const value = this.read8or16(address, eightBit);
         if (eightBit) {
             this.A = (this.A & 0xFF00) | ((this.A & value) & 0xFF);
@@ -695,6 +820,7 @@ export class CPU65816 implements ICPU {
 
     private opEOR(address: number) {
         const eightBit = this.getFlag(Status816.M);
+        this.chargeAddress("read", eightBit ? 1 : 2);
         const value = this.read8or16(address, eightBit);
         if (eightBit) {
             this.A = (this.A & 0xFF00) | ((this.A ^ value) & 0xFF);
@@ -709,6 +835,7 @@ export class CPU65816 implements ICPU {
 
     private opCMP(address: number) {
         const eightBit = this.getFlag(Status816.M);
+        this.chargeAddress("read", eightBit ? 1 : 2);
         const value = this.read8or16(address, eightBit);
         if (eightBit) {
             const a8 = this.A & 0xFF;
@@ -726,6 +853,7 @@ export class CPU65816 implements ICPU {
 
     private opLDX(address: number) {
         const eightBit = this.getFlag(Status816.X);
+        this.chargeAddress("read", eightBit ? 1 : 2);
         const value = this.read8or16(address, eightBit);
         if (eightBit) {
             this.X = value & 0xFF; // X/Y high byte is zeroed when 8-bit (unlike A)
@@ -740,6 +868,7 @@ export class CPU65816 implements ICPU {
 
     private opLDY(address: number) {
         const eightBit = this.getFlag(Status816.X);
+        this.chargeAddress("read", eightBit ? 1 : 2);
         const value = this.read8or16(address, eightBit);
         if (eightBit) {
             this.Y = value & 0xFF;
@@ -754,16 +883,19 @@ export class CPU65816 implements ICPU {
 
     private opSTX(address: number) {
         const eightBit = this.getFlag(Status816.X);
+        this.chargeAddress("write", eightBit ? 1 : 2);
         this.write8or16(address, this.X, eightBit);
     }
 
     private opSTY(address: number) {
         const eightBit = this.getFlag(Status816.X);
+        this.chargeAddress("write", eightBit ? 1 : 2);
         this.write8or16(address, this.Y, eightBit);
     }
 
     private opCPX(address: number) {
         const eightBit = this.getFlag(Status816.X);
+        this.chargeAddress("read", eightBit ? 1 : 2);
         const value = this.read8or16(address, eightBit);
         if (eightBit) {
             const x8 = this.X & 0xFF;
@@ -781,6 +913,7 @@ export class CPU65816 implements ICPU {
 
     private opCPY(address: number) {
         const eightBit = this.getFlag(Status816.X);
+        this.chargeAddress("read", eightBit ? 1 : 2);
         const value = this.read8or16(address, eightBit);
         if (eightBit) {
             const y8 = this.Y & 0xFF;
@@ -798,14 +931,17 @@ export class CPU65816 implements ICPU {
 
     private opSTZ(address: number) {
         const eightBit = this.getFlag(Status816.M);
+        this.chargeAddress("write", eightBit ? 1 : 2);
         this.write8or16(address, 0, eightBit);
     }
 
     // --- Branch Instructions ---
     private doBranch(condition: boolean, offset16: boolean = false) {
         let offset = 0;
+        let pcAfterOperand = 0;
         if (offset16) {
             offset = this.fetch16();
+            pcAfterOperand = this.PC;
             if (condition) {
                 // 16-bit signed offset
                 if (offset & 0x8000) offset -= 0x10000;
@@ -813,16 +949,26 @@ export class CPU65816 implements ICPU {
             }
         } else {
             offset = this.fetch8();
+            pcAfterOperand = this.PC;
             if (condition) {
                 // 8-bit signed offset
                 if (offset & 0x80) offset -= 0x100;
                 this.PC = (this.PC + offset) & 0xFFFF;
             }
         }
+        if (!condition) {
+            // Not taken: just the opcode and the operand byte.
+            return;
+        }
+        // A taken branch burns a cycle, and one more if the target ends up in a
+        // different page than the instruction after the operand.
+        this.phantomRead();
+        this.addCycles((pcAfterOperand & 0xFF00) !== (this.PC & 0xFF00) ? 1 : 0);
     }
 
     private opINC(address: number) {
         const eightBit = this.getFlag(Status816.M);
+        this.chargeAddress("rmw", eightBit ? 1 : 2);
         let value = this.read8or16(address, eightBit);
         value++;
         if (eightBit) {
@@ -839,6 +985,7 @@ export class CPU65816 implements ICPU {
 
     private opDEC(address: number) {
         const eightBit = this.getFlag(Status816.M);
+        this.chargeAddress("rmw", eightBit ? 1 : 2);
         let value = this.read8or16(address, eightBit);
         value--;
         if (eightBit) {
@@ -911,6 +1058,7 @@ export class CPU65816 implements ICPU {
 
     private opADC(address: number) {
         const eightBit = this.getFlag(Status816.M);
+        this.chargeAddress("read", eightBit ? 1 : 2);
         const operand = this.read8or16(address, eightBit);
         const carryIn = this.getFlag(Status816.C) ? 1 : 0;
 
@@ -982,6 +1130,7 @@ export class CPU65816 implements ICPU {
 
     private opSBC(address: number) {
         const eightBit = this.getFlag(Status816.M);
+        this.chargeAddress("read", eightBit ? 1 : 2);
         const operand = this.read8or16(address, eightBit);
         const carryIn = this.getFlag(Status816.C) ? 1 : 0;
 
@@ -1098,11 +1247,42 @@ export class CPU65816 implements ICPU {
     // --- Bus & Memory ---
 
     private read8(address: number): number {
+        this.addCycles(1);
         return this.readMemory(address & 0xFFFFFF);
     }
 
     private write8(address: number, value: number) {
+        this.addCycles(1);
         this.writeMemory(address & 0xFFFFFF, value & 0xFF);
+    }
+
+    // A bus cycle with no data movement: the 6502/65816's dummy reads. The bus
+    // is not actually read because apple2ts's own 6502 core does not model the
+    // side effects of a phantom read either (matters for $C0xx softswitches).
+    private phantomRead() {
+        this.addCycles(1)
+    }
+
+    // One-byte instructions with no operand: the opcode fetch is the only bus
+    // access, so the second cycle is purely internal.
+    private simple() {
+        this.phantomRead()
+    }
+
+    // Charge the internal cycles belonging to the addressing mode that the
+    // current instruction used. `addrMode`/`addrCrossed` are set by the addr*()
+    // method, which the switch always evaluates before the op*() method.
+    private chargeAddress(access: "read" | "write" | "rmw", width = 1) {
+        this.addCycles(ADDR_CYCLES_816[this.addrMode][access])
+        if (access === "read") {
+            if (this.addrCrossed) this.addCycles(1)
+            return
+        }
+        if (!INDEXED_ADDR_MODES_816.has(this.addrMode)) return
+        // An indexed store or read-modify-write always pays the extra cycle,
+        // even when it does not cross a page boundary.
+        this.addCycles(1)
+        if (access === "write" && width === 2) this.addCycles(1)
     }
 
     private fetch8(): number {
@@ -1121,23 +1301,27 @@ export class CPU65816 implements ICPU {
     // --- Addressing Modes ---
 
     protected addrImmediate(eightBit: boolean): number {
+        this.addrMode = ADDR_MODE_816.IMMEDIATE
         const addr = (this.PB << 16) | this.PC;
         this.PC = (this.PC + (eightBit ? 1 : 2)) & 0xFFFF;
         return addr;
     }
 
     protected addrAbsolute(): number {
+        this.addrMode = ADDR_MODE_816.ABSOLUTE
         const addr = this.fetch16();
         return (this.DB << 16) | addr;
     }
 
     protected addrAbsoluteLong(): number {
+        this.addrMode = ADDR_MODE_816.ABSOLUTE_LONG
         const lo = this.fetch16();
         const bank = this.fetch8();
         return (bank << 16) | lo;
     }
 
     protected addrDirect(): number {
+        this.addrMode = ADDR_MODE_816.DIRECT
         const offset = this.fetch8();
         const addr = (this.D + offset) & 0xFFFF;
         // Direct page is always in Bank 0
@@ -1145,64 +1329,77 @@ export class CPU65816 implements ICPU {
     }
 
     protected addrDirectX(): number {
+        this.addrMode = ADDR_MODE_816.DIRECT_X
         const offset = this.fetch8();
         // Emulation mode wraps around page zero if D=0, but native doesn't
         let addr = this.D + offset + this.X;
         if (this.emulationMode && this.D === 0) {
             addr = addr & 0x00FF;
         } else {
+            // The 65816 charges an extra cycle whenever the direct page's low
+            // byte is non-zero, because the index add can leave the page.
+            this.addrCrossed = (this.D & 0xFF) !== 0;
             addr = addr & 0xFFFF;
         }
         return addr;
     }
 
     protected addrDirectY(): number {
+        this.addrMode = ADDR_MODE_816.DIRECT_Y
         const offset = this.fetch8();
         let addr = this.D + offset + this.Y;
         if (this.emulationMode && this.D === 0) {
             addr = addr & 0x00FF;
         } else {
+            this.addrCrossed = (this.D & 0xFF) !== 0;
             addr = addr & 0xFFFF;
         }
         return addr;
     }
 
     protected addrDirectIndirect(): number {
+        this.addrMode = ADDR_MODE_816.DIRECT_INDIRECT
         const dpOffset = this.fetch8();
         const addrPtr = (this.D + dpOffset) & 0xFFFF;
-        
+
         const lo = this.read8(addrPtr);
         const hi = this.read8((addrPtr + 1) & 0xFFFF);
-        
+
         return (this.DB << 16) | (lo | (hi << 8));
     }
 
     protected addrDirectIndirectLong(): number {
+        this.addrMode = ADDR_MODE_816.DIRECT_INDIRECT_LONG
         const dpOffset = this.fetch8();
         const addrPtr = (this.D + dpOffset) & 0xFFFF;
-        
+
         const lo = this.read8(addrPtr);
         const hi = this.read8((addrPtr + 1) & 0xFFFF);
         const bank = this.read8((addrPtr + 2) & 0xFFFF);
-        
+
         return (bank << 16) | (lo | (hi << 8));
     }
 
     protected addrAbsoluteX(): number {
+        this.addrMode = ADDR_MODE_816.ABSOLUTE_X
         const lo = this.fetch16();
         // X index wraps around in PB bank
         const addr = (lo + this.X) & 0xFFFF;
+        this.addrCrossed = (lo & 0xFF00) !== (addr & 0xFF00);
         return (this.DB << 16) | addr;
     }
 
     protected addrAbsoluteY(): number {
+        this.addrMode = ADDR_MODE_816.ABSOLUTE_Y
         const lo = this.fetch16();
         // Y index wraps around in PB bank
         const addr = (lo + this.Y) & 0xFFFF;
+        this.addrCrossed = (lo & 0xFF00) !== (addr & 0xFF00);
         return (this.DB << 16) | addr;
     }
 
     protected addrAbsoluteLongX(): number {
+        this.addrMode = ADDR_MODE_816.ABSOLUTE_LONG_X
         const lo = this.fetch16();
         const bank = this.fetch8();
         // Crosses bank boundaries
@@ -1210,43 +1407,49 @@ export class CPU65816 implements ICPU {
     }
 
     protected addrDirectIndexedIndirect(): number {
+        this.addrMode = ADDR_MODE_816.DIRECT_INDEXED_INDIRECT
         // (dp,X)
         const dpOffset = this.fetch8();
         let ptr = this.D + dpOffset + this.X;
         if (this.emulationMode && this.D === 0) ptr &= 0x00FF;
         else ptr &= 0xFFFF;
-        
+
         const lo = this.read8(ptr);
         const hi = this.read8((ptr + 1) & 0xFFFF);
         return (this.DB << 16) | (lo | (hi << 8));
     }
 
     protected addrDirectIndirectIndexed(): number {
+        this.addrMode = ADDR_MODE_816.DIRECT_INDIRECT_INDEXED
         // (dp),Y
         const dpOffset = this.fetch8();
         const ptr = (this.D + dpOffset) & 0xFFFF;
-        
+
         const lo = this.read8(ptr);
         const hi = this.read8((ptr + 1) & 0xFFFF);
         const baseAddr = lo | (hi << 8);
-        
-        return (this.DB << 16) | ((baseAddr + this.Y) & 0xFFFF);
+        const addr = (baseAddr + this.Y) & 0xFFFF;
+        this.addrCrossed = (baseAddr & 0xFF00) !== (addr & 0xFF00);
+
+        return (this.DB << 16) | addr;
     }
 
     protected addrDirectIndirectLongIndexed(): number {
+        this.addrMode = ADDR_MODE_816.DIRECT_INDIRECT_LONG_INDEXED
         // [dp],Y
         const dpOffset = this.fetch8();
         const ptr = (this.D + dpOffset) & 0xFFFF;
-        
+
         const lo = this.read8(ptr);
         const hi = this.read8((ptr + 1) & 0xFFFF);
         const bank = this.read8((ptr + 2) & 0xFFFF);
-        
+
         const baseAddr = (bank << 16) | (lo | (hi << 8));
         return baseAddr + this.Y;
     }
 
     protected addrStackRelative(): number {
+        this.addrMode = ADDR_MODE_816.STACK_RELATIVE
         // d,S
         const offset = this.fetch8();
         const addr = (this.S + offset) & 0xFFFF;
@@ -1254,15 +1457,18 @@ export class CPU65816 implements ICPU {
     }
 
     protected addrStackRelativeIndirectIndexed(): number {
+        this.addrMode = ADDR_MODE_816.STACK_RELATIVE_INDIRECT_INDEXED
         // (d,S),Y
         const offset = this.fetch8();
         const ptr = (this.S + offset) & 0xFFFF;
-        
+
         const lo = this.read8(ptr);
         const hi = this.read8((ptr + 1) & 0xFFFF);
         const baseAddr = lo | (hi << 8);
-        
-        return (this.DB << 16) | ((baseAddr + this.Y) & 0xFFFF);
+        const addr = (baseAddr + this.Y) & 0xFFFF;
+        this.addrCrossed = (baseAddr & 0xFF00) !== (addr & 0xFF00);
+
+        return (this.DB << 16) | addr;
     }
 
     // --- Opcodes Implementations 100% ---
@@ -1341,6 +1547,9 @@ export class CPU65816 implements ICPU {
         this.setFlag(Status816.N, (hi & 0x80) !== 0);
     }
 
+    // Stack pushes and pulls burn internal cycles on top of the bus accesses:
+    // a push is the opcode plus one internal cycle, a pull needs the opcode, a
+    // dummy read of PC and a cycle to increment the stack pointer.
     private opPush(reg: string, val: number = 0) {
         switch (reg) {
             case 'A': this.getFlag(Status816.M) ? this.push8(this.A & 0xFF) : this.push16(this.A); break;
@@ -1350,11 +1559,17 @@ export class CPU65816 implements ICPU {
             case 'B': this.push8Wide(this.DB); this.normaliseStack(); break;
             case 'D': this.push16Wide(this.D); this.normaliseStack(); break;
             case 'K': this.push8Wide(this.PB); this.normaliseStack(); break;
-            case 'PEA': case 'PEI': case 'PER': this.push16Wide(val); this.normaliseStack(); break;
+            case 'PEA': case 'PEI': this.push16Wide(val); this.normaliseStack(); return;
+            // PER also has to add the signed offset to the current PC.
+            case 'PER': this.phantomRead(); this.push16Wide(val); this.normaliseStack(); return;
         }
+        this.phantomRead();
     }
 
     private opPop(reg: string) {
+        // Dummy read of PC, plus a cycle to increment the stack pointer.
+        this.phantomRead();
+        this.phantomRead();
         let val = 0;
         switch (reg) {
             case 'A':
@@ -1403,6 +1618,13 @@ export class CPU65816 implements ICPU {
     private opShift(type: string, address: number) {
         const isAcc = (address === -1);
         const eightBit = this.getFlag(Status816.M);
+        if (isAcc) {
+            this.addrMode = ADDR_MODE_816.ACCUMULATOR
+            // ASL A and friends take two cycles: the fetch plus one internal.
+            this.addCycles(1)
+        } else {
+            this.chargeAddress("rmw", eightBit ? 1 : 2)
+        }
         let val = isAcc ? (eightBit ? this.A & 0xFF : this.A) : this.read8or16(address, eightBit);
         
         let carryOut = false;
@@ -1436,6 +1658,7 @@ export class CPU65816 implements ICPU {
 
     private opBIT(address: number) {
         const eightBit = this.getFlag(Status816.M);
+        this.chargeAddress("read", eightBit ? 1 : 2);
         const val = this.read8or16(address, eightBit);
         const mask = eightBit ? 0xFF : 0xFFFF;
         const res = (this.A & mask) & val;
@@ -1446,6 +1669,7 @@ export class CPU65816 implements ICPU {
 
     private opTRB(address: number) {
         const eightBit = this.getFlag(Status816.M);
+        this.chargeAddress("rmw", eightBit ? 1 : 2);
         const val = this.read8or16(address, eightBit);
         const mask = eightBit ? 0xFF : 0xFFFF;
         this.setFlag(Status816.Z, ((this.A & mask) & val) === 0);
@@ -1455,6 +1679,7 @@ export class CPU65816 implements ICPU {
 
     private opTSB(address: number) {
         const eightBit = this.getFlag(Status816.M);
+        this.chargeAddress("rmw", eightBit ? 1 : 2);
         const val = this.read8or16(address, eightBit);
         const mask = eightBit ? 0xFF : 0xFFFF;
         this.setFlag(Status816.Z, ((this.A & mask) & val) === 0);
@@ -1463,6 +1688,7 @@ export class CPU65816 implements ICPU {
     }
 
     protected addrAbsoluteIndirect(): number {
+        this.addrMode = ADDR_MODE_816.ABSOLUTE_INDIRECT
         const ptr = this.fetch16();
         const lo = this.read8((this.PB << 16) | ptr);
         const hi = this.read8((this.PB << 16) | ((ptr + 1) & 0xFFFF));
@@ -1470,6 +1696,7 @@ export class CPU65816 implements ICPU {
     }
 
     protected addrAbsoluteIndexedIndirect(): number {
+        this.addrMode = ADDR_MODE_816.ABSOLUTE_INDEXED_INDIRECT
         const ptr = (this.fetch16() + this.X) & 0xFFFF;
         const lo = this.read8((this.PB << 16) | ptr);
         const hi = this.read8((this.PB << 16) | ((ptr + 1) & 0xFFFF));
@@ -1477,6 +1704,7 @@ export class CPU65816 implements ICPU {
     }
 
     protected addrAbsoluteIndirectLong(): number {
+        this.addrMode = ADDR_MODE_816.ABSOLUTE_INDIRECT_LONG
         const ptr = this.fetch16();
         const lo = this.read8(ptr);
         const hi = this.read8((ptr + 1) & 0xFFFF);

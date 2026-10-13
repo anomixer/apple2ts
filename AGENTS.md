@@ -604,6 +604,73 @@ canvas is wider and the control panel to its right sits further away. This
 matches how KEGS/GSport/Virtual ][GS present the IIgs and was confirmed as the
 wanted behaviour.
 
+### 29. Apple IIgs 65816 Cycle Accounting (1 MHz was ~5x too fast) — RESOLVED
+
+**Issue**: selecting "Normal / 1.02 MHz" on the Apple IIgs still ran old IIe
+games far faster than the Apple IIe at the same setting.
+
+**Root cause**: `CPU65816.processInstruction()` ended with
+`// Return 1 cycle for now as placeholder` / `return 1;`. Every 65816
+instruction was charged exactly one cycle, so the IIgs burned its identical
+17030-cycle frame budget roughly 5.26x faster than the 6502, whose average
+instruction costs 5.26 cycles. Measured directly:
+
+| machine | instructions | cycles | instr/cycle |
+|---|---|---|---|
+| Apple IIe | 1,294,885 | 6,812,296 | **0.190** |
+| Apple IIgs (before) | 3,423,030 | 3,423,030 | **1.000** |
+
+**Fix**: real 65816 cycle accounting in `src/worker/cpu65816.ts`, modelled the
+way `gssquared/src/cpus/base_6502.cpp` models it — a cycle per bus access plus
+explicit internal cycles:
+
+- `read8()` / `write8()` each charge one cycle, so the opcode fetch, operand
+  fetches, data reads/writes, pointer fetches, stack pushes/pulls and interrupt
+  vector reads are all counted automatically. A 16-bit access costs two, exactly
+  as on real hardware.
+- `phantomRead()` charges a bus cycle with no data movement, for the 6502/65816's
+  dummy reads. The bus is deliberately *not* read, because apple2ts's own 6502
+  core does not model phantom-read side effects either (matters for `$C0xx`
+  softswitches).
+- `ADDR_CYCLES_816` holds the internal cycles per addressing mode for
+  read / write / read-modify-write, i.e. the published WDC cycle count minus the
+  number of bus accesses this implementation actually performs. The values hold
+  for both 8-bit and 16-bit operands.
+- `INDEXED_ADDR_MODES_816` marks the modes whose index register is added to an
+  address that is not just the direct page; those earn the page-crossing cycle on
+  reads and an unconditional extra cycle on writes and read-modify-writes.
+  `dp,X` / `dp,Y` are deliberately absent — in emulation mode the direct page is
+  page zero and the access wraps, so it costs exactly what the 6502's `zp,X`
+  costs.
+- Instruction-level internals: implied ops +1, accumulator shifts +1, pushes +1,
+  pulls +2 (dummy PC read plus the stack-pointer increment), taken branches +1
+  (+1 more on a page cross), `JSR` +1, `JSL` +1, `RTS` +3, `RTI` +2, `RTL` +2,
+  `BRK`/`COP` +1 (the padding byte fetch), `PER` +1, and `MVN`/`MVP` +2 on the
+  first pass of a block move and +1 on each subsequent pass.
+- `processInstruction()` resets the accumulator at the top and returns it, so the
+  run loop's `s6502.cycleCount += cycles` now advances at the real rate.
+
+**Verification**:
+- `src/worker/gs_cycles.test.ts` — 128 tests. 110 of them pin the published
+  6502 cycle counts against the emulation-mode core (implied, immediate, zp,
+  zp,X, abs, abs,X, abs,Y, (zp,X), (zp),Y, branches, stack, jumps), 14 pin
+  native-mode 65816 counts including the 16-bit operand widths, and the last
+  four cover `JSL`/`RTS`/`RTL` and the `MVN` block-move per-pass cycle count.
+- The same file measures the whole boot: both machines' ROM boot code is 8-bit
+  and runs in 6502 emulation mode, so the instructions-per-cycle ratio has to
+  agree. Measured over the first 60,000 instructions of each boot:
+  **IIe 0.3797 vs IIgs 0.3608 instr/cycle** — parity within 5%, where the IIgs
+  used to be 5.26x higher.
+- Full suite 1097/1098 — the only failure is the pre-existing `vera.test.ts`
+  CMDR-DOS failure that also fails on a clean tree. `tsc --noEmit` is clean.
+- Headless Chrome: the IIgs still cold-boots to the ROM 01 banner and the
+  "Check startup device!" scan bar at 1.02 MHz.
+
+**Note**: the IIgs is *not* uniformly as slow as the IIe. GS/OS runs in native
+mode with 16-bit registers, where the 65816 genuinely executes more instructions
+per cycle than a 6502 — that is real hardware behaviour, not a bug. The
+emulation-mode path, which is what old IIe games use, now matches the 6502.
+
 
 ## Debugging Techniques Used
 - **Instruction Tracing**: Added a circular buffer in `motherboard.ts` to trace instructions when debugging specific loops.
@@ -612,7 +679,7 @@ wanted behaviour.
 - **CDP In-Browser Screenshots**: Automated Chrome screenshot capture via DevTools Protocol to visually verify boot screens.
 
 ## Key Files Modified
-- `src/worker/cpu65816.ts`: 65816 CPU emulation, stack normalization, IRQ sampling, peripheral `specialJumpTable` execution, 65816 ADC/SBC decimal mode.
+- `src/worker/cpu65816.ts`: 65816 CPU emulation, stack normalization, IRQ sampling, peripheral `specialJumpTable` execution, 65816 ADC/SBC decimal mode, and full WDC cycle accounting (bus-access counting plus per-addressing-mode internal cycles) so 8-bit code runs at 6502 speed.
 - `src/worker/memory.ts`: Memory mapping for Bank E0/E1, dedicated `megaIIMain` and `megaIIAux` (64KB each), Bank FE/FF ROM, IWM registers ($C0E0-$C0EF), State Register ($C068), Slot Register ($C02D), interrupt flags ($C046), slot C800 strobe management, and Fast RAM vs Mega II Language Card isolation.
 - `src/worker/devices/harddrivedata.ts`: SmartPort and ProDOS hard drive block hooks ($C7C0/$C7C3), block read/write operations for GS/OS.
 - `src/worker/iigs_adb.ts`: ADB controller emulation.
