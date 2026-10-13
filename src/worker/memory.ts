@@ -16,6 +16,8 @@ import { vidhd } from "./devices/vidhd"
 import { isDebugging } from "./motherboard"
 import { iigsClock } from "./iigs_clock"
 import { iigsADB } from "./iigs_adb"
+import { iwmReadDataRegister, iwmResetTiming, iwmStepHead } from "./devices/diskdata"
+import { getDriveDataByIndex, getDriveStateByIndex } from "./devices/drivestate"
 
 // 0x00000: main memory
 // 0x10000...13FFF: ROM (including page $C0 soft switches)
@@ -174,14 +176,47 @@ let iwmQ7 = false;
 let iwmMotorOn = false;
 let iwmDriveSelect = 0;
 let iwmMode = 0;
-export const iigsGetIwmDriveSelect = () => iwmDriveSelect;
+// EN35: 0 = the 5.25" drive pair in slot 6, 1 = the 3.5" pair in slot 5.
+// On the IIgs this is a bit of the Disk Control Port ($C031), not an IWM
+// register - the IWM simply reroutes /ENBL to the selected family.
+let iwmEnable35 = false
+// Disk Control Port ($C031) state. Only EN35 (bit 6) is wired up so far; HDSEL
+// (bit 7) selects the side/track on a 3.5" drive and is passed through.
+let iwmDiskRegister = 0
+// First drive-state index of each IIgs floppy slot: 2 = slot 6 (5.25"),
+// 4 = slot 5 (3.5"). Mirrors FLOPPY_BASE_INDEX in devices/drivestate.ts, which
+// we cannot import from here without a new module-level cycle.
+const IWM_FLOPPY_BASE = { 5: 4, 6: 2 }
+export const iigsGetIwmDriveSelect = () => iwmDriveSelect
+// True when the given drive-state index holds decodable floppy media.
+export const iigsFloppyHasMedia = (index: number) => {
+  const ds = getDriveStateByIndex(index)
+  return !ds.hardDrive && getDriveDataByIndex(index).length > 0
+}
+export const iigsGetIwmEnable35 = () => iwmEnable35
+export const iigsSetIwmEnable35 = (enable35: boolean) => {
+  if (iwmEnable35 === enable35) return
+  iwmEnable35 = enable35
+  iwmDiskRegister = enable35 ? (iwmDiskRegister | 0x40) : (iwmDiskRegister & ~0x40)
+  // Switching families moves /ENBL, so restart the sequencer for the newly
+  // selected drive rather than letting it shift a stale partial nibble.
+  iwmResetTiming()
+}
+// $C031 write: the Disk Control Port drives the IIgs floppy drives.
+export const iigsWriteDiskControlPort = (value: number) => {
+  iwmDiskRegister = value
+  iigsSetIwmEnable35((value & 0x40) !== 0)
+}
 export const iigsResetIwm = () => {
-  iwmQ6 = false;
-  iwmQ7 = false;
-  iwmMotorOn = false;
-  iwmDriveSelect = 0;
-  iwmMode = 0;
-};
+  iwmQ6 = false
+  iwmQ7 = false
+  iwmMotorOn = false
+  iwmDriveSelect = 0
+  iwmMode = 0
+  iwmEnable35 = false
+  iwmDiskRegister = 0
+  iwmResetTiming()
+}
 
 export const doSetRom = (machineName: MACHINE_NAME) => {
   currentMachineName = machineName
@@ -887,6 +922,13 @@ const memGetSoftSwitch = (addr: number): number => {
   if (currentMachineName === "APPLE2GS" && addr >= 0xC020 && addr <= 0xC04F) {
       // Handle specific IIgs hardware
       switch (addr) {
+          case 0xC031: // Disk Control Port
+              // Bit 6 (EN35) selects the 3.5" drive family in slot 5 vs the
+              // 5.25" pair in slot 6; bit 7 (HDSEL) is the 3.5" head/side
+              // selector. The IWM reroutes /ENBL when EN35 changes, so the
+              // logic state sequencer has to restart for the new drive.
+              return iwmDiskRegister
+
           case 0xC024: // ADB Mouse Data
               return iigsADB.readMouseData();
 
@@ -1012,6 +1054,12 @@ const memGetSoftSwitch = (addr: number): number => {
       case 0x0E: iwmQ7 = false; break;
       case 0x0F: iwmQ7 = true; break;
     }
+    const iwmDriveIndex = IWM_FLOPPY_BASE[iwmEnable35 ? 5 : 6] + iwmDriveSelect;
+    // $C0E0-$C0E7 are the head stepper lines (CA0-CA2 plus LSTRB). They apply on
+    // every access, not just reads, because firmware strobes them either way.
+    if (reg <= 7) {
+      iwmStepHead(iwmDriveIndex, reg, iwmMotorOn)
+    }
     if (!iwmQ7) {
       if (iwmQ6) {
         // Read status register: bits 0-4 mode, bit 5 motor/enable
@@ -1019,7 +1067,18 @@ const memGetSoftSwitch = (addr: number): number => {
         if (iwmMotorOn) status |= 0x20;
         return status;
       } else {
-        // Data register
+        // Data register. The Logic State Sequencer shifts continuously, so
+        // advance it to "now" and return whatever it has latched.
+        //
+        // Only do that when the selected drive family actually holds media.
+        // With an empty bay we keep returning the ROM byte the IWM data
+        // register used to mirror: the IIgs power-on disk self-test reads this
+        // register before any drive is enabled, and feeding it a live bit
+        // stream there derails the boot (see gssquared IWM2.hpp on the ROM03
+        // power-on disk self-test).
+        if (iigsFloppyHasMedia(iwmDriveIndex)) {
+          return iwmReadDataRegister(iwmDriveIndex, iwmMotorOn);
+        }
         checkSlotIO(addr);
         return memory[ROMmemoryStart + addr - 0xC000];
       }
@@ -1189,6 +1248,10 @@ const memSetSoftSwitch = (addr: number, value: number) => {
                 iigsRegisters[0x2D] = iigsSlotRegister;
                 updateAddressTables();
                 break;
+
+            case 0xC031: // Disk Control Port (EN35 / HDSEL)
+                iigsWriteDiskControlPort(value)
+                break
 
             case 0xC032: // VGC interrupt clear
                 if ((value & 0x40) === 0) vgcIntReg &= ~0x40;

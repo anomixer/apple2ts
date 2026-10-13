@@ -52,6 +52,7 @@ const retroCardLabels = (context: RetroMenuContext): Record<SLOT_CARD_ID, string
   vera: context.t("retroControl.card.vera"),
   passport: context.t("retroControl.card.passport"),
   disk2: context.t("retroControl.card.disk2"),
+  disk35: context.t("retroControl.card.disk2"),
   smartport: context.t("retroControl.card.smartport"),
 })
 
@@ -181,6 +182,7 @@ export const MachineConfig = (props: DisplayProps) => {
     vera: "VERA Graphics Card",
     passport: "Passport MIDI Card",
     disk2: "Disk II Floppy Controller",
+    disk35: "3.5\" Floppy Drive",
     smartport: "SmartPort Hard Drive Card",
   }
 

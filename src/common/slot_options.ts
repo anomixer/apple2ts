@@ -22,7 +22,8 @@ export const getSlotOptions = (slot: SlotNumber, machine: MACHINE_NAME): SlotOpt
       case 4:
         return [{ card: "none" }, { card: "mockingboard" }]
       case 5:
-        return [{ card: "none" }]
+        // Apple IIgs: slot 5 is the built-in 3.5" disk drive.
+        return [{ card: "none" }, { card: "disk35" }]
       case 6:
         return [{ card: "none" }, { card: "disk2" }]
       case 7:

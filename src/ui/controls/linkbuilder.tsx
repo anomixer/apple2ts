@@ -77,6 +77,7 @@ const LinkBuilder = () => {
     vera: "VERA",
     passport: "Passport",
     disk2: "Disk II",
+    disk35: "3.5\" Disk Drive",
     smartport: "SmartPort",
   }
 
@@ -420,7 +421,7 @@ const LinkBuilder = () => {
 
             <div className="horiz-rule" style={{ marginTop: "15px" }}></div>
 
-            {/* Slot Configuration – always visible */}
+            {/* Slot Configuration ??always visible */}
             <div className="dialog-title" style={{ marginBottom: "4px" }}>{t("linkBuilder.slots.configure")}</div>
             <div className="flex-row" style={{ flexWrap: "wrap", gap: "0 20px", marginBottom: "8px" }}>
               {SLOT_NUMBERS.map(slot => {

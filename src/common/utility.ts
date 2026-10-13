@@ -8,7 +8,7 @@ const FLOPPY_DISK_SUFFIXES = ".dsk,.woz,.do"
 const HARD_DRIVE_SUFFIXES = ".2mg,.hdv,.po,.2meg"
 export const FILE_SUFFIXES_DISK = `${FLOPPY_DISK_SUFFIXES},${HARD_DRIVE_SUFFIXES}`
 export const FILE_SUFFIXES_ALL = `${FILE_OPEN_SUFFIXES},${FILE_SUFFIXES_DISK}`
-export const MAX_DRIVES = 4
+export const MAX_DRIVES = 6
 // export const DISK_CONVERSION_SUFFIXES = new Map<string, string>([[".dsk", ".woz"]])
 
 // Put memory offset constants here so we can use them in the worker and main thread.
@@ -585,6 +585,13 @@ export const isHardDriveImage = (filename: string, fileSize: number) => {
     return fileSize > 143360
   }
   return false
+}
+
+export const isThreePointFiveInchImage = (filename: string, fileSize: number) => {
+  // Apple IIgs 3.5" media: .3mg images up to a 1.44MB floppy. Anything larger
+  // is a SmartPort hard disk; .po/.dsk are 5.25" formats.
+  const THREE_POINT_FIVE_MAX = 1_474_560
+  return /\.3mg(?:$|[^a-z0-9])/i.test(filename) && fileSize <= THREE_POINT_FIVE_MAX
 }
 
 export const getDefaultDiskDriveIndex = (

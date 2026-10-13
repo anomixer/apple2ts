@@ -1,7 +1,7 @@
 import { passDriveSound } from "../worker2main"
 import { s6502 } from "../instructions"
 import { toHex, DRIVE } from "../../common/utility"
-import { getCurrentDriveData, getCurrentDriveState, passDriveData, setCurrentDrive } from "./drivestate"
+import { getCurrentDriveData, getCurrentDriveState, getDriveDataByIndex, getDriveStateByIndex, passDriveData, setCurrentDrive } from "./drivestate"
 import { setSlotDriver, setSlotIOCallback } from "../memory"
 import { disk2driver } from "../roms/slot_disk2_cx00"
 
@@ -468,5 +468,72 @@ export const handleDriveSoftSwitches: AddressCallback =
 export const enableDiskDrive = () => {
   setSlotDriver(6, Uint8Array.from(disk2driver))
   setSlotIOCallback(6, handleDriveSoftSwitches)
+}
+
+// Apple IIgs slot 5: the built-in 3.5" drive. It has no card ROM and no $C0xx
+// I/O of its own - the IWM at $C0E0-$C0EF reaches both drive families, choosing
+// slot 5 or slot 6 from the Disk Control Port's EN35 bit. All slot 5 needs is
+// the $C02D SLTROMSEL bit set (done by configureMachine) so the ROM's boot scan
+// and the disk-control firmware see a drive there instead of internal ROM.
+export const enableDiskDrive35 = () => {
+  iwmResetTiming()
+}
+
+// --- Apple IIgs Integrated Woz Machine (IWM) data path ---------------------
+//
+// The IIgs has no Disk II card: both built-in drives are reached through the
+// IWM at $C0E0-$C0EF. The IWM's Logic State Sequencer shifts one bit per bit
+// cell *continuously*; the CPU samples whatever is latched in the data register
+// when it reads. gssquared models this by advancing the LSS to "now" on every
+// IWM register access (IWM2.hpp read()/write() both start with fast_forward()),
+// so we do the same: advance on every access, then service the register.
+
+let iwmPrevCycleCount = 0
+
+// Reset the IWM sequencer timing. Call after a reset so a long pause (menu,
+// breakpoint) does not dump thousands of bits into the shift register.
+export const iwmResetTiming = () => {
+  iwmPrevCycleCount = s6502.cycleCount
+  cycleRemainder = 0
+  dataRegister = 0
+  dataRegHold = false
+}
+
+// Advance the LSS for the given floppy drive index to "now" and return the
+// contents of the data register. `enabled` mirrors the IWM's /ENBL input: the
+// LSS only shifts while the drive is selected and the motor is on.
+export const iwmReadDataRegister = (driveIndex: number, enabled: boolean) => {
+  const cycles = s6502.cycleCount - iwmPrevCycleCount
+  iwmPrevCycleCount = s6502.cycleCount
+  if (!enabled) {
+    // Keep the register reading back as "no data" so RWTS loops time out
+    // quickly instead of spinning on a stale byte.
+    return 0x80
+  }
+  const ds = getDriveStateByIndex(driveIndex)
+  const dd = getDriveDataByIndex(driveIndex)
+  if (ds.hardDrive || dd.length === 0) return 0x80
+  return getNextByte(ds, dd, cycles)
+}
+
+// $C0E0-$C0E7 drive the head: CA0-CA2 are the stepper phase lines and LSTRB
+// latches them. On the IIgs this is the same Shugart stepper the Disk II uses,
+// so reuse the identical magnet/position bookkeeping.
+export const iwmStepHead = (driveIndex: number, reg: number, enabled: boolean) => {
+  if (reg > 7) return
+  const ds = getDriveStateByIndex(driveIndex)
+  if (ds.hardDrive) return
+  const phase = reg >> 1
+  const phaseOn = reg & 1
+  if (phaseOn) {
+    ds.currentPhase |= 1 << phase
+  } else {
+    ds.currentPhase &= ~(1 << phase)
+  }
+  const position = MAGNET_TO_POSITION[ds.currentPhase]
+  if (enabled && position >= 0) {
+    const direction = POSITION_TO_DIRECTION[ds.quarterTrack & 7][position]
+    moveHead(ds, direction, 0)
+  }
 }
 

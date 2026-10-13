@@ -15,8 +15,8 @@ describe("Apple IIgs Slot Management & Hardware Compatibility", () => {
     expect(getSlotOptions(3, "APPLE2GS")).toEqual([{ card: "none" }])
     // Slot 4: Built-in Mouse (none) or Mockingboard
     expect(getSlotOptions(4, "APPLE2GS")).toEqual([{ card: "none" }, { card: "mockingboard" }])
-    // Slot 5: Built-in 3.5" Floppy (none only! No mouse card)
-    expect(getSlotOptions(5, "APPLE2GS")).toEqual([{ card: "none" }])
+    // Slot 5: Built-in 3.5" drive (none or disk35)
+    expect(getSlotOptions(5, "APPLE2GS")).toEqual([{ card: "none" }, { card: "disk35" }])
     // Slot 6: Built-in 5.25" Floppy (none) or Disk II
     expect(getSlotOptions(6, "APPLE2GS")).toEqual([{ card: "none" }, { card: "disk2" }])
     // Slot 7: Hard Drive / SmartPort (none or smartport)

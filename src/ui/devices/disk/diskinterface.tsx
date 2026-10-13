@@ -1,5 +1,5 @@
 import { DiskCollectionSortMode, setPreferenceDiskCollectionSort } from "../../localstorage"
-import { handleGetSlotConfig, handleGetVeraSdStatus, handleSetVeraSdWriteProtected, passSetDriveProps } from "../../main2worker"
+import { handleGetMachineName, handleGetSlotConfig, handleGetVeraSdStatus, handleSetVeraSdWriteProtected, passSetDriveProps } from "../../main2worker"
 import { CLOUD_SYNC, getDefaultDiskDriveIndex } from "../../../common/utility"
 import {
   DISK_COLLECTION_ITEM_TYPE,
@@ -754,6 +754,9 @@ const diskDrives = [
   { index: 1, slot: 7 },
   { index: 2, slot: 6 },
   { index: 3, slot: 6 },
+  // Apple IIgs only: the built-in 3.5" drive pair in slot 5.
+  { index: 4, slot: 5 },
+  { index: 5, slot: 5 },
 ] as const
 
 const diskBindings: RetroControlBindings = {
@@ -879,6 +882,9 @@ const DiskInterface = (props: DisplayProps) => {
   }, [])
 
   const isVeraInstalled = slotConfig[2] === "vera" || slotConfig[4] === "vera"
+  // The Apple IIgs has a second built-in floppy slot (slot 5, 3.5") alongside
+  // slot 6 (5.25"). Drives 4 and 5 only exist on that machine.
+  const isIIgs = handleGetMachineName() === "APPLE2GS"
   const allSlotsDisabled = slotConfig[1] === "none" && slotConfig[6] === "none" && slotConfig[7] === "none" && !isVeraInstalled
 
   return (
@@ -905,6 +911,10 @@ const DiskInterface = (props: DisplayProps) => {
               setShowFileOpenDialog={props.setShowFileOpenDialog} />
             <DiskDrive key={3} index={3} renderCount={props.renderCount}
               setShowFileOpenDialog={props.setShowFileOpenDialog} />
+            {isIIgs && <DiskDrive key={4} index={4} renderCount={props.renderCount}
+              setShowFileOpenDialog={props.setShowFileOpenDialog} />}
+            {isIIgs && <DiskDrive key={5} index={5} renderCount={props.renderCount}
+              setShowFileOpenDialog={props.setShowFileOpenDialog} />}
             {(!isMinimalTheme() || !isScreenNarrow) && <VeraSdIcon renderCount={props.renderCount} />}
             {(!isMinimalTheme() || !isScreenNarrow) && <ImageWriter />}
           </span>

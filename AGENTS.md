@@ -345,6 +345,65 @@ level-triggered `$C046` behaviour.
 - Verified in headless Chrome against the Vite dev server: the Finder desktop
   renders with menu bar, clock, `MDVOL2`, `APPLEDISK5 25A/25B`, `GSHK` and Trash.
 
+### 26. Apple IIgs Floppy Support: IWM Data Path & Slot 5 (3.5") — PARTIAL
+**Context**: The Apple IIgs has no Disk II card. Both floppy drives are
+motherboard hardware reached through the Integrated Woz Machine (IWM) at
+`$C0E0-$C0EF`. Slot 6 is the 5.25" pair and **slot 5 is the 3.5" pair**
+(gssquared `IWM2.hpp`: `drives[0]` = `Floppy525_woz` in slot 6,
+`drives[1]` = `Floppy35_woz` in slot 5; `dr_enable35` reroutes `/ENBL`).
+Before this work `$C0E0-$C0EF` was a register stub that returned ROM bytes, so
+no floppy of any size could boot on the IIgs.
+
+**What is implemented and verified**:
+- `src/worker/devices/drivestate.ts`: drive indices 0/1 = slot 7 hard drives,
+  2/3 = slot 6 5.25", **4/5 = slot 5 3.5"**. `MAX_DRIVES` is now 6.
+  Added `getDriveStateByIndex` / `getDriveDataByIndex` because the IWM routes
+  to a *specific* drive, which the Disk II path (current-drive-only) cannot do.
+- `src/worker/devices/diskdata.ts`:
+  - `iwmReadDataRegister(index, enabled)` advances the Logic State Sequencer to
+    "now" and returns the latched data register, reusing `getNextByte`.
+  - `iwmStepHead(index, reg, enabled)` maps `$C0E0-$C0E7` (CA0-CA2 + LSTRB) onto
+    the same Shugart stepper bookkeeping the Disk II uses.
+  - `iwmResetTiming()` restarts the sequencer after a reset or an EN35 change.
+- `src/worker/memory.ts`: `$C0E8` (Q6=0/Q7=0) returns real nibbles; `$C031`
+  (Disk Control Port) is read/written, with bit 6 = EN35 selecting the drive
+  family and bit 7 = HDSEL passed through.
+- Slot 5 is a first-class `disk35` card in `getSlotOptions` for `APPLE2GS`, with
+  UI labels, drive-panel entries (IIgs only) and `$C02D` participation.
+- `src/worker/devices/decodedisk.ts`: a WOZ whose INFO disk type is 2/3 (3.5")
+  gets its bit cell halved, matching gssquared (`Floppy35_woz` uses 16 where
+  `Floppy525_woz` uses 32).
+- `.3mg` images up to 1.44MB route to slot 5 on the IIgs.
+
+**Verified**: `src/worker/gs_floppy_probe.test.ts` shows the ROM reaching
+"Check startup device!", selecting drive 1 of the 5.25" family (EN35 = 0),
+enabling the motor, and pulling a real 6-and-2 nibble stream out of the data
+register (`trackLocation` advances from 0 to ~13,700 bits). The IWM data path
+works.
+
+**Still outstanding**:
+1. The IIgs does **not yet boot a 5.25" floppy** — it stays on "Check startup
+   device!". The nibbles are arriving but the boot scan never finds the boot
+   volume, so the remaining work is in head-seek/alignment and possibly the
+   EN35/SELECT handshake timing.
+2. **No 3.5" nibblizer exists.** The 5.25" path uses `convertdsk2woz`
+   (6-and-2 + 4-and-4 address field). 3.5" media needs self-synchronising GCR
+   (5 data bits + 2 clock bits per group), 80 tracks x 2 sides x 16/32 sectors,
+   plus a DO->3.5" repacker. This is the missing half of "slot 5 is a 3.5"
+   drive" and is not started.
+3. There is no 3.5" test image in the repo or under `c:\dev\emu\ap2`, so the
+   GCR encoder could not be validated end to end. A viable check is to repack a
+   known-good 5.25" ProDOS image into 800K 3.5" geometry and let the ROM's own
+   GCR decoder read it back — the ROM is independent ground truth.
+4. The 3.5" **write** path differs from the 5.25" sequencer and is unimplemented.
+
+**Important caveat learned the hard way**: feeding the IWM data register a live
+bit stream unconditionally breaks the IIgs power-on disk self-test, which reads
+that register before any drive is enabled, and `A2DeskTop-VERA.hdv` then fails
+to boot (`gs_trace_boot.test.ts`). Hence `iigsFloppyHasMedia()` gates the real
+path: an empty bay keeps returning the ROM byte the register used to mirror.
+
+
 ## Debugging Techniques Used
 - **Instruction Tracing**: Added a circular buffer in `motherboard.ts` to trace instructions when debugging specific loops.
 - **ROM Inspection**: Disassembled portions of `gsROM` via Node.js helper scripts to identify hardware polling loops (such as `SELIWM` and diagnostic entry points).

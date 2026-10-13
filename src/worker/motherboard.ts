@@ -65,7 +65,7 @@ import { vidhd } from "./devices/vidhd"
 import { enableMockingboard, resetMockingboard } from "./devices/mockingboard"
 import { clearSlotCardStateHandlers } from "./devices/slot_card_state"
 import { resetMouse, onMouseVBL } from "./devices/mouse"
-import { enableDiskDrive } from "./devices/diskdata"
+import { enableDiskDrive, enableDiskDrive35, iwmResetTiming } from "./devices/diskdata"
 import { advanceKeySequence, interruptKeySequence, pollKeyboardRepeat, sendPastedText } from "./devices/keyboard"
 import {
   advanceConditionalInputSequence,
@@ -339,6 +339,10 @@ export const configureMachine = () => {
     if (currentSlotConfig[4] === "mockingboard") {
       enableMockingboard(true, 4)
     }
+    // Slot 5: built-in 3.5" drive (if configured)
+    if (currentSlotConfig[5] === "disk35") {
+      enableDiskDrive35()
+    }
     // Slot 6: 5.25" Disk II (if configured)
     if (currentSlotConfig[6] === "disk2") {
       enableDiskDrive()
@@ -348,10 +352,13 @@ export const configureMachine = () => {
       enableHardDrive()
     }
 
-    // Sync $C02D (SLTROMSEL) with configured peripheral cards
+    // Sync $C02D (SLTROMSEL) with configured peripheral cards.
+    // Slot 3 is always internal video. Slot 5 (3.5") and slot 6 (5.25") follow
+    // the same "card if present, else motherboard ROM" rule as the other slots,
+    // which is what the IIgs power-on default 0b11110110 does.
     let slotReg = 0
     for (let s = 1; s <= 7; s++) {
-      if (s === 3) continue // slot 3 is always internal video
+      if (s === 3) continue
       if ((currentSlotConfig as any)[s] !== "none") {
         slotReg |= (1 << s)
       }
@@ -530,6 +537,10 @@ export const doReset = () => {
   cpu.reset()
   if (machineName === "APPLE2GS") {
     iigsClearInterrupts()
+    // The IWM's logic state sequencer runs on wall-clock cycles. A reset can
+    // follow a long pause (breakpoint, menu), so restart its timing rather
+    // than letting it shift thousands of idle bits into the data register.
+    iwmResetTiming()
   }
   resetMachine()
   // Otherwise Heat Map data survives a reset/reboot indefinitely (it was

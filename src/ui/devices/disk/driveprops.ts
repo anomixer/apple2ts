@@ -47,8 +47,12 @@ const initDriveProps = (index: number, drive: number, hardDrive: boolean): Drive
   }
 }
 
-const driveProps: DriveProps[] = [initDriveProps(0, 1, true), initDriveProps(1, 2, true),
-  initDriveProps(2, 1, false), initDriveProps(3, 2, false)]
+const driveProps: DriveProps[] = [
+  initDriveProps(0, 1, true), initDriveProps(1, 2, true),
+  initDriveProps(2, 1, false), initDriveProps(3, 2, false),
+  // Apple IIgs only: the built-in 3.5" drive pair in slot 5.
+  initDriveProps(4, 1, false), initDriveProps(5, 2, false),
+]
 
 const demoZooDiskDownloadExtensions = [
   ".hdv", ".2mg", ".dsk", ".woz", ".po", ".do", ".bin", ".bas", ".nib", ".2img", ".d13", ".dc", ".img",

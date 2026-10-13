@@ -11,6 +11,13 @@ const decodeWoz2 = (driveState: DriveState, diskData: Uint8Array): boolean => {
   driveState.isWriteProtected = diskData[22] === 1
   driveState.isSynchronized = diskData[23] === 1
   driveState.optimalTiming = (diskData[59] > 0) ? diskData[59] : 32
+  // WOZ INFO byte 1 (offset 61) is the disk type: 1 = 5.25", 2/3 = 3.5".
+  // A 3.5" drive shifts the Logic State Sequencer at twice the 5.25" rate for
+  // the same declared bit timing (gssquared Floppy35_woz uses 16 where
+  // Floppy525_woz uses 32), so halve optimalTiming rather than pinning a value.
+  if (diskData[61] === 2 || diskData[61] === 3) {
+    driveState.optimalTiming = Math.max(8, Math.round(driveState.optimalTiming / 2))
+  }
   const fluxBlockNumber = (diskData[67] << 8) + diskData[66]
   const fluxBlockSize = (diskData[69] << 8) + diskData[68]
   if (fluxBlockNumber > 0 && fluxBlockSize > 0) {

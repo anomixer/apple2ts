@@ -3,7 +3,8 @@ import { passDriveProps, passDriveSound } from "../worker2main"
 import { decodeDiskData } from "./decodedisk"
 import { doPauseDiskDrive, doResetDiskDrive } from "./diskdata"
 import { enableHardDrive } from "./harddrivedata"
-import { DRIVE, isHardDriveImage } from "../../common/utility"
+import { DRIVE, isHardDriveImage, isThreePointFiveInchImage } from "../../common/utility"
+import { getCurrentMachineName } from "../memory"
 
 const initDriveState = (index: number, drive: number, hardDrive: boolean): DriveState => {
   return {
@@ -37,6 +38,10 @@ const initializeDriveState = () => {
   driveState[1] = initDriveState(1, 2, true)
   driveState[2] = initDriveState(2, 1, false)
   driveState[3] = initDriveState(3, 2, false)
+  // Apple IIgs only: slot 5 is the built-in 3.5" drive pair, slot 6 the 5.25"
+  // pair. Other machines never populate these, so the drive panel hides them.
+  driveState[4] = initDriveState(4, 1, false)
+  driveState[5] = initDriveState(5, 2, false)
   for (let i = 0; i < driveState.length; i++) {
     driveData[i] = new Uint8Array()
   }
@@ -65,6 +70,17 @@ export const getHardDriveData = (drive: number): [Uint8Array, number, number] =>
   const offset = magic === "2IMG" ? 64 : 0
   return [data, offset, data.length - offset]
 }
+
+// Absolute drive-state accessors. The Apple IIgs IWM routes $C0E0-$C0EF to a
+// specific physical drive, which the Disk II path (which only ever talks to the
+// "current" drive) has no notion of, so the IIgs addresses drives by index.
+// Index layout mirrors initializeDriveState(): 0/1 = Slot 7 hard drives,
+// 2/3 = Slot 6 5.25" drives, 4/5 = Slot 5 3.5" drives.
+export const getDriveStateByIndex = (index: number) => driveState[index]
+export const getDriveDataByIndex = (index: number) => driveData[index]
+
+// Index of the first floppy drive for a given IIgs drive family slot.
+export const FLOPPY_BASE_INDEX = { 5: 4, 6: 2 } as const
 
 export const getFilename = () => {
   for (let i = 0; i < driveState.length; i++) {
@@ -191,7 +207,7 @@ export const doSetEmuDriveNewData = (props: DriveProps, forceIndex: boolean = fa
   const hasRequestedMedia = props.filename !== "" || props.diskData.length !== 0
   let index = props.index
   let drive = props.drive
-  
+
   // See if the "wrong" disk image was put into a drive. If so, swap the drive.
   let isHardDrive = props.hardDrive
   if (!forceIndex) {
@@ -200,6 +216,15 @@ export const doSetEmuDriveNewData = (props: DriveProps, forceIndex: boolean = fa
         isHardDrive = true
         index = (props.drive <= 1) ? 0 : 1
         drive = index + 1
+      } else if (isThreePointFiveInchImage(props.filename, props.diskData?.length)
+        && getCurrentMachineName() === "APPLE2GS") {
+        // Apple IIgs only: 3.5" media belongs in the built-in 3.5" drive in
+        // slot 5, not the 5.25" pair in slot 6. Other machines have no slot 5
+        // drive, so they keep the slot 6 behaviour.
+        isHardDrive = false
+        const slotDrive = props.drive === 2 ? 1 : 0
+        index = FLOPPY_BASE_INDEX[5] + slotDrive
+        drive = slotDrive + 1
       } else {
         isHardDrive = false
         index = (props.drive <= 1) ? 2 : 3

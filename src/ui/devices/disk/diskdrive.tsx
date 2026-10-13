@@ -32,7 +32,7 @@ import { useTranslation } from "../../../i18n/useTranslation"
 import { convertwoz2dsk } from "../../../common/convertwoz2dsk"
 import { faInternetArchive } from "@fortawesome/free-brands-svg-icons"
 
-export const DISK_DRIVE_LABELS = ["S7,D1", "S7,D2", "S6,D1", "S6,D2"]
+export const DISK_DRIVE_LABELS = ["S7,D1", "S7,D2", "S6,D1", "S6,D2", "S5,D1", "S5,D2"]
 
 export const loadDiskFromCloudDrive = async (cloudDrive: CloudProvider, driveIndex: number) => {
   const result = await cloudDrive.download(FILE_SUFFIXES_DISK)
