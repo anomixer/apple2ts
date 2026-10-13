@@ -535,6 +535,75 @@ the IIgs IRQ dispatcher may need the ADB to be reported as a distinct
 report direction/magnitude/button encoding, speaker output) and the existing
 `gsos_boot.test.ts` / `gs_ctrl_reset.test.ts`.
 
+### 28. Apple IIgs Super Hi-Res Output Resolution (640x400) — RESOLVED
+
+**Issue**: on the Apple IIgs the GS/OS 6.0.1 desktop background looked badly
+stretched. Finder windows, the clock and the icons were all squashed.
+
+**Root cause**: `processSuperHiRes()` rendered the 640x200 Super Hi-Res
+framebuffer into the legacy Apple II image size of 560x384, and the screen
+area was given the legacy aspect of 1.4583. The final aspect seen on screen is
+the product of the hidden-canvas size and the canvas aspect, so a 640x200
+image ended up displayed at 1.4583 instead of 3.2 — vertically squashed by
+about 2.2x. The intermediate 560x384 sampling only affected sharpness, never
+aspect.
+
+**Fix**: mirror the way the Apple II itself is rendered. The 40-column Apple II
+draws a 560x192 image and emits every scanline twice to land on 560x384. The
+Apple IIgs Super Hi-Res screen is 640x200, so it now follows exactly the same
+pattern and emits each of its 200 scanlines twice, landing on **640x400**.
+
+Because the sampling is destination-driven, both SHR modes fall out of the
+same loop:
+
+| source | width step | height step |
+|---|---|---|
+| 640x200 (GS/OS desktop) | `srcX = x` (1:1) | `srcY = ty >> 1` (doubled) |
+| 320x200 (games) | `srcX = x >> 1` (doubled) | `srcY = ty >> 1` (doubled) |
+
+So games and the desktop both fill exactly the same 640x400 space and the
+window never changes size when a program switches modes — the behaviour of
+KEGS/GSport/Virtual ][GS.
+
+Implementation:
+
+- `src/ui/graphics.ts`: added `SHR_SOURCE_WIDTH/HEIGHT` (640x200) and
+  `SHR_WIDTH/HEIGHT` (640x400), plus `LEGACY_ASPECT` (1.4583334) and
+  `SHR_ASPECT` (1.6). A module-level `hiddenWidth`/`hiddenHeight` tracks the
+  size of the image actually drawn into the hidden canvas each frame, exported
+  through `getScreenSize()`.
+- `isSuperHiResScreen()` gates it on `handleGetMachineName() === "APPLE2GS"`
+  so the VidHD peripheral card (which also drives `processSuperHiRes`) keeps
+  the legacy geometry.
+- `getCanvasSize()` picks `SHR_ASPECT` when the IIgs is showing SHR and
+  `LEGACY_ASPECT` otherwise. Since the margins are symmetric fractions of the
+  canvas, the screen-area aspect equals the canvas aspect.
+- `drawImage()` blits `hiddenWidth x hiddenHeight` instead of a hardcoded
+  560x384, and the `effectBackground` pass reads the same live size.
+- `ProcessDisplay` resets to the legacy size at the top of every frame and
+  clears the whole hidden canvas, so a previous SHR frame cannot leave rows
+  200..399 to leak into the background/ghosting passes.
+- `src/ui/canvas.tsx`: the hidden canvas is now 640x400, large enough for
+  either geometry. The legacy Apple II path only ever writes and reads
+  560x384, so its pixels are bit-identical to before.
+- `shrRgbaBuffer` grew to `SHR_WIDTH * SHR_HEIGHT * 4`.
+
+**Verification** (headless Chrome, CDP):
+- GS/OS 6.0.1 Finder: hidden canvas 640x400, screen area 699x438,
+  aspect 1.5961. Menu bar text is blocky rather than blurred and the desktop
+  background is a clean regular lattice — i.e. genuinely 1:1.
+- IIgs **text mode** (the ROM boot screen, which is not SHR) is untouched:
+  screen area 699x479, aspect 1.4574, i.e. still 560x384.
+- Apple IIe is untouched: still 560x384 / 1.458.
+- `src/ui` suite: 266/266 pass. Full suite 969/970 — the only failure is the
+  pre-existing `vera.test.ts` CMDR-DOS failure that also fails on a clean tree.
+- `tsc --noEmit` is clean.
+
+**Side effect**: because the screen is now 1.6 instead of 1.458, the emulator
+canvas is wider and the control panel to its right sits further away. This
+matches how KEGS/GSport/Virtual ][GS present the IIgs and was confirmed as the
+wanted behaviour.
+
 
 ## Debugging Techniques Used
 - **Instruction Tracing**: Added a circular buffer in `motherboard.ts` to trace instructions when debugging specific loops.
@@ -549,7 +618,8 @@ report direction/magnitude/button encoding, speaker output) and the existing
 - `src/worker/iigs_adb.ts`: ADB controller emulation.
 - `src/worker/iigs_clock.ts`: Full RTC and 256-byte Battery RAM state machine from `gssquared`.
 - `src/worker/motherboard.ts`: CPU cycle accounting, VBL→IRQ gated triggering for IIgs, separation of cold boot memory init from warm reset.
-- `src/ui/graphics.ts`: Enabled MouseText decoding and inverse-attribute handling for `APPLE2GS`.
+- `src/ui/graphics.ts`: MouseText decoding and inverse-attribute handling for `APPLE2GS`; renders Super Hi-Res at 640x400 (200 SHR scanlines doubled) so the IIgs desktop is not stretched.
+- `src/ui/canvas.tsx`: hidden canvas sized 640x400 to hold either the legacy 560x384 image or the Apple IIgs 640x400 Super Hi-Res screen.
 - `src/ui/copycanvas.ts`: Enabled MouseText support for `APPLE2GS` during screen copying.
 - `src/ui/inputparams.ts`: URL query parameter support for `?machine=apple2gs`, `?boot=true`, and syncing slot changes to the worker.
 - `src/ui/controls/speeddropdown.tsx`: Speed dropdown display mappings for IIgs (1.02 MHz, 2.8 MHz, 7.1 MHz, 14.3 MHz).

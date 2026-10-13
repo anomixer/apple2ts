@@ -22,6 +22,33 @@ export const nColsHgrMagnifier = 2
 export let xmargin = 0
 export let ymargin = 0
 
+// The Apple II and //e draw into a 560x192 image (40 columns x 24 rows of 7x8
+// pixel characters / lo-res blocks) which is then emitted twice per scanline
+// to land on a 560x384 canvas. The Apple IIgs Super Hi-Res screen is 640x200
+// instead, so it follows exactly the same pattern: emit each of the 200 SHR
+// scanlines twice to get 640x400. Squeezing 640x200 straight into the legacy
+// 560x384 image is what made the GS/OS desktop look stretched.
+const LEGACY_WIDTH = 560
+const LEGACY_HEIGHT = 384
+const SHR_SOURCE_WIDTH = 640
+const SHR_SOURCE_HEIGHT = 200
+const SHR_WIDTH = SHR_SOURCE_WIDTH
+const SHR_HEIGHT = SHR_SOURCE_HEIGHT * 2
+const LEGACY_ASPECT = 1.4583334       // (20 * 40) / (24 * 24)
+const SHR_ASPECT = SHR_WIDTH / SHR_HEIGHT
+
+// Size of the image currently in the hidden canvas. Every frame starts out
+// legacy-sized; processSuperHiRes widens it when the IIgs is showing SHR.
+let hiddenWidth = LEGACY_WIDTH
+let hiddenHeight = LEGACY_HEIGHT
+
+export const getScreenSize = (): [number, number] => [hiddenWidth, hiddenHeight]
+
+// True while the Apple IIgs is displaying Super Hi-Res, which is the only mode
+// that uses the 640x200 geometry.
+export const isSuperHiResScreen = (): boolean =>
+  handleGetMachineName() === "APPLE2GS" && handleGetVidhdActive()
+
 const doBlurring = () => {
   return getMonitorMode() !== MONITOR_MODE.RGB
 }
@@ -535,7 +562,9 @@ const drawImage = (ctx: CanvasRenderingContext2D,
   const ymarginPx = ymargin * height
   const imgHeight = Math.floor(height * (1 - 2 * ymargin))
   const imgWidth = Math.floor(width * (1 - 2 * xmargin))
-  ctx.drawImage(hiddenContext.canvas, 0, 0, 560, 384,
+  // The hidden canvas is big enough for either geometry; blit only the part
+  // this frame actually drew into.
+  ctx.drawImage(hiddenContext.canvas, 0, 0, hiddenWidth, hiddenHeight,
     xmarginPx, ymarginPx, imgWidth, imgHeight)
   if (doOverride) {
     ctx.strokeStyle = "#FF0000"
@@ -790,14 +819,24 @@ const applyCrtDistortion = (ctx: CanvasRenderingContext2D,
   return true
 }
 
-const shrRgbaBuffer = new Uint8ClampedArray(560 * 384 * 4)
+// 640x400, which is the same buffer budget whatever the current mode: in 320
+// mode each source pixel is emitted twice horizontally (srcX = floor(x / 2)),
+// and every source line is emitted twice vertically.
+const shrRgbaBuffer = new Uint8ClampedArray(SHR_WIDTH * SHR_HEIGHT * 4)
 
 const processSuperHiRes = (hiddenContext: CanvasRenderingContext2D, colorMode: COLOR_MODE): boolean => {
   const shrData = handleGetShr()
   if (shrData.length < 0x8000) return false
 
-  const outWidth = 560
-  const outHeight = 384
+  // Emit the Apple IIgs Super Hi-Res screen at 640x400: each of the 200 SHR
+  // scanlines is drawn twice, mirroring how the Apple II 560x192 image is
+  // doubled to 560x384. That keeps every emulator window mode at one constant
+  // size and square pixels. In 320 mode each source pixel is also emitted
+  // twice horizontally, so games fill the same 640x400 space.
+  const outWidth = SHR_WIDTH
+  const outHeight = SHR_HEIGHT
+  hiddenWidth = outWidth
+  hiddenHeight = outHeight
 
   // Decode 16 palettes (each has 16 colors, 2 bytes 0x0RGB)
   const palR = new Uint8Array(256)
@@ -844,7 +883,8 @@ const processSuperHiRes = (hiddenContext: CanvasRenderingContext2D, colorMode: C
     }
   }
 
-    // Destination-driven sampling for 560x384 canvas
+    // Destination-driven sampling into SHR_WIDTH x SHR_HEIGHT. The Y step is
+    // the vertical doubling; the X step widens 320 mode to 640.
     for (let ty = 0; ty < outHeight; ty++) {
       const srcY = Math.min(199, Math.floor((ty * 200) / outHeight))
       const lineOffset = srcY * 160
@@ -932,6 +972,14 @@ export const ProcessDisplay = (ctx: CanvasRenderingContext2D,
     ctx.clearRect(0, 0, width, height)
   }
 
+  // Each frame starts out assuming the legacy geometry; processSuperHiRes
+  // widens it when the Apple IIgs is showing SHR. The hidden canvas is big
+  // enough for both, but rows outside the current image would otherwise leak
+  // into the background/ghosting passes below.
+  hiddenWidth = LEGACY_WIDTH
+  hiddenHeight = LEGACY_HEIGHT
+  hiddenContext.clearRect(0, 0, hiddenContext.canvas.width, hiddenContext.canvas.height)
+
   if (borderColor) {
     if (!crtDistortion) paintScreenSurround(ctx, width, height, borderColor, ghosting)
   }
@@ -1016,7 +1064,7 @@ export const ProcessDisplay = (ctx: CanvasRenderingContext2D,
   }
 
   if (effectBackground) {
-    const hiddenData = hiddenContext.getImageData(0, 0, 560, 384)
+    const hiddenData = hiddenContext.getImageData(0, 0, hiddenWidth, hiddenHeight)
     replaceBlackPixels(hiddenData, effectBackground)
     hiddenContext.putImageData(hiddenData, 0, 0)
   }
@@ -1089,9 +1137,11 @@ export const getCanvasSize = () => {
   const margin = (handleGetMachineName() === "APPLE2P" && !isCanvasFullScreen) ? 0.12 : 0.075
   xmargin = (noBackgroundImage || isTouchDevice) ? 0.02 : margin
   ymargin = (noBackgroundImage || isTouchDevice) ? 0.02 : margin
-  const screenRatio = 1.4583334 // 1.33  // (20 * 40) / (24 * 24)
+  const screenRatio = isSuperHiResScreen() ? SHR_ASPECT : LEGACY_ASPECT
   if (TEST_GRAPHICS) {
-    return [659, 452]  // This will give an actual size of 560 x 384
+    // 659 x 452 leaves a 560 x 384 screen once the margins are subtracted;
+    // the other entry is the equivalent for a 640 x 400 screen.
+    return isSuperHiResScreen() ? [754, 472] : [659, 452]
   }
   let width = window.innerWidth ? window.innerWidth : window.outerWidth
   let height = window.innerHeight ? window.innerHeight : (window.outerHeight - 150)

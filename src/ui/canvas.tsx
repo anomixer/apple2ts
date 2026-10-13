@@ -733,11 +733,13 @@ const Apple2Canvas = (props: DisplayProps) => {
         onFocus={() => { didNavigateWithKeyboard.current = false }}
       />
       {/* Use hidden canvas/context so image rescaling works in iOS < 15.
-          See graphics.ts drawImage() */}
+          See graphics.ts drawImage(). Big enough for either geometry: the
+          legacy Apple II 560x384 image, or the Apple IIgs Super Hi-Res
+          640x400 screen (200 scanlines doubled). */}
       <canvas ref={hiddenCanvas}
         id="hiddenCanvas"
         hidden={true}
-        width={560} height={384} />
+        width={640} height={400} />
       {handleGetOverrideHires() && <HgrMagnifier mainCanvas={mainCanvas}
         mouseLoc={magnifierMouseLoc} lockHgrMagnifier={lockHgrMagnifier} />}
       {!isEmbedMode() && <KeyboardControl />}
