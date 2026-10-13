@@ -17,7 +17,7 @@ test("test Ctrl-Reset from Check startup device screen", () => {
     }
     const screenBefore = getTextPageAsString()
     console.log("Screen before reset:\n", screenBefore.slice(0, 120))
-    console.log("ADB RAM 0x51 before reset:", (iigsADB as any).controllerMemory[0x51])
+    console.log("ADB RAM 0x51 before reset:", (iigsADB as unknown as { ucMemory: Uint8Array }).ucMemory[0x51])
     console.log("$03F2-$03F4 before reset:", memGet24(0x0003F2).toString(16), memGet24(0x0003F3).toString(16), memGet24(0x0003F4).toString(16))
 
     // Trace instructions around reset

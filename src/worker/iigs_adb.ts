@@ -1,96 +1,133 @@
 /**
- * iigs_adb.ts - Apple IIgs ADB (Apple Desktop Bus) controller emulation.
+ * iigs_adb.ts - Apple IIgs ADB (Apple Desktop Bus) emulation.
  *
- * Mirrors web-a2e's iigs_adb.cpp (Mike Daley). The ADB is a serial bus the
- * IIgs uses for its keyboard and mouse. Registers:
- *   $C024 ADB Mouse Data
- *   $C025 ADB Modifiers
- *   $C026 ADB Data (command/response queue)
- *   $C027 ADB Status (bits 5=response available, 2=keyboard data, 3/6=interrupt
- *       enables, 7=mouse data, 1=mouse Y next, 4=command full)
+ * The IIgs keyboard and mouse hang off the ADB, and the CPU talks to the ADB
+ * micro-controller through four bytes of I/O:
+ *   $C024 ADB Mouse Data   (X byte first, Y byte on the following read)
+ *   $C025 ADB Modifiers    (shift/caps/option state + MOD_LATCH)
+ *   $C026 ADB Data         (write = command register, read = response queue)
+ *   $C027 ADB Status
+ *
+ * The command byte written to $C026 is *not* a classic ADB bus transaction.
+ * It is the IIgs ADB micro-controller command set, classified by bits 7-6:
+ *   00xxxxxx  controller commands (abort, synch, read modes/config, ...)
+ *   01xxxxxx  FDB commands (reset, transmit N bytes, enable/flush/disable SRQ)
+ *   10xxxxxx  TRANSMIT 2 BYTES to an FDB device register (a "listen")
+ *   11xxxxxx  POLL FDB DEVICE register (a "talk"); the two register bytes come
+ *             back through the $C026 response queue
+ *
+ * Getting this wrong is why the Finder never saw a cursor: GS/OS reads the
+ * mouse by polling FDB device 3 register 0, so it never even looks at $C024.
+ *
+ * Device model follows gssquared's src/devices/adb/{ADB_Micro,ADB_Mouse,
+ * ADB_Keyboard}.hpp, which is the reference implementation.
  */
 
-// Status bit constants (web-a2e iigs_adb.hpp)
-const STATUS_MOUSE_DATA = 0x80;       // bit7
-const STATUS_MOUSE_INTERRUPT = 0x40;  // bit6 (interrupt enable for mouse)
-const STATUS_DATA_AVAILABLE = 0x20;   // bit5 (response queue non-empty)
-const STATUS_COMMAND_FULL = 0x10;     // bit4 (waiting for more args)
-const STATUS_KEYBOARD_INTERRUPT = 0x08; // bit3 (interrupt enable for keyboard)
-const STATUS_KEYBOARD_DATA = 0x04;    // bit2 (keyboard queue non-empty)
-const STATUS_MOUSE_Y_NEXT = 0x02;     // bit1 (mouse Y byte next)
-const STATUS_INTERRUPT_ENABLES = 0x48;  // mask of bits 6 and 3
+// $C027 status bits
+const STATUS_MOUSE_DATA = 0x80;          // bit 7: a mouse report is waiting
+const STATUS_MOUSE_INTERRUPT = 0x40;     // bit 6: enable mouse interrupt
+const STATUS_DATA_AVAILABLE = 0x20;      // bit 5: $C026 response queue non-empty
+const STATUS_COMMAND_FULL = 0x10;        // bit 4: command register wants more args
+const STATUS_KEYBOARD_INTERRUPT = 0x08;  // bit 3: enable keyboard interrupt
+const STATUS_KEYBOARD_DATA = 0x04;       // bit 2: key data available
+const STATUS_MOUSE_Y_NEXT = 0x02;        // bit 1: next $C024 read returns Y
+const STATUS_INTERRUPT_ENABLES = 0x48;   // bits 6 and 3 are writable
+
+// First byte of every $C026 response.
 const RESPONSE_HEADER = 0x80;
 
-// Command constants
-const CMD_ABORT = 0x01;
-const CMD_RESET_KEYBOARD = 0x02;
-const CMD_FLUSH_KEYBOARD = 0x03;
-const CMD_SET_MODES = 0x04;
-const CMD_CLEAR_MODES = 0x05;
-const CMD_SET_CONFIG = 0x06;
-const CMD_SYNC = 0x07;
-const CMD_WRITE_MEMORY = 0x08;
-const CMD_READ_MEMORY = 0x09;
-const CMD_READ_MODES = 0x0a;
-const CMD_READ_CONFIG = 0x0b;
-const CMD_READ_ERROR = 0x0c;
-const CMD_VERSION = 0x0d;
-const CMD_READ_CHARSETS = 0x0e;
-const CMD_READ_LAYOUTS = 0x0f;
-const CMD_RESET = 0x10;
-const CMD_MYSTERY_12 = 0x12;
-const CMD_MYSTERY_13 = 0x13;
-const CMD_DISABLE_SRQ_FIRST = 0x70;
-const CMD_DISABLE_SRQ_LAST = 0x73;
-const BUS_TALK_FIRST = 0xc0;
-const BUS_TALK_LAST = 0xff;
+// $C025 modifiers
+const MOD_SHIFT = 0x01;
+const MOD_OPTION = 0x02;
+const MOD_CONTROL = 0x04;
+const MOD_LATCH = 0x20;
 
-const ADDRESS_KEYBOARD = 0x02;
-const ADDRESS_MOUSE = 0x03;
-const SRQ_ENABLE = 0x20;
-const HANDLER_ID = 0x01;
-const CONTROLLER_VERSION = 0x06;
+const ADDR_KEYBOARD = 0x02;
+const ADDR_MOUSE = 0x03;
 
-// Argument counts for each command (web-a2e beginCommand)
-const ARG_COUNTS: Record<number, number> = {
-  [CMD_ABORT]: 0, [CMD_RESET_KEYBOARD]: 0, [CMD_FLUSH_KEYBOARD]: 0,
-  [CMD_SET_MODES]: 1, [CMD_CLEAR_MODES]: 1,
-  [CMD_SET_CONFIG]: 3, [CMD_SYNC]: 4,
-  [CMD_WRITE_MEMORY]: 2, [CMD_READ_MEMORY]: 2,
-  [CMD_READ_MODES]: 0, [CMD_READ_CONFIG]: 0, [CMD_READ_ERROR]: 0,
-  [CMD_VERSION]: 0, [CMD_READ_CHARSETS]: 0, [CMD_READ_LAYOUTS]: 0,
-  [CMD_RESET]: 0, [CMD_MYSTERY_12]: 2, [CMD_MYSTERY_13]: 2,
-};
+const ADB_VERSION = 0x06;               // GS/OS 6 reports version 6
+
+// How many argument bytes follow a command byte in $C026. Mirrors
+// ADB_Micro::write_cmd_register.
+const argumentCount = (value: number): number => {
+  switch (value & 0xc0) {
+    case 0x00:
+      switch (value) {
+        case 0x04: return 1;              // set modes
+        case 0x05: return 1;              // clear modes
+        case 0x06: return 3;              // set configuration
+        case 0x07: return 4;              // synch (modes + 3 config bytes)
+        case 0x08: return 2;              // write uC memory
+        case 0x09: return 2;              // read uC memory
+        case 0x11: return 1;              // send FDB keycode
+        default: return 0;
+      }
+    case 0x40:
+      if (value === 0x48) return 2;       // receive bytes
+      if ((value & 0xf8) === 0x48) return (value & 0x07) + 1;  // transmit N bytes
+      return 0;
+    case 0x80:
+      return 2;                          // transmit 2 bytes to a device
+    default:
+      return 0;                          // poll FDB device
+  }
+}
 
 export class IIGSADB {
+  // $C026 response queue
   private response: number[] = [];
-  private keyboard: number[] = [];
+
+  // Controller state
+  private modes = 0;
+  private configuration = new Uint8Array(3);
+  private ucMemory = new Uint8Array(256);
+  private errorByte = 0;
+
+  // Devices. Each has 4 two-byte registers. Register 3 is the device status
+  // word: byte 0 is the exceptional-event/address byte (0 unless changed by a
+  // "transmit 2 bytes"), byte 1 carries the device address, the handler id and
+  // the SRQ-enable flag. GS/OS identifies devices by reading this.
+  private mouseAddr = ADDR_MOUSE;
+  private mouseRegs = new Uint8Array(8);
+  private mouseHasData = false;
+
+  private keyboardAddr = ADDR_KEYBOARD;
+  // Register 0 holds the key latch. It reads back as $FF,$FF while empty, so
+  // it must start out empty - zeros would look like a key press.
+  private keyboardRegs = Uint8Array.from([0xff, 0xff, 0, 0, 0, 0, 0, ADDR_KEYBOARD | 0x20]);
+
+  private initDeviceRegisters() {
+    this.mouseRegs = new Uint8Array(8);
+    this.mouseRegs[6] = 0x00;
+    this.mouseRegs[7] = ADDR_MOUSE | 0x20;
+    this.mouseHasData = false;
+    this.keyboardRegs = Uint8Array.from([0xff, 0xff, 0, 0, 0, 0, 0, ADDR_KEYBOARD | 0x20]);
+  }
+
+  // $C024 mouse report staging
   private pendingX = 0;
   private pendingY = 0;
+  private mouseButton = false;
   private buttonChanged = false;
   private reportInProgress = false;
-  private reportY = 0;
-  private controllerMemory = new Uint8Array(256);
-  private arguments = new Uint8Array(8);
-  private lastCommand = 0;
-  private argumentsExpected = 0;
-  private argumentsSeen = 0;
-  private modifiers = 0;
-  private latch = 0;
-  private mouseButton = false;
-  private modes = 0;
-  private interruptEnables = 0;
-  private configuration = new Uint8Array(3);
 
-  // --- Status ---
+  private modifiers = 0;
+  private interruptEnables = 0;
+
+  // Command register framing
+  private cmd: number[] = [];
+  private argumentsExpected = 0;
+
+  // --- Status / data registers ---
   readStatus(): number {
     let status = 0;
     if (this.response.length > 0) status |= STATUS_DATA_AVAILABLE;
-    if (this.keyboard.length > 0) status |= STATUS_KEYBOARD_DATA;
+    if (this.hasKeyData()) status |= STATUS_KEYBOARD_DATA;
     if (this.hasMouseData()) status |= STATUS_MOUSE_DATA;
     if (this.reportInProgress) status |= STATUS_MOUSE_Y_NEXT;
-    if (this.argumentsSeen < this.argumentsExpected) status |= STATUS_COMMAND_FULL;
-    return status | this.interruptEnables;
+    if (this.commandFull()) status |= STATUS_COMMAND_FULL;
+    status |= this.interruptEnables;
+    return status;
   }
 
   writeStatus(v: number) {
@@ -98,155 +135,299 @@ export class IIGSADB {
   }
 
   readData(): number {
-    if (this.response.length === 0) return 0x00;
-    return this.response.shift() as number;
+    return this.response.length > 0 ? (this.response.shift() as number) : 0x00;
   }
 
-  writeCommand(v: number) {
-    if (this.argumentsSeen < this.argumentsExpected) {
-      this.arguments[this.argumentsSeen++] = v;
-      if (this.argumentsSeen === this.argumentsExpected) this.completeCommand();
-    } else {
-      this.beginCommand(v);
+  // Queue a reply for the CPU to read out of $C026. Two different framings are
+  // used and mixing them up hangs the ADB handshake in GS/OS:
+  //   - controller commands (read modes, read layouts, ...) reply with the
+  //     payload alone; the caller reads a count byte out of the payload and
+  //     then that many data bytes.
+  //   - an FDB "poll device" (talk) reply is prefixed by a header: bit 7 set
+  //     means a response is present, bit 6 means the micro-controller reset,
+  //     and bits 2-0 hold (byte count - 1).
+  private postResponse(bytes: number[], withHeader = false) {
+    if (withHeader) {
+      this.response.push(RESPONSE_HEADER | (bytes.length > 0 ? bytes.length - 1 : 0));
     }
-  }
-
-  private beginCommand(code: number) {
-    // Bus talk (0xC0-0xFF) completes immediately
-    if (code >= BUS_TALK_FIRST && code <= BUS_TALK_LAST) {
-      this.answerTalk(code);
-      return;
-    }
-    const expected = ARG_COUNTS[code] ?? 0;
-    this.argumentsExpected = expected;
-    this.argumentsSeen = 0;
-    this.lastCommand = code;
-    if (expected === 0) this.completeCommand();
-  }
-
-  private completeCommand() {
-    switch (this.lastCommand) {
-      case CMD_SYNC: this.modes = this.arguments[0]; for (let i = 0; i < 3; i++) this.configuration[i] = this.arguments[1 + i]; break;
-      case CMD_SET_MODES: this.modes |= this.arguments[0]; break;
-      case CMD_CLEAR_MODES: this.modes &= ~this.arguments[0]; break;
-      case CMD_SET_CONFIG: for (let i = 0; i < 3; i++) this.configuration[i] = this.arguments[i]; break;
-      case CMD_WRITE_MEMORY: this.controllerMemory[this.arguments[0]] = this.arguments[1]; break;
-      case CMD_READ_MEMORY: this.response.push(this.controllerMemory[(this.arguments[0] | (this.arguments[1] << 8)) & 0xff]); break;
-      case CMD_READ_MODES: this.response.push(this.modes); break;
-      case CMD_READ_CONFIG: for (let i = 0; i < 3; i++) this.response.push(this.configuration[i]); break;
-      case CMD_READ_ERROR: this.response.push(0x00); break;
-      case CMD_VERSION: this.response.push(CONTROLLER_VERSION); break;
-      case CMD_READ_CHARSETS: case CMD_READ_LAYOUTS: this.response.push(0x01, 0x00); break;
-      case CMD_ABORT: case CMD_RESET: case CMD_RESET_KEYBOARD: case CMD_FLUSH_KEYBOARD:
-        this.keyboard = [];
-        this.response = [];
-        this.pendingX = this.pendingY = 0;
-        this.buttonChanged = false;
-        this.reportInProgress = false;
-        break;
-      case CMD_MYSTERY_12: case CMD_MYSTERY_13: break; // consume args, no reply
-      default:
-        if (this.lastCommand >= CMD_DISABLE_SRQ_FIRST && this.lastCommand <= CMD_DISABLE_SRQ_LAST) break; // acknowledged, no-op
-        break;
-    }
-    this.argumentsExpected = 0;
-    this.argumentsSeen = 0;
-  }
-
-  private answerTalk(address: number, reg?: number) {
-    if (reg === undefined) {
-      // address = code & 0x0f, reg = (code >> 4) & 3
-      const addr = address & 0x0f;
-      const r = (address >> 4) & 3;
-      const present = (addr === ADDRESS_KEYBOARD || addr === ADDRESS_MOUSE);
-      if (!present || r !== 3) {
-        this.response.push(RESPONSE_HEADER); // count 0
-        return;
-      }
-      this.postBusResponse([SRQ_ENABLE | addr, HANDLER_ID]);
-    }
-  }
-
-  private postBusResponse(bytes: number[]) {
-    this.response.push(RESPONSE_HEADER | (bytes.length ? bytes.length - 1 : 0));
     for (const b of bytes) this.response.push(b);
   }
 
-  // --- Mouse ---
-  hasMouseData(): boolean {
-    return this.reportInProgress || this.pendingX !== 0 || this.pendingY !== 0 || this.buttonChanged;
+  // --- Command register ---
+  // cmd[0] is the command byte, cmd[1..] are its arguments. A command is
+  // complete once cmd.length - 1 === argumentsExpected.
+  writeCommand(v: number) {
+    if (this.cmd.length > 0 && this.cmd.length - 1 < this.argumentsExpected) {
+      this.cmd.push(v);
+      if (this.cmd.length - 1 === this.argumentsExpected) this.executeCommand();
+      return;
+    }
+    this.cmd = [v];
+    this.argumentsExpected = argumentCount(v);
+    if (this.argumentsExpected === 0) this.executeCommand();
   }
 
-  readMouseData(): number {
-    if (this.reportInProgress) {
-      this.reportInProgress = false;
-      return this.reportY;
+  private executeCommand() {
+    const value = this.cmd[0] as number;
+    switch (value & 0xc0) {
+      case 0x00: this.controllerCommand(value); break;
+      case 0x40: this.fdbCommand(value); break;
+      case 0x80: this.transmitTwoBytes(value); break;
+      case 0xc0: this.pollFdbDevice(value); break;
     }
+    this.cmd = [];
+    this.argumentsExpected = 0;
+  }
+
+  // True while the command register is waiting for more argument bytes.
+  private commandFull(): boolean {
+    return this.cmd.length > 0 && this.cmd.length - 1 < this.argumentsExpected;
+  }
+
+  // 00xxxxxx - commands addressed to the ADB micro-controller itself.
+  private controllerCommand(value: number) {
+    const a1 = this.cmd[1] ?? 0;
+    switch (value) {
+      case 0x01:                          // abort
+      case 0x02:                          // reset the micro-controller
+      case 0x03:                          // flush
+        this.response = [];
+        this.modes = 0;
+        this.errorByte = 0;
+        break;
+      case 0x04:                          // set modes
+        this.modes |= a1;
+        break;
+      case 0x05:                          // clear modes
+        this.modes &= ~a1;
+        break;
+      case 0x06:                          // set configuration bytes
+        this.configuration[0] = a1;
+        this.configuration[1] = this.cmd[2] ?? 0;
+        this.configuration[2] = this.cmd[3] ?? 0;
+        break;
+      case 0x07:                          // synch
+        this.modes = a1;
+        this.configuration[0] = this.cmd[2] ?? 0;
+        this.configuration[1] = this.cmd[3] ?? 0;
+        this.configuration[2] = this.cmd[4] ?? 0;
+        break;
+      case 0x08:                          // write micro-controller memory
+        this.ucMemory[a1 & 0xff] = this.cmd[2] ?? 0;
+        break;
+      case 0x09:                          // read micro-controller memory
+        this.postResponse([this.ucMemory[((this.cmd[2] ?? 0) << 8 | a1) & 0xff]]);
+        break;
+      case 0x0a:                          // read modes byte
+        this.postResponse([this.modes]);
+        break;
+      case 0x0b:                          // read configuration bytes
+        this.postResponse([this.configuration[0], this.configuration[1], this.configuration[2]]);
+        break;
+      case 0x0c:                          // read then clear the error byte
+        this.postResponse([this.errorByte]);
+        this.errorByte = 0;
+        break;
+      case 0x0d:                          // version
+        this.postResponse([ADB_VERSION]);
+        break;
+      case 0x0e:                          // charsets available
+        // The count is "how many are available", followed by that many indices.
+        // GS/OS reads exactly count more bytes, so offering only index 0 keeps
+        // the reply length in step with what it consumes.
+        this.postResponse([1, 0]);
+        break;
+      case 0x0f:                          // layouts available
+        this.postResponse([1, 0]);
+        break;
+      case 0x11:                          // send an FDB keycode
+        this.queueKeyboardCode(a1);
+        break;
+    }
+  }
+
+  // 01xxxxxx - commands addressed to the FDB (bus) controller.
+  private fdbCommand(value: number) {
+    if (value === 0x40) {
+      // Reset the FDB: both devices go back to their power-on state.
+      this.mouseAddr = ADDR_MOUSE;
+      this.keyboardAddr = ADDR_KEYBOARD;
+      this.initDeviceRegisters();
+    }
+    // 0x48 receive bytes, 0x50s/0x60s/0x70s enable SRQ / flush / disable SRQ:
+    // the emulator's devices answer synchronously, so there is nothing to do.
+  }
+
+  // 10xxxxxx - "transmit 2 bytes": a two byte FDB *listen* into a device
+  // register. Only register 3 (address / handler) has any effect.
+  private transmitTwoBytes(value: number) {
+    const addr = value & 0x0f;
+    const reg = (value >> 4) & 0x03;
+    if (reg !== 3) return;
+    if (addr === this.mouseAddr) {
+      // Register 3 is written as <event byte><address|handler|SRQ byte>.
+      this.mouseRegs[6] = this.cmd[1] ?? 0;
+      this.mouseRegs[7] = this.cmd[2] ?? 0;
+    } else if (addr === this.keyboardAddr) {
+      this.keyboardRegs[6] = this.cmd[1] ?? 0;
+      this.keyboardRegs[7] = this.cmd[2] ?? 0;
+    }
+  }
+
+  // 11xxxxxx - "poll FDB device": an FDB *talk*. The two register bytes come
+  // back through the $C026 response queue. This is how GS/OS reads the mouse.
+  private pollFdbDevice(value: number) {
+    const addr = value & 0x0f;
+    const reg = (value >> 4) & 0x03;
+    let lo = 0;
+    let hi = 0;
+    if (addr === this.mouseAddr) {
+      if (this.mouseHasData) {
+        lo = this.mouseRegs[reg * 2] ?? 0;
+        hi = this.mouseRegs[reg * 2 + 1] ?? 0;
+        if (reg === 0) this.consumeReport();
+      }
+    } else if (addr === this.keyboardAddr) {
+      lo = this.keyboardRegs[reg * 2] ?? 0;
+      hi = this.keyboardRegs[reg * 2 + 1] ?? 0;
+      if (reg === 0) {
+        this.keyboardRegs[0] = 0xff;
+        this.keyboardRegs[1] = 0xff;
+      }
+    }
+    this.postResponse([lo, hi], true);
+  }
+
+  // --- Mouse ---
+  // True while a report is waiting to be picked up, either through the device
+  // register (how GS/OS reads the mouse) or through $C024. This is what drives
+  // $C027 bit 7 and, when GS/OS has enabled it, the ADB interrupt.
+  hasMouseData(): boolean {
+    return this.reportInProgress
+      || this.mouseHasData
+      || this.pendingX !== 0
+      || this.pendingY !== 0
+      || this.buttonChanged;
+  }
+
+  // The report has to be in the device register too, because that is where
+  // GS/OS reads it from.
+  private latchMouseReport() {
     const clamp = (v: number) => Math.max(-63, Math.min(63, v));
-    const x = clamp(this.pendingX) & 0x7f;
-    // bit7 of X is always 1 (button 1 never pressed)
-    this.pendingX -= clamp(this.pendingX);
-    const y = this.reportY;
-    this.reportY = y | (this.mouseButton ? 0 : 0x80);
+    const dx = clamp(this.pendingX);
+    const dy = clamp(this.pendingY);
+    // Only replace the register when there is something new to report, so an
+    // unread report is not wiped out.
+    if (dx === 0 && dy === 0 && !this.buttonChanged) return;
+    const buttonBit = this.mouseButton ? 0x00 : 0x80;
+    this.pendingX -= dx;
+    this.pendingY -= dy;
+    this.mouseRegs[0] = (Math.abs(dx) & 0x3f) | (dx < 0 ? 0x40 : 0x00) | buttonBit;
+    this.mouseRegs[1] = (Math.abs(dy) & 0x3f) | (dy < 0 ? 0x40 : 0x00) | buttonBit;
+    this.mouseHasData = true;
     this.buttonChanged = false;
+  }
+
+  // The OS has just finished a report (both $C024 bytes, or a poll of device
+  // register 0). Any motion left over beyond the +/-63 a single report can
+  // carry is delivered as another report, otherwise the interrupt line would
+  // stay asserted forever and the machine would do nothing but service IRQs.
+  private consumeReport() {
+    this.mouseHasData = false;
+    this.reportInProgress = false;
+    this.latchMouseReport();
+  }
+
+  // $C024 returns one byte per read: the X byte first, then the Y byte on the
+  // following read (the ROM at FF:C4D2 gates on $C027 bit 7 and uses $C027
+  // bit 1 to know the second read is the Y byte). The format is the standard
+  // ADB mouse register 0 layout:
+  //   bit 7 = button 0 (1 = released)
+  //   bit 6 = direction (1 = moved negative: left for X, up for Y)
+  //   bits 5-0 = magnitude of the displacement, 0..63
+  readMouseData(): number {
+    // The report is already latched into the device register by queueMouse /
+    // setMouseButton; reading $C024 just hands it out one byte at a time.
+    if (this.reportInProgress) {
+      // Grab the Y byte before queueing up the next report, which overwrites
+      // the register.
+      const y = this.mouseRegs[1];
+      this.consumeReport();
+      return y;
+    }
     this.reportInProgress = true;
-    return x | 0x80;
+    return this.mouseRegs[0];
   }
 
   queueMouse(dx: number, dy: number) {
     this.pendingX += dx;
     this.pendingY += dy;
+    // Make the report visible to a poll of the device register straight away,
+    // which is how GS/OS normally picks the mouse up.
+    this.latchMouseReport();
   }
 
   setMouseButton(pressed: boolean) {
     if (pressed !== this.mouseButton) this.buttonChanged = true;
     this.mouseButton = pressed;
+    this.latchMouseReport();
   }
 
   // --- Keyboard ---
+  hasKeyData(): boolean {
+    return this.keyboardRegs[0] !== 0xff || this.keyboardRegs[1] !== 0xff;
+  }
+
+  // Queue an ADB keycode (bit 7 set = key pressed) plus the modifier byte.
+  private queueKeyboardCode(code: number, mods = 0) {
+    this.keyboardRegs[0] = code | 0x80;
+    this.keyboardRegs[1] = mods;
+  }
+
   queueKeyboard(keycode: number) {
-    this.keyboard.push(keycode);
-    this.latch = keycode | 0x80; // $C000 Mega II latch
+    this.queueKeyboardCode(keycode, this.peekModifiers());
   }
 
-  clearKeyboardStrobe() {
-    this.latch &= 0x7f;
-    if (this.keyboard.length > 0) this.keyboard.shift();
-  }
-
-  readModifiers() {
+  readModifiers(): number {
     const m = this.modifiers;
-    this.modifiers &= ~0x20; // clear MOD_LATCH
+    this.modifiers &= ~MOD_LATCH;
     return m;
   }
 
-  peekModifiers() {
+  peekModifiers(): number {
     return this.modifiers;
+  }
+
+  setModifiers(v: number) {
+    this.modifiers = v;
+    if (v & (MOD_SHIFT | MOD_OPTION | MOD_CONTROL)) {
+      this.modifiers |= MOD_LATCH;
+    }
   }
 
   interruptPending(): boolean {
     return ((this.interruptEnables & STATUS_MOUSE_INTERRUPT) !== 0 && this.hasMouseData())
-      || ((this.interruptEnables & STATUS_KEYBOARD_INTERRUPT) !== 0 && this.keyboard.length > 0);
+      || ((this.interruptEnables & STATUS_KEYBOARD_INTERRUPT) !== 0 && this.hasKeyData());
   }
 
   reset() {
     this.response = [];
-    this.keyboard = [];
-    this.pendingX = this.pendingY = 0;
+    this.modes = 0;
+    this.configuration = new Uint8Array(3);
+    this.ucMemory = new Uint8Array(256);
+    this.errorByte = 0;
+    this.mouseAddr = ADDR_MOUSE;
+    this.keyboardAddr = ADDR_KEYBOARD;
+    this.initDeviceRegisters();
+    this.pendingX = 0;
+    this.pendingY = 0;
+    this.mouseButton = false;
     this.buttonChanged = false;
     this.reportInProgress = false;
-    this.reportY = 0;
-    this.controllerMemory = new Uint8Array(256);
-    this.arguments = new Uint8Array(8);
-    this.lastCommand = 0;
-    this.argumentsExpected = 0;
-    this.argumentsSeen = 0;
     this.modifiers = 0;
-    this.latch = 0;
-    this.mouseButton = false;
-    this.modes = 0;
     this.interruptEnables = 0;
-    this.configuration = new Uint8Array(3);
+    this.cmd = [];
+    this.argumentsExpected = 0;
   }
 }
 

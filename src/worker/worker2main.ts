@@ -100,8 +100,15 @@ export const passMachineState = (state: MachineState) => {
 }
 
 export const passClickSpeaker = (cycleCount: number) => {
+  speakerClickCount++
   doPostMessage(MSG_WORKER.CLICK, cycleCount)
 }
+
+// Test-only hook: lets the suite assert that a machine type actually drives
+// the speaker. Not used by the emulator itself.
+let speakerClickCount = 0
+export const getSpeakerClickCount = () => speakerClickCount
+export const resetSpeakerClickCount = () => { speakerClickCount = 0 }
 
 export const passDriveProps = (props: DriveProps, replaceDiskData = false) => {
   doPostMessage(MSG_WORKER.DRIVE_PROPS, replaceDiskData ? {props, replaceDiskData} : props)

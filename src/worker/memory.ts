@@ -1253,6 +1253,15 @@ const memSetSoftSwitch = (addr: number, value: number) => {
                 iigsWriteDiskControlPort(value)
                 break
 
+            case 0xC030: // Speaker toggle
+                // $C030 is still the Apple II toggle-a-bit speaker on the IIgs.
+                // The default branch below would just stash the byte in
+                // iigsRegisters and never click, because this whole $C020-$C04F
+                // range short-circuits the normal softswitch path - which is why
+                // the IIgs was completely silent.
+                checkSoftSwitches(0xC030, true, s6502.cycleCount)
+                break;
+
             case 0xC032: // VGC interrupt clear
                 if ((value & 0x40) === 0) vgcIntReg &= ~0x40;
                 if ((value & 0x20) === 0) vgcIntReg &= ~0x20;

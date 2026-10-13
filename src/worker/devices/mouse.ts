@@ -1,7 +1,8 @@
 // Mouse Driver for Apple2TS - Copyright 2023 Michael Morrison <codebythepound@gmail.com>
 // Now combined Mouse/Clock driver
 
-import { setSlotDriver, setSlotIOCallback, memGet, memSet, memSetC000, memGetC000 } from "../memory"
+import { setSlotDriver, setSlotIOCallback, memGet, memSet, memSetC000, memGetC000, getCurrentMachineName } from "../memory"
+import { iigsADB } from "../iigs_adb"
 import { registerSlotCardState } from "./slot_card_state"
 import { MouseEventSimple } from "../../common/utility"
 import { interruptRequest } from "../cpu6502"
@@ -349,6 +350,11 @@ const setMode = (value: number) => {
   passShowAppleMouse(value ? true  : false)
 }
 
+// The IIgs ADB path derives relative deltas from the last UI position, so this
+// baseline is state that a reset has to clear. -1 means "no report yet".
+let adbLastX = -1
+let adbLastY = -1
+
 export const resetMouse = () => {
   mousex = 0
   mousey = 0
@@ -364,6 +370,10 @@ export const resetMouse = () => {
   tmpmousey = 0
   servestatus = 0
   clampidx = 0
+  // The IIgs ADB path derives relative deltas from the last UI position, so the
+  // baseline has to be dropped too or the first report after a reset jumps.
+  adbLastX = -1
+  adbLastY = -1
 }
 
 let mousex = 0
@@ -483,9 +493,14 @@ export const onMouseVBL = () => {
   }
 }
 
-// Receives system mouse event messages from the UI thread
-// and converts them to Apple II mouse card values.
+// Receives system mouse event messages from the UI thread.
+// The Apple IIgs has no mouse *card*: its mouse hangs off the ADB bus
+// ($C024 mouse data, $C025 modifiers, $C026/$C027 command/status), so on that
+// machine the events feed iigsADB instead of the 6522 card state.
 export const MouseCardEvent = (event: MouseEventSimple) => {
+  if (getCurrentMachineName() === "APPLE2GS") {
+    return iigsADBEvent(event)
+  }
 
   const mode = memGetC000(ADDR_MODE)
 
@@ -531,6 +546,65 @@ export const MouseCardEvent = (event: MouseEventSimple) => {
     }
     //console.log("XYB: ", mousex, " ", mousey, " ", bstatus.toString(16))
   }
+}
+
+// The ADB reports motion as a relative count per read, and the OS adds those
+// counts straight onto the cursor position. So a full-width move of the host
+// pointer should traverse the full Super Hi-Res screen: 640 x 200 counts.
+// (ADB_Mouse.hpp clamps each report to +/-63.)
+const ADB_COUNTS_X = 640
+const ADB_COUNTS_Y = 200
+
+// Route a UI mouse event onto the IIgs ADB bus. The ADB reports relative
+// deltas, so the UI's normalized 0..1 position is converted back into deltas
+// against the last position we delivered.
+const iigsADBEvent = (event: MouseEventSimple) => {
+  if (event.buttons >= 0) {
+    // See comments in the firmware code for the bit values for
+    // the interrupt status byte and mode byte.
+    switch (event.buttons) {
+      case 0x00:  // button 0 up
+        iigsADB.setMouseButton(false)
+        break
+      case 0x10:  // button 0 down
+        iigsADB.setMouseButton(true)
+        break
+      case 0x01:  // button 1 up
+        iigsADB.setMouseButton(false)
+        break
+      case 0x11:  // button 1 down
+        iigsADB.setMouseButton(true)
+        break
+    }
+    return
+  }
+  // Both axes have to go into the same report, so collect them first.
+  let dx = 0
+  let dy = 0
+  if (event.x >= 0 && event.x <= 1.0) {
+    if (adbLastX < 0) {
+      // First report only establishes a baseline; a delta from an unknown
+      // origin would jump the pointer to a corner.
+      adbLastX = event.x
+    } else {
+      dx = Math.round((event.x - adbLastX) * ADB_COUNTS_X)
+      adbLastX = event.x
+    }
+  }
+  if (event.y >= 0 && event.y <= 1.0) {
+    if (adbLastY < 0) {
+      adbLastY = event.y
+    } else {
+      dy = Math.round((event.y - adbLastY) * ADB_COUNTS_Y)
+      adbLastY = event.y
+    }
+  }
+  if (dx !== 0 || dy !== 0) iigsADB.queueMouse(dx, dy)
+}
+
+export const resetADBTracking = () => {
+  adbLastX = -1
+  adbLastY = -1
 }
 
 let basicPos = 0

@@ -403,6 +403,138 @@ that register before any drive is enabled, and `A2DeskTop-VERA.hdv` then fails
 to boot (`gs_trace_boot.test.ts`). Hence `iigsFloppyHasMedia()` gates the real
 path: an empty bay keeps returning the ROM byte the register used to mirror.
 
+### 27. Apple IIgs Mouse (ADB) & Speaker ($C030) — DATA PATH FIXED, CURSOR STILL PARTIAL
+
+**Reported symptoms**: after mounting `GSOS601.po` on S7,D1 and booting to the
+Finder, the mouse pointer never moved and the machine was silent.
+
+Four independent bugs were found. A and B are the quick ones; C and D are the
+deep ones.
+
+#### A. Speaker ($C030) was never driven
+
+The IIgs's `$C020-$C04F` block is handled by its own branch in `memSet24`
+(`src/worker/memory.ts`), which *short-circuits* the normal softswitch path.
+`$C030` fell into the `default:` case that just stashes the byte in
+`iigsRegisters`, so `checkSoftSwitches` — and therefore `passClickSpeaker` —
+was never called. The Apple IIgs was completely silent.
+
+**Fix**: an explicit `case 0xC030` in the IIgs write branch that calls
+`checkSoftSwitches(0xC030, true, s6502.cycleCount)`. A test-only counter
+(`getSpeakerClickCount` / `resetSpeakerClickCount` in `worker2main.ts`) lets the
+suite assert it.
+
+#### B. Mouse events were fed to the Apple IIe 6522 mouse card
+
+`MSG_MAIN.MOUSEEVENT` in `worker2main.ts` called `MouseCardEvent(...)`, which
+only ever updated the Apple IIe mouse-card state. `iigsADB.queueMouse()` and
+`iigsADB.setMouseButton()` had **zero callers** in the whole codebase, so the
+IIgs ADB never saw a single event.
+
+**Fix**: `MouseCardEvent` now branches on `getCurrentMachineName()` and routes
+to a new `iigsADBEvent()` on the IIgs. The ADB reports *relative* motion, so
+the UI's normalized 0..1 position is converted back into deltas against the
+last position delivered; the first report only establishes a baseline (a delta
+from an unknown origin would throw the cursor into a corner). A full-width
+sweep maps to 640x200 counts (`ADB_COUNTS_X/Y`), because the OS adds the counts
+straight onto the cursor position in Super Hi-Res space. Both axes must go into
+a single `queueMouse()` call — queueing X and Y separately latches two reports
+and the first one is lost. `resetMouse()` clears the tracking baseline too.
+
+#### C. The ADB implemented the wrong protocol
+
+This was the deep bug. `iigs_adb.ts` implemented **classic ADB bus talk**
+(register = bits 7-6, command = bits 5-4, address = bits 3-0 of the `$C026`
+command byte) and answered every "talk" with a hardcoded
+`[SRQ|addr, handlerId]` pair.
+
+The IIgs does not work that way. The command byte written to `$C026` is the
+**ADB micro-controller** command set, classified by bits 7-6:
+
+| class | command | action |
+|---|---|---|
+| `00xxxxxx` | `0x01` abort / `0x02` reset / `0x03` flush | clear state |
+| | `0x04`/`0x05` set/clear modes | 1 arg |
+| | `0x06` set config / `0x07` synch | 3 / 4 args |
+| | `0x08`/`0x09` read/write micro memory | 2 args |
+| | `0x0A`..`0x0D` read modes/config/error/version | replies |
+| | `0x0E`/`0x0F` read charsets/layouts | replies |
+| `01xxxxxx` | `0x40` reset FDB, `0x48` receive bytes, `0x50s/0x60s/0x70s` SRQ | |
+| `10xxxxxx` | **TRANSMIT 2 BYTES** | FDB *listen*, 2 args |
+| `11xxxxxx` | **POLL FDB DEVICE** | FDB *talk*, 2-byte reply |
+
+The implementation follows `gssquared/src/devices/adb/ADB_Micro.hpp`
+(`write_cmd_register` / `execute_command`).
+
+Two framing rules that are easy to get wrong and will hang GS/OS's ADB
+handshake:
+
+1. **Controller replies carry no header byte** — the payload starts with the
+   count and is followed by that many data bytes. Prepending the
+   `0x80 | (n-1)` header makes GS/OS read a 138-byte "count" and stall forever.
+2. **FDB poll replies DO carry that header** — bit 7 = response present,
+   bit 6 = micro reset, bits 2-0 = (byte count - 1).
+
+A third, subtler bug in the framing itself: the argument counter was seeded
+with `1` after the command byte, so a two-argument command such as `$09`
+(read micro memory) executed after a *single* argument and the second argument
+byte was then parsed as a brand new command. `cmd.length - 1 ===
+argumentsExpected` is the correct test.
+
+Also ported `gssquared`'s device model: both devices have 4 two-byte registers,
+register 3 is the status word (`[event byte, address | handler | SRQ enable]`,
+initialised to `[0, addr | 0x20]`), the mouse's register 0 holds the motion
+report, and the keyboard's register 0 holds the key latch (`$FF,$FF` = empty —
+it must start empty, zeros read as a key press).
+
+#### D. The interrupt line stayed latched (machine looked frozen)
+
+Once motion was actually delivered, `hasMouseData()` still returned false after
+a report was consumed (it only looked at `reportInProgress ||
+pendingX || pendingY || buttonChanged`), so the ADB never raised an interrupt.
+Worse, a delta larger than the ±63 a single report can carry left a *remainder*
+behind, which kept `pendingX` non-zero and therefore kept the IRQ asserted
+forever — the CPU did nothing but service IRQs and the Finder froze. That was
+measured as ~14,000 `interruptPending()` assertions inside a single frame.
+
+**Fix**: `hasMouseData()` also reports an unread `mouseHasData`, and a
+`consumeReport()` step runs whenever the OS finishes a report (both `$C024`
+bytes, or a poll of device register 0). It latches any leftover motion as a
+fresh report, so the IRQ naturally deasserts and re-asserts for each remaining
+chunk. The Y byte is captured *before* `consumeReport()` overwrites the
+register.
+
+### Verified working
+- 970/971 tests pass; the only failure is the pre-existing `vera.test.ts`
+  CMDR-DOS failure that also fails on a clean tree.
+- Browser (headless Chrome, CDP): UI mouse moves reach `iigsADB`; GS/OS has
+  enabled the ADB mouse IRQ (`$C027` write `$40`); the ADB interrupt is asserted
+  once per event with no re-assertion storm; GS/OS reads `$C024` twice per
+  event and reads back the correct report (`$8B` = +11 X, button up).
+- `$C030` clicks reach the audio output.
+- GS/OS 6.0.1 still boots cold to the Finder (`gsos_boot.test.ts`), and the
+  Ctrl-Reset-to-Applesoft behaviour is unchanged (`gs_ctrl_reset.test.ts`).
+
+### Still outstanding
+**The Finder cursor still does not move.** The report reaches the guest and is
+consumed, but on the real IIgs GS/OS drives the cursor from the ADB *device*
+register rather than from `$C024`. Tracing shows GS/OS issues `$C026` commands
+`$B3`/`$A5` (transmit 2 bytes) and `$73` (receive), and reads the mouse with a
+**POLL FDB DEVICE** of device 3 register 0. No such poll is ever observed
+during boot or during mouse motion, so the guest's EventManager never sees a
+mouse event.
+
+The `$C024` reads that *do* happen appear to come from the ROM's VBL task, not
+from GS/OS. The next step is to find why the guest stops polling the ADB device
+register — most likely it only does so in response to the ADB interrupt, and
+the IIgs IRQ dispatcher may need the ADB to be reported as a distinct
+`$C041`/`$C046` interrupt source rather than being folded into the master
+`$C046` bit 7 as `iigsInterruptPending()` does now.
+
+**Regression tests**: `src/worker/gs_mouse_sound.test.ts` (mouse event routing,
+report direction/magnitude/button encoding, speaker output) and the existing
+`gsos_boot.test.ts` / `gs_ctrl_reset.test.ts`.
+
 
 ## Debugging Techniques Used
 - **Instruction Tracing**: Added a circular buffer in `motherboard.ts` to trace instructions when debugging specific loops.
