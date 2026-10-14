@@ -21,6 +21,7 @@ import { CLOUD_SYNC, crc32, FILE_SUFFIXES_DISK, uint32toBytes } from "../../../c
 import PopupMenu from "../../controls/popupmenu"
 import { svgDemoZooLogo } from "../../img/icon_demozoo"
 import { passSetDriveProps, handleGetSlotConfig } from "../../main2worker"
+import { handleGetMachineName } from "../../main2worker"
 import InternetArchivePopup from "./internetarchivedialog"
 import DemoZooDialog from "./demozoodialog"
 
@@ -264,8 +265,17 @@ const DiskDrive = (props: DiskDriveProps) => {
   }
 
   const slotConfig = handleGetSlotConfig()
-  const slot = dprops.index < 2 ? 7 : 6
-  const isSlotDisabled = slotConfig[slot] === "none"
+  // Drive indices map to slots as: 0/1 -> slot 7 (SmartPort), 2/3 -> slot 6
+  // (5.25"), 4/5 -> slot 5 (3.5").
+  const slot = dprops.index < 2 ? 7 : (dprops.index < 4 ? 6 : 5)
+  // The Apple IIgs 5.25" and 3.5" drives are motherboard hardware, not cards:
+  // there is nothing to insert and nothing to switch off, and they are always
+  // present. Gating them on the slot config left S6,D1/D2 greyed out under the
+  // default IIgs profile (which has slot 6 = "none" because no card is needed),
+  // which made it impossible to mount a 5.25" disk at all. Only slot 7 is a
+  // real removable-card choice on the IIgs.
+  const isBuiltInDrive = handleGetMachineName() === "APPLE2GS" && slot !== 7
+  const isSlotDisabled = !isBuiltInDrive && slotConfig[slot] === "none"
 
   const handleMenuClick = (event: React.MouseEvent) => {
     if (isSlotDisabled) return

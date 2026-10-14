@@ -398,7 +398,22 @@ export const handleFragment = async (updateDisplay: UpdateDisplay, hasBasicProgr
       window.close()
     } else {
       const url = decodeURI(fragment.substring(1))
-      handleSetDiskFromURL(url, updateDisplay)
+      // ?drive=N picks which drive the disk goes into: 0/1 = S7 (SmartPort),
+      // 2/3 = S6 (5.25"), 4/5 = S5 (3.5"). Needed on the Apple IIgs, where the
+      // 5.25" and 3.5" drives live in their own slots and a 5.25" disk in S7 is
+      // simply never looked for. Without it the disk goes to drive 0.
+      const driveParam = params.get("drive")
+      if (driveParam === null) {
+        handleSetDiskFromURL(url, updateDisplay)
+      } else {
+        const driveIndex = Number(driveParam)
+        if (!Number.isInteger(driveIndex) || driveIndex < 0 || driveIndex > 5) {
+          console.error(`Ignoring invalid ?drive=${driveParam} (expected 0-5)`)
+          handleSetDiskFromURL(url, updateDisplay)
+        } else {
+          handleSetDiskFromURL(url, updateDisplay, driveIndex)
+        }
+      }
     }
   } else if (hasBasicProgram) {
     // If we had a BASIC program in the URL, and we didn't have a floppy,

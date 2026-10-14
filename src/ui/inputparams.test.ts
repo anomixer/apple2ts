@@ -1,4 +1,4 @@
-jest.mock("./devices/disk/driveprops", () => ({
+﻿jest.mock("./devices/disk/driveprops", () => ({
   doSetUIDriveProps: jest.fn(),
   setDefaultBinaryAddress: jest.fn(),
   handleSetDiskFromURL: jest.fn(),
@@ -20,7 +20,7 @@ jest.mock("./panels/disassembly/disassembly_utilities", () => ({
   setDisassemblyVisibleMode: jest.fn(),
 }))
 
-import { handleInputParams } from "./inputparams"
+import { handleInputParams, handleFragment } from "./inputparams"
 import { getPreferenceSlotConfig, getPreferenceVeraSlot } from "./localstorage"
 import { getTabView, getUIStateBoolean } from "./ui_settings"
 
@@ -68,5 +68,63 @@ describe("handleInputParams slot configuration", () => {
     expect(getPreferenceVeraSlot()).toBe(2)
     expect(getTabView()).toBe(4)
     expect(getUIStateBoolean("infoPanel")).toBe(true)
+  })
+})
+
+
+describe("handleFragment disk drive selection", () => {
+  const { handleSetDiskFromURL } = jest.requireMock("./devices/disk/driveprops")
+
+  // The URL fragment carries the disk to mount; the query string carries
+  // ?drive=. Drive indices map to slots as 0/1 = S7, 2/3 = S6 (5.25"),
+  // 4/5 = S5 (3.5"). On the Apple IIgs a 5.25" disk has to go into S6 or the
+  // ROM never looks at it, so ?drive= is what makes one deep-linkable.
+  const DISK = "http://example.com/disk.po"
+  const setUrl = (query: string) =>
+    window.history.replaceState({}, "", `/${query}#${DISK}`)
+
+  beforeEach(() => {
+    localStorage.clear()
+    ;(handleSetDiskFromURL as jest.Mock).mockClear()
+  })
+
+  afterEach(() => {
+    window.history.replaceState({}, "", "/")
+  })
+
+  test("defaults to drive 0 when no drive is given", async () => {
+    setUrl("")
+    await handleFragment(jest.fn(), false)
+    expect(handleSetDiskFromURL).toHaveBeenCalledWith(DISK, expect.anything())
+  })
+
+  test("mounts into drive 2 (S6,D1) with ?drive=2", async () => {
+    setUrl("?drive=2")
+    await handleFragment(jest.fn(), false)
+    expect(handleSetDiskFromURL).toHaveBeenCalledWith(DISK, expect.anything(), 2)
+  })
+
+  test("mounts into drive 3 (S6,D2) with ?drive=3", async () => {
+    setUrl("?drive=3")
+    await handleFragment(jest.fn(), false)
+    expect(handleSetDiskFromURL).toHaveBeenCalledWith(DISK, expect.anything(), 3)
+  })
+
+  test("mounts into drive 4 (S5,D1) with ?drive=4", async () => {
+    setUrl("?drive=4")
+    await handleFragment(jest.fn(), false)
+    expect(handleSetDiskFromURL).toHaveBeenCalledWith(DISK, expect.anything(), 4)
+  })
+
+  test("ignores an out-of-range drive", async () => {
+    setUrl("?drive=9")
+    await handleFragment(jest.fn(), false)
+    expect(handleSetDiskFromURL).toHaveBeenCalledWith(DISK, expect.anything())
+  })
+
+  test("ignores a non-numeric drive", async () => {
+    setUrl("?drive=abc")
+    await handleFragment(jest.fn(), false)
+    expect(handleSetDiskFromURL).toHaveBeenCalledWith(DISK, expect.anything())
   })
 })

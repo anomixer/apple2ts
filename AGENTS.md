@@ -403,6 +403,40 @@ that register before any drive is enabled, and `A2DeskTop-VERA.hdv` then fails
 to boot (`gs_trace_boot.test.ts`). Hence `iigsFloppyHasMedia()` gates the real
 path: an empty bay keeps returning the ROM byte the register used to mirror.
 
+**Update — the 5.25" data path already boots; what was actually broken was the
+UI.** `gs_floppy_probe.test.ts` now boots `A2DeskTop-VERA.po` from slot 6 to the
+ProDOS 8 welcome screen ("ProDOS 8 v2.43", `driveSel=0`, `enable35=false`,
+`qtrTrack=20`, `trackLoc=47111`), so the IWM read path works end to end. The
+outstanding "stays at Check startup device!" above was a *slot manager* problem,
+not an IWM problem:
+
+- The drive panel disabled any drive whose slot was configured `"none"`:
+  `const slot = dprops.index < 2 ? 7 : 6` / `slotConfig[slot] === "none"`. On
+  the IIgs `DEFAULT_SLOT_CONFIG_GS` has slot 6 = `"none"` (correct — nothing
+  needs inserting, the 5.25" drive is motherboard hardware), so **S6,D1 and
+  S6,D2 were greyed out and could not accept a disk at all**; the drive's
+  context menu did not even open.
+- The index-to-slot mapping was also wrong for the IIgs 3.5" drives: indices 4
+  and 5 (S5,D1/D2) mapped to slot 6 instead of slot 5.
+
+Fixes in `src/ui/devices/disk/diskdrive.tsx`: map 4/5 to slot 5, and on the IIgs
+treat every slot except 7 as built-in so those drives are never gated on the
+slot config. Verified in headless Chrome: all six drives now render enabled and
+S6,D1's menu opens with every entry live.
+
+Also added `?drive=N` to the URL fragment handler (`src/ui/inputparams.ts`) so a
+disk can be deep-linked into a specific drive (0/1 = S7, 2/3 = S6 5.25",
+4/5 = S5 3.5"). Without it a URL-mounted 5.25" disk always lands in S7, where the
+IIgs ROM never looks for it. Six new cases cover it in
+`src/ui/inputparams.test.ts`.
+
+**Still outstanding**: mounting a 5.25" disk in the browser and then pressing
+Ctrl-Reset does *not* boot it, even though the same disk boots in the jest
+harness when it is already present at boot time. So what is left is in the
+mount-then-reset path (or the drive number given to the mounted image), not in
+the IWM read path. Note also that `?boot=true` boots while the fragment disk is
+still downloading, so a deep link needs a Ctrl-Reset to pick the disk up.
+
 ### 27. Apple IIgs Mouse (ADB) & Speaker ($C030) — DATA PATH FIXED, CURSOR STILL PARTIAL
 
 **Reported symptoms**: after mounting `GSOS601.po` on S7,D1 and booting to the
