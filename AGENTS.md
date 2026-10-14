@@ -567,13 +567,49 @@ clock keeps ticking (12:09:17 → 12:09:28), the arrow cursor *is* drawn at the
 top left, and it does not move; hovering the "File" title does not highlight the
 menu, and a click does not select a volume icon.
 
-**Where the break actually is**: somewhere between the ROM's accumulator
-(`FF:9D32` onward) and the GS/OS event manager. The ROM keeps fetching into banks
-`FE`, `00`, `04`, `06`, `07`, `08` and `E1` after a report, so control does leave
-`FF`, but nothing downstream consumes it. Closing this needs a disassembly of
-`FF:9CE7`–`FF:9EA8` (the ROM's report-to-event conversion) plus the GS/OS
-`EventManager` entry it is supposed to reach — that is the next step, and it is
-OS internals rather than emulator plumbing.
+**Where the break actually is**: somewhere between the ROM's accumulator and the
+GS/OS event manager. The IIgs ROM owns the whole mouse path and GS/OS only ever
+sees the result, so this is a ROM/GS/OS interaction rather than emulator
+plumbing. The ground-truth instruction map (recorded by capturing the raw opcode
+bytes the CPU actually executed, not by guessing an alignment) is:
+
+```
+ff:9ce4  JSR $C4D2          ; the ROM's ADB read entry point
+ff:9ce7  BCS $9CF9          ; no report -> skip
+ff:9cf9  LDA #$20 / INC $077C
+ff:9cff  AND #$3F / PHA     ; Y motion magnitude
+ff:9d02  TXA / AND #$3F     ; X motion magnitude
+ff:9d05  ORA $0001 / BEQ    ; ?
+ff:9d0f  LDA $077C          ; 8-bit event/state byte
+ff:9d15  STA $077C
+ff:9d32  ROL A / TXA        ; decode X/Y direction bits
+ff:9d4c  TAX / ASL / BPL    ; sign handling
+ff:9d6d  PHY / PHA
+ff:9d6f  LDA $05FC / STA $06FC
+ff:9d76  CLC / ADC $04FC / STA $04FC   ; 16-bit accumulator
+ff:9d7e  ADC $05FC / STA $05FC
+ff:9d84  JSR $9E8B          ; report-to-event conversion
+ff:9e8b  LDY #$80 / LDX #$02 / XBA / LDA $047C,Y / XBA / TAY / BPL ...
+```
+
+Note `$077C`, `$04FC`, `$05FC` are **data-bank-relative** (`DB`), not bank-0
+globals — `DB` is whatever the caller had when the ROM task ran, so the ROM
+hands its results back in the caller's memory space. A naive dump of "bank 0
+$04FC" reads an unrelated bank and looks like noise.
+
+Two things that were checked and are *not* the cause:
+- **The button path is dead too, not just motion.** Dispatching a real
+  `mousePressed`/`mouseReleased` over a volume icon in headless Chrome does not
+  select it, so this is not a "movement threshold" or "only fires while moving"
+  problem — the event never reaches GS/OS at all.
+- **The reports are delivered.** `hasMouseData()` reads 0 for 30 consecutive
+  frames after motion, so the IRQ line is not latched and there is no interrupt
+  starvation.
+
+Closing this needs the GS/OS 6.0.1 `EventManager` / `.Mouse` driver side: what
+the ROM's `$9E8B` conversion hands to, and which variable the driver polls. That
+is OS internals and is best attacked from the GS/OS side of the boundary rather
+than from more emulator tracing.
 
 **Regression tests**: `src/worker/gs_mouse_sound.test.ts` (mouse event routing,
 report direction/magnitude/button encoding, speaker output) and the existing
