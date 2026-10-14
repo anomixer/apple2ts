@@ -245,8 +245,13 @@ export class IigsEnsoniq {
             }
           }
           if (altram >= wtsizeMinus) {
-            // halt handling simple
-            ctrl |= 1
+            // Free-run wraps by phase (gssquared halt_osc type 0) instead of
+            // stopping.
+            if (mode !== 0) {
+              ctrl |= 1
+            } else {
+              acc -= (wtsizeMinus << (resshift < 1 ? 1 : resshift))
+            }
           }
           if (ctrl & 1) break
           // datastore

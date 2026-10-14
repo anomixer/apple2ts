@@ -519,6 +519,7 @@ const resetMachine = () => {
 export const doBoot = () => {
   setCycleCount(0)
   memoryReset()
+  if (machineName === "APPLE2GS") iigsEnsoniq.reset()
   doSetRom(machineName)
   configureMachine()
   if (code.length > 0) {
