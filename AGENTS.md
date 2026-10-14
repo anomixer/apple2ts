@@ -606,10 +606,70 @@ Two things that were checked and are *not* the cause:
   frames after motion, so the IRQ line is not latched and there is no interrupt
   starvation.
 
-Closing this needs the GS/OS 6.0.1 `EventManager` / `.Mouse` driver side: what
-the ROM's `$9E8B` conversion hands to, and which variable the driver polls. That
-is OS internals and is best attacked from the GS/OS side of the boundary rather
-than from more emulator tracing.
+Closing this needs the GS/OS 6.0.1 `EventManager` / `.Mouse` driver side. What
+the ROM's `$9E8B` conversion hands to, and how GS/OS turns it into an event.
+
+### 29a. Comparing the ADB against gssquared — the ADB layer is NOT the problem
+
+Read `c:\dev\gssquared\src\devices\adb\{ADB_Mouse,ADB_Micro,keygloo,keygloo_mouse_sync}.*`
+against apple2ts's `iigs_adb.ts`. **Every part of the data path is equivalent**,
+so there is nothing to fix there:
+
+- **Report layout** (`ADB_Mouse.hpp`): register 0 byte 0 is
+  `bit7 = button up | bit6 = moved right | bits5-0 = X`, byte 1 is
+  `bit7 = button up | bit6 = moved up | bits5-0 = Y`. Identical to
+  `latchMouseReport()`.
+- **`$C024` delivery** (`keygloo_mouse_sync.hpp:560 read_mouse_data()`): first
+  read returns `mouse_data[0]` (X) and sets a "Y next" latch, second read returns
+  `mouse_data[1]` (Y) and clears `mouse_data_full` (the `$C027` bit 7 "data
+  available"). Identical to `readMouseData()` / `consumeReport()`, including
+  clearing the data-available flag only on the second read.
+- **gssquared's own note**: "Flag off keeps the original KEGS-style MMU-write
+  (dead-reckoning) path" — i.e. writing the guest's coordinate globals directly is
+  the *fallback*, and `KEYGLOO_MOUSE_SYNC_INJECTION_ONLY=1` means they inject ADB
+  relative motion like we do. They do not patch the cursor position.
+
+**Cursor storage, and a hypothesis that turned out to be wrong.** gssquared
+documents (`keygloo_mouse_sync.hpp`) that the Event Manager keeps the cursor in
+two different places depending on the ROM:
+
+```
+// ROM 03 / GS/OS 6.0.1: Event Manager keeps the live cursor in the
+// $E1/0190-0193 bank globals; the $E0 text-page screen holes ($047C/...)
+// stay 0. ... ROM 01: the holes are the working copy.
+EM_MOUSE_X_LO = 0x047C;  EM_MOUSE_X_HI = 0x057C;
+EM_MOUSE_Y_LO = 0x04FC;  EM_MOUSE_Y_HI = 0x05FC;
+EM_MOUSE_X_LO_BANK = 0x10190;  EM_MOUSE_X_HI_BANK = 0x10192;
+EM_MOUSE_Y_LO_BANK = 0x10191;  EM_MOUSE_Y_HI_BANK = 0x10193;
+```
+
+apple2ts runs ROM 01 *with* GS/OS 6.0.1 — exactly the mismatched pair — so a
+bridge from the ROM 01 holes to the `$E1` bank globals looked like the fix. It is
+not: instrumenting every 24-bit access shows **GS/OS reads the holes and never
+reads `$E1/0190-0193`** (0 reads). Measured over 20 frames of mouse motion:
+
+| address | reads | value seen |
+|---|---|---|
+| `$0000/$047C` HOLE_X_LO | 57 | `$1A` → `$1D` → `$20` → `$23` |
+| `$0000/$057C` HOLE_X_HI | 76 | `$00` |
+| `$0000/$04FC` HOLE_Y_LO | 57 | `$11` |
+| `$0000/$05FC` HOLE_Y_HI | 76 | `$00` |
+| `$0000/$077C` ROM_STATE | 152 | `$00` / `$0E` / `$2E` / `$20` |
+| `$E10190-0193` EM globals | **0** | — |
+
+So GS/OS **is** reading the ROM's accumulator and **is** seeing it advance, three
+units per moved frame. The cursor position crosses the boundary correctly. What
+does not happen is GS/OS turning that read into a "mouse moved" event and a
+cursor redraw — which is why neither motion nor the button does anything.
+
+Also confirmed while measuring: the Tool Locator at `$E103C8` resolves to
+GS/OS's own table (`$7EF22A`) and the Event Manager "active" word at tool+`$18`
+reads `0/1B`, i.e. EM is running — so the check gssquared uses to decide whether
+to touch the mouse globals is satisfied here, it is simply not the mechanism.
+
+**Conclusion**: the ADB emulation, the `$C024`/`$C027` handshake, the interrupt
+line and the cursor storage are all correct and equivalent to gssquared. The
+missing piece is entirely inside GS/OS's own event delivery.
 
 **Regression tests**: `src/worker/gs_mouse_sound.test.ts` (mouse event routing,
 report direction/magnitude/button encoding, speaker output) and the existing
