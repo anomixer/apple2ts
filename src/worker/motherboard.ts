@@ -1,4 +1,4 @@
-// Chris Torrence, 2022
+﻿// Chris Torrence, 2022
 import { passMachineState, passSoftSwitchDescriptions, passWorkerOperationResult } from "./worker2main"
 import { s6502, setState6502, setCycleCount, setPC, getStackString, get6502Instructions } from "./instructions"
 import { hiresAddressToLine, RUN_MODE, TEST_DEBUG, DEFAULT_SLOT_CONFIG, DEFAULT_SLOT_CONFIG_GS, HEATMAP_STATE, MEMORY_DUMP_STATE, AUTO_SNAPSHOT } from "../common/utility"
@@ -45,6 +45,8 @@ import { memory, memGet, getTextPage, getHires, memoryReset,
   iigsInterruptPending,
   iigsInitInterrupts,
   iigsClearInterrupts,
+
+  iigsFloppyHasMedia,
   setIigsSlotRegister,
   iigsRegisters} from "./memory"
 import { setButtonState, handleGamepads } from "./devices/joystick"
@@ -478,6 +480,18 @@ export const disableVidHD = () => {
   vidhd.reset()
 }
 
+// True when the Apple IIgs has a disk image in either of its built-in floppy
+// bays: slot 6 (5.25", drive-state indices 2/3) or slot 5 (3.5", indices 4/5).
+// Tests for actual media the same way the IWM data path does
+// (iigsFloppyHasMedia), so the two can never disagree about whether a drive is
+// loaded.
+const iigsHasFloppyMedia = () => {
+  for (const index of [2, 3, 4, 5]) {
+    if (iigsFloppyHasMedia(index)) return true
+  }
+  return false
+}
+
 const resetMachine = () => {
   softCard.reset()
   videoTerm.reset()
@@ -541,6 +555,23 @@ export const doReset = () => {
     // follow a long pause (breakpoint, menu), so restart its timing rather
     // than letting it shift thousands of idle bits into the data register.
     iwmResetTiming()
+    // The IIgs ROM decides cold boot vs warm reset with
+    //   LDA $03F3 / EOR #$A5 / CMP $03F4
+    // and the boot sequence writes that signature into $03F2-$03F4 as it goes.
+    // Once it is there, a reset is treated as "warm": the ROM walks the slots
+    // but never touches the IWM (measured: 0 $C0E0-$C0EF reads after a
+    // Ctrl-Reset, against 399,707 during the cold boot that does find the
+    // disk), so inserting a floppy and pressing Ctrl-Reset could never boot it.
+    //
+    // Clear the signature whenever floppy media is present in the IIgs's
+    // built-in 5.25" (slot 6) or 3.5" (slot 5) bays, so the ROM re-runs the full
+    // device scan. With no floppy the warm path is kept, which is what makes
+    // Ctrl-Reset land on the Applesoft prompt (gs_ctrl_reset.test.ts).
+    if (iigsHasFloppyMedia()) {
+      memSet24(0x000000 + 0x03f2, 0x00)
+      memSet24(0x000000 + 0x03f3, 0x00)
+      memSet24(0x000000 + 0x03f4, 0x00)
+    }
   }
   resetMachine()
   // Otherwise Heat Map data survives a reset/reboot indefinitely (it was

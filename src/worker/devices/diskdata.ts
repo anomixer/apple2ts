@@ -48,8 +48,17 @@ const POSITION_TO_DIRECTION = [
 export const doResetDiskDrive = (driveState: DriveState) => {
   MOTOR_RUNNING = false
   doMotorTimeout(driveState)
-  driveState.quarterTrack = driveState.maxQuarterTrack
-  driveState.prevQuarterTrack = driveState.maxQuarterTrack
+  // Recalibrate the head to track 0. This used to park the head at
+  // maxQuarterTrack (the outermost track), which works for a cold boot because
+  // the ROM's boot scan seeks inwards and re-calibrates - but a warm reset
+  // (Ctrl-Reset) does not re-run the seek, so the head stayed at track 70 and
+  // the ROM read the wrong track and never found a boot volume. Real drives
+  // spring the head back to track 0 on reset, which is what track 0 here
+  // models. Confirmed by gs_floppy_late.test.ts: with the head parked at the
+  // outer stop, Ctrl-Reset leaves the Apple IIgs at the ROM banner, and track
+  // 0 boots ProDOS.
+  driveState.quarterTrack = 0
+  driveState.prevQuarterTrack = 0
 }
 
 export const doPauseDiskDrive = (resume = false) => {

@@ -430,12 +430,66 @@ disk can be deep-linked into a specific drive (0/1 = S7, 2/3 = S6 5.25",
 IIgs ROM never looks for it. Six new cases cover it in
 `src/ui/inputparams.test.ts`.
 
-**Still outstanding**: mounting a 5.25" disk in the browser and then pressing
-Ctrl-Reset does *not* boot it, even though the same disk boots in the jest
-harness when it is already present at boot time. So what is left is in the
-mount-then-reset path (or the drive number given to the mounted image), not in
-the IWM read path. Note also that `?boot=true` boots while the fragment disk is
-still downloading, so a deep link needs a Ctrl-Reset to pick the disk up.
+**Still outstanding**: in the browser, mounting a 5.25" disk and pressing
+Ctrl-Reset still does not boot it, even though the same disk boots in the jest
+harness for all three flows below. Measured in the browser at this point: the
+worker holds a valid `WOZ2` image of 234,496 bytes at drive index 2 (exactly
+what the harness holds), the warm-reset signature *is* cleared, the head is at
+track 0, and `trackLocation` climbs to 639 and then stops — the ROM syncs to the
+nibble stream for about 80 bits and gives up, where the harness reaches 47,111.
+So the data path is intact and the cold scan does run; something about the
+browser's run loop (it renders, and drives the full worker/UI rather than only
+the fake-timer harness) is starving the read. Not yet isolated.
+
+Also note that `?boot=true` boots while the fragment disk is still downloading,
+so a deep link needs a Ctrl-Reset to pick the disk up.
+
+### 26a. Apple IIgs Floppy Boot After Ctrl-Reset - TWO REAL BUGS FIXED
+
+Two separate bugs stopped a 5.25" disk booting after a reset. Both are fixed and
+covered by `src/worker/gs_floppy_late.test.ts` (disk at boot, disk at boot +
+Ctrl-Reset, and mount-after-boot + Ctrl-Reset must all reach ProDOS).
+
+**1. The head was parked at the outer stop on every reset.**
+`doResetDiskDrive()` set `quarterTrack = maxQuarterTrack`, i.e. track 70. Only a
+cold boot re-calibrates the head, so a warm reset left the ROM reading the wrong
+track. Real drives spring the head back to track 0, so it is now 0.
+
+| scenario | qtrTrack before | qtrTrack after |
+|---|---|---|
+| disk present at boot | 20 | 20 |
+| disk present at boot + Ctrl-Reset | **137** (outer stop) | 0 |
+| mounted after boot + Ctrl-Reset | **137** (outer stop) | 0 |
+
+**2. Ctrl-Reset took the ROM's warm path, which never looks at the IWM.**
+The IIgs ROM decides cold boot vs warm reset with
+
+```assembly
+LDA $03F3 / EOR #$A5 / CMP $03F4 / BNE cold
+```
+
+and the boot sequence writes that signature into `$03F2-$03F4` as it goes
+(measured after a successful boot: `59 FF 5A`, and `$FF ^ $A5 = $5A`, so the
+check *passes*). Once it is there a reset means "warm, devices unchanged": the
+ROM walks the slots and never touches `$C0E0-$C0EF`.
+
+| phase | `$C0E0-$C0EF` reads | slot 6 reads | slot 7 reads |
+|---|---|---|---|
+| cold boot (finds the disk) | **399,707** | 34,289 | 275 |
+| after Ctrl-Reset | **0** | 12 | 9 |
+
+So inserting a floppy and pressing Ctrl-Reset could never boot it. `doReset()`
+now clears `$03F2-$03F4` when `iigsHasFloppyMedia()` is true, forcing the full
+device scan. With no floppy the warm path is kept, which is what makes
+Ctrl-Reset land on the Applesoft prompt (`gs_ctrl_reset.test.ts` still passes).
+`iigsHasFloppyMedia()` deliberately reuses `iigsFloppyHasMedia()`, the same test
+the IWM data path uses, so the two can never disagree about whether a drive is
+loaded.
+
+Side note found while measuring: the harness only boots the floppy at speed mode
+0 (1.02 MHz); modes 1 and 3 (2.8 and 14.3 MHz) stall the same way. So the read
+is timing sensitive in general, which is consistent with the browser failing at
+1.02 MHz too.
 
 ### 27. Apple IIgs Mouse (ADB) & Speaker ($C030) — DATA PATH FIXED, CURSOR STILL PARTIAL
 
