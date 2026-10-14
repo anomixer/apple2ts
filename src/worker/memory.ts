@@ -168,6 +168,8 @@ export const iigsInterruptPending = (): boolean => {
   if (vblPending && (iigsRegisters[0x41] & 0x08)) return true;
   if (quarterSecondPending && (iigsRegisters[0x41] & 0x10)) return true;
   if (vgcIntReg & 0x80) return true;
+  // Ensoniq ES5503 sound interrupt pending
+  if (iigsEnsoniq.irqPending()) return true;
   return false;
 };
 

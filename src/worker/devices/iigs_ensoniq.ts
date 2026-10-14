@@ -3,6 +3,8 @@
 
 // (unused removed)
 
+import { s6502 } from "../instructions"
+
 export const ensoniqDocRam = new Uint8Array(0x10000)
 
 interface Oscillator {
@@ -25,6 +27,31 @@ export class IigsEnsoniq {
     for (let i = 0; i < 32; i++) {
       this.oscillators[i] = { freq: 0, wtsize: 256, control: 0, vol: 0, data: 0x80, wavetblpointer: 0, wavetblsize: 0, resolution: 0, accumulator: 0, irqpend: 0 }
     }
+    this.setIrqCallback((state) => {
+      if (state) {
+        (globalThis as any).cpu?.irq?.()
+      } else {
+        (globalThis as any).cpu?.clearIrq?.()
+      }
+    })
+  }
+  setIrqCallback(cb: (state: boolean) => void) {
+    this.irqCallback = cb
+  }
+  updateIrqStatus() {
+    let any = false
+    const cnt = this.osce < 1 ? 1 : this.osce
+    for (let i = 0; i < cnt; i++) {
+      if (this.oscillators[i].irqpend) { any = true; break }
+    }
+    if (this.irqCallback) this.irqCallback(any)
+  }
+  irqPending(): boolean {
+    const cnt = this.osce < 1 ? 1 : this.osce
+    for (let i = 0; i < cnt; i++) {
+      if (this.oscillators[i].irqpend) return true
+    }
+    return false
   }
   soundctl = 0x00
   soundadrl = 0x00
@@ -32,12 +59,15 @@ export class IigsEnsoniq {
   sounddata = 0x00
   rege1 = 2
   osce = 1
+  rege0 = 0xff
+  irqCallback: ((state: boolean) => void) | null = null
 
   reset() {
     this.soundctl = 0x00
     this.soundadrl = 0x00
     this.soundadrh = 0x00
     this.sounddata = 0x00
+    this.rege0 = 0xff
     this.rege1 = 2
     this.osce = 1
     for (let i = 0; i < 32; i++) {
@@ -79,7 +109,25 @@ export class IigsEnsoniq {
       return 0
     } else {
       switch (offset) {
-        case 0xe0: return 0xff  // no IRQ pending
+        case 0xe0: {
+          const retval = this.rege0
+          if (this.irqCallback) this.irqCallback(false)
+          // Ack one pending oscillator
+          for (let i = 0; i < (this.osce < 1 ? 1 : this.osce); i++) {
+            if (this.oscillators[i].irqpend) {
+              this.rege0 = (i << 1) | 0x80
+              this.oscillators[i].irqpend = 0
+              break
+            }
+          }
+          // Reassert if more pending
+          let any = false
+          for (let i = 0; i < (this.osce < 1 ? 1 : this.osce); i++) {
+            if (this.oscillators[i].irqpend) { any = true; break }
+          }
+          if (any && this.irqCallback) this.irqCallback(true)
+          return retval | 0x41
+        }
         case 0xe1: return this.rege1 & 0xff
         case 0xe2: return 0
         default: return 0
@@ -230,7 +278,10 @@ export class IigsEnsoniq {
           // loop
           if (ensoniqDocRam[(ramptr + wtptr) & 0xffff] === 0) {
             ctrl |= 1
-            // halt
+            if (o.control & 0x08) {
+              o.irqpend = 1
+              this.updateIrqStatus()
+            }
           }
           if (!(ctrl & 1)) {
             if (mode !== 2) {
