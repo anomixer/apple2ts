@@ -1316,8 +1316,10 @@ const doAdvance6502 = () => {
       const outRate = Math.max(1, Math.floor(7159090 / 8 / (osce + 2)))
       const numSamples = Math.max(1, Math.round(outRate / 60))
       try {
-        const pcm = iigsEnsoniq.generateSamples(numSamples)
-        passEnsoniqSound(pcm, outRate)
+        if (iigsEnsoniq.hasActiveOscillators()) {
+          const pcm = iigsEnsoniq.generateSamples(numSamples)
+          passEnsoniqSound(pcm, outRate)
+        }
       } catch (e) {
         console.error("ensoniq frame gen error", e)
       }

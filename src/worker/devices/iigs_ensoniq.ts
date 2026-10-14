@@ -183,6 +183,17 @@ export class IigsEnsoniq {
     this.soundadrh = data & 0xff
   }
 
+  // Whether any oscillator is currently active (heard sound likely)
+  hasActiveOscillators(): boolean {
+    for (let i = 0; i < Math.max(1, this.osce); i++) {
+      const o = this.oscillators[i]
+      if (!(o.control & 1) && o.vol > 0 && o.freq > 0) {
+        return true
+      }
+    }
+    return false
+  }
+
   // Produce a short PCM (Int16 samples) block at DOC output rate
   generateSamples(numFrames: number): Int16Array {
     const wavemasks = [0x1ff00,0x1fe00,0x1fc00,0x1f800,0x1f000,0x1e000,0x1c000,0x18000]
