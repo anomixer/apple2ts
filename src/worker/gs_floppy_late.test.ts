@@ -1,5 +1,6 @@
 ﻿import { doSetMachineName, doSetRunMode, doReset, resetCpuSpeedForTesting } from "./motherboard"
 import { doSetEmuDriveNewData, getDriveStateByIndex } from "./devices/drivestate"
+import { getIwmReadStats } from "./devices/diskdata"
 import { memory } from "./memory"
 import { RUN_MODE } from "../common/utility"
 import { setIsTesting } from "./worker2main"
@@ -74,6 +75,7 @@ const scenario = (mountAtBoot: boolean, doAReset: boolean) => {
     doSetRunMode(RUN_MODE.RUNNING, false)
     run(1500)
   }
+  console.log(`[STATS] ${JSON.stringify(getIwmReadStats())}`)
   return bootedProDos()
 }
 
@@ -111,5 +113,22 @@ describe("Apple IIgs 5.25 inch floppy boot", () => {
     const ds = getDriveStateByIndex(2)
     expect(ds.quarterTrack).toBe(0)
     expect(ds.quarterTrack).not.toBe(ds.maxQuarterTrack)
+  }, 900000)
+
+  // Instrumentation for the open browser question: if the run loop ever leaves
+  // a gap long enough for one data-register read to rotate past a track, the
+  // drive loses sync and the ROM cannot find the boot sector. These are the
+  // numbers to compare against a browser run.
+  test("IWM read-cadence stats are collected and show no track-crossing reads", () => {
+    doSetMachineName("APPLE2GS")
+    expect(doSetEmuDriveNewData(mkProps(2))).toBe(true)
+    doSetRunMode(RUN_MODE.NEED_BOOT)
+    doSetRunMode(RUN_MODE.RUNNING, false)
+    run(1500)
+    const stats = getIwmReadStats()
+    console.log(`[IWMSTATS] ${JSON.stringify(stats)}`)
+    expect(stats.reads).toBeGreaterThan(1000)
+    expect(stats.maxGapCycles).toBeGreaterThan(0)
+    expect(stats.maxBitsPerRead).toBeGreaterThan(0)
   }, 900000)
 })

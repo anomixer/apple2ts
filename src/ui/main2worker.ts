@@ -375,6 +375,21 @@ export const passSetSlotConfig = (config: SlotConfig) => {
   window.dispatchEvent(new CustomEvent("apple2ts-slot-config-changed", { detail: config }))
 }
 
+// ?iwmgaps=1 only: poll the worker for Apple IIgs IWM read-cadence stats. The
+// worker answers on demand rather than pushing every frame, so a worker that
+// gets re-created (Vite HMR, machine switch) can never silently stop answering.
+let iwmStatsTimer = 0
+export const passSetIwmStatsEnabled = (enabled: boolean) => {
+  if (!enabled) {
+    if (iwmStatsTimer) { clearInterval(iwmStatsTimer); iwmStatsTimer = 0 }
+    return
+  }
+  if (iwmStatsTimer) return
+  const poll = () => doPostMessage(MSG_MAIN.IWM_STATS_REQUEST, true)
+  poll()
+  iwmStatsTimer = window.setInterval(poll, 500)
+}
+
 export const passSetSoftSwitches = (addresses: Array<number> | null) => {
   doPostMessage(MSG_MAIN.SOFTSWITCHES, addresses)
 }
@@ -501,6 +516,9 @@ let machineState: MachineState = {
   zeroPage: new Uint8Array(256).fill(255)
 }
 
+export let lastIwmReadStats: unknown = null
+export const getLastIwmReadStats = () => lastIwmReadStats
+
 export const doOnMessage = (e: MessageEvent): {speed: number, helptext: string} | null => {
   switch (e.data.msg as MSG_WORKER) {
     case MSG_WORKER.MACHINE_STATE: {
@@ -549,6 +567,16 @@ export const doOnMessage = (e: MessageEvent): {speed: number, helptext: string} 
     case MSG_WORKER.DRIVE_SOUND: {
       const sound = e.data.payload as DRIVE
       doPlayDriveSound(sound)
+      break
+    }
+    case MSG_WORKER.IWM_READ_STATS: {
+      // Apple IIgs IWM read-cadence instrumentation (?iwmgaps=1 only). Kept on
+      // a plain module variable plus a window handle so a headless-browser run
+      // can read it with a single Runtime.evaluate.
+      lastIwmReadStats = e.data.payload
+      if (typeof window !== "undefined") {
+        ;(window as unknown as { __iwmStats?: unknown }).__iwmStats = lastIwmReadStats
+      }
       break
     }
     case MSG_WORKER.RUMBLE: {

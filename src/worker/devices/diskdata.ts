@@ -174,6 +174,68 @@ const getNextBit = (ds: DriveState, dd: Uint8Array) => {
   return bit
 }
 
+// How many bits getNextByte advanced during its most recent call. Read back by
+// iwmReadDataRegister so the read-cadence sampler can see the size of a single
+// read's overshoot.
+let bitsAdvancedLastCall = 0
+
+// Diagnostic sampler for the Apple IIgs IWM read cadence. This is the
+// instrumentation behind the open "5.25\" floppy does not boot in the browser"
+// investigation: the Logic State Sequencer advances by however many CPU cycles
+// elapsed since the previous data-register read, so a run loop that stalls for
+// a long time (rendering, JS GC, input dispatch) makes a single read swallow
+// many tracks and the ROM never syncs. These counters quantify that directly.
+//
+// The sampler is always on but is deliberately cheap (a handful of integer
+// counters per read), and is only surfaced to the UI when explicitly requested
+// with ?iwmgaps=1.
+export interface IwmReadStats {
+  reads: number
+  // Sum of the CPU cycles observed between consecutive data-register reads.
+  totalGapCycles: number
+  maxGapCycles: number
+  // Largest number of bits a single read advanced the LSS by.
+  maxBitsPerRead: number
+  // Reads that advanced far enough to cross at least one track boundary, i.e.
+  // reads so long that the drive rotated past the position being synced to.
+  readsCrossingTrack: number
+  // Sum of track boundaries crossed by all reads.
+  totalTrackCrossings: number
+}
+
+const iwmReadStats: IwmReadStats = {
+  reads: 0,
+  totalGapCycles: 0,
+  maxGapCycles: 0,
+  maxBitsPerRead: 0,
+  readsCrossingTrack: 0,
+  totalTrackCrossings: 0,
+}
+
+export const getIwmReadStats = (): IwmReadStats => ({ ...iwmReadStats })
+
+export const resetIwmReadStats = () => {
+  iwmReadStats.reads = 0
+  iwmReadStats.totalGapCycles = 0
+  iwmReadStats.maxGapCycles = 0
+  iwmReadStats.maxBitsPerRead = 0
+  iwmReadStats.readsCrossingTrack = 0
+  iwmReadStats.totalTrackCrossings = 0
+}
+
+const sampleIwmRead = (ds: DriveState, gapCycles: number) => {
+  const bits = bitsAdvancedLastCall
+  iwmReadStats.reads++
+  iwmReadStats.totalGapCycles += gapCycles
+  if (gapCycles > iwmReadStats.maxGapCycles) iwmReadStats.maxGapCycles = gapCycles
+  if (bits > iwmReadStats.maxBitsPerRead) iwmReadStats.maxBitsPerRead = bits
+  const trackNbits = ds.trackNbits[ds.quarterTrack]
+  if (trackNbits > 0 && bits > trackNbits) {
+    iwmReadStats.readsCrossingTrack++
+    iwmReadStats.totalTrackCrossings += Math.floor(bits / trackNbits)
+  }
+}
+
 // When no disk is loaded, return 0x80 so DOS 3.3 and ProDOS RWTS read loops
 // (which wait for bit 7 = 1 via BPL) can decrement their Y retry counter and
 // time out immediately in ~1ms with an I/O ERROR.
@@ -182,12 +244,14 @@ const getNextByte = (ds: DriveState, dd: Uint8Array, cycles: number) => {
   // If no disk then return 0x80 so DOS 3.3 and ProDOS RWTS time out immediately in ~1ms
   if (dd.length === 0) return 0x80
   let result = 0
+  bitsAdvancedLastCall = 0
 
   // Read individual bits and combine them.
   cycleRemainder += cycles
 
   while (cycleRemainder >= ds.optimalTiming / 8) {
     const bit = getNextBit(ds, dd)
+    bitsAdvancedLastCall++
 
     // When the data register high bit is set, the data register should
     // hold for at least 4 cycles. Needed for Algernon.woz and others.
@@ -517,6 +581,9 @@ export const iwmResetTiming = () => {
   cycleRemainder = 0
   dataRegister = 0
   dataRegHold = false
+  // Start a fresh read-cadence profile for the new boot attempt so each phase
+  // can be compared on its own.
+  resetIwmReadStats()
 }
 
 // Advance the LSS for the given floppy drive index to "now" and return the
@@ -533,7 +600,9 @@ export const iwmReadDataRegister = (driveIndex: number, enabled: boolean) => {
   const ds = getDriveStateByIndex(driveIndex)
   const dd = getDriveDataByIndex(driveIndex)
   if (ds.hardDrive || dd.length === 0) return 0x80
-  return getNextByte(ds, dd, cycles)
+  const byte = getNextByte(ds, dd, cycles)
+  sampleIwmRead(ds, cycles)
+  return byte
 }
 
 // $C0E0-$C0E7 drive the head: CA0-CA2 are the stepper phase lines and LSTRB

@@ -431,15 +431,8 @@ IIgs ROM never looks for it. Six new cases cover it in
 `src/ui/inputparams.test.ts`.
 
 **Still outstanding**: in the browser, mounting a 5.25" disk and pressing
-Ctrl-Reset still does not boot it, even though the same disk boots in the jest
-harness for all three flows below. Measured in the browser at this point: the
-worker holds a valid `WOZ2` image of 234,496 bytes at drive index 2 (exactly
-what the harness holds), the warm-reset signature *is* cleared, the head is at
-track 0, and `trackLocation` climbs to 639 and then stops — the ROM syncs to the
-nibble stream for about 80 bits and gives up, where the harness reaches 47,111.
-So the data path is intact and the cold scan does run; something about the
-browser's run loop (it renders, and drives the full worker/UI rather than only
-the fake-timer harness) is starving the read. Not yet isolated.
+Ctrl-Reset still does not boot it. See section 26b for the instrumentation that
+was built to chase this and what it actually found.
 
 Also note that `?boot=true` boots while the fragment disk is still downloading,
 so a deep link needs a Ctrl-Reset to pick the disk up.
@@ -490,6 +483,70 @@ Side note found while measuring: the harness only boots the floppy at speed mode
 0 (1.02 MHz); modes 1 and 3 (2.8 and 14.3 MHz) stall the same way. So the read
 is timing sensitive in general, which is consistent with the browser failing at
 1.02 MHz too.
+
+### 26b. IWM Read-Cadence Instrumentation — and it OVERTURNS the overshoot theory
+
+**Why**: the browser would not boot the floppy while the jest harness did, and
+the working hypothesis was "the browser's run loop leaves long gaps, one data
+register read then swallows many tracks and the ROM loses sync". Before trying
+to fix that, measure it.
+
+**What was added** (debug-only, costs nothing in normal use):
+
+- `src/worker/devices/diskdata.ts`: `IwmReadStats` + `getIwmReadStats()` /
+  `resetIwmReadStats()`, fed from `iwmReadDataRegister()`. It records the number
+  of reads, the CPU-cycle gap between consecutive reads (sum and max), the
+  largest number of bits a single read advanced the LSS by, and how many reads
+  advanced far enough to cross a whole track. `iwmResetTiming()` resets the
+  sampler, so every boot attempt gets its own profile.
+- `?iwmgaps=1` in the URL (`src/ui/inputparams.ts`) turns on a 2 Hz poll
+  (`src/ui/main2worker.ts`) that asks the worker for the current stats over
+  `MSG_MAIN.IWM_STATS_REQUEST` / `MSG_WORKER.IWM_READ_STATS`. The result is on
+  `window.__iwmStats`, so a headless run can read it with one CDP
+  `Runtime.evaluate`.
+- `src/worker/gs_floppy_late.test.ts` asserts the sampler works and prints the
+  harness baseline.
+
+**Plumbing gotcha worth remembering**: this started as a sticky "enabled" flag
+posted once at startup, and the worker never answered afterwards. A worker
+module can be re-evaluated underneath a live page (Vite dev HMR, machine
+switch), which silently resets module-level state, so a request/response poll is
+strictly more robust than a flag plus a per-frame push. Do not use sticky worker
+flags for diagnostics.
+
+**What it found** — the overshoot theory is **wrong**, and the real difference is
+much starker than timing:
+
+| after Ctrl-Reset | IWM data-register reads |
+|---|---|
+| jest harness (boots ProDOS) | **387,809** |
+| browser (stays at the ROM banner) | **1** |
+
+Browser detail: `{reads: 1, totalGapCycles: 2557, maxGapCycles: 2557,
+maxBitsPerRead: 639, readsCrossingTrack: 0}`. That single read, 2,557 cycles
+after the reset, is the IIgs **power-on disk self-test** — the same read that
+made `iigsFloppyHasMedia()` necessary in the first place. It advances 639 bits,
+which is exactly the `trackLocation = 639` that was previously mistaken for a
+partial sync. It is not a partial sync; it is the only read that ever happens.
+
+So the browser ROM never enters the IWM read loop at all. Together with the
+earlier counts (slot 6 read 12 times and slot 7 read 9 times, against 34,289 and
+275 in the harness), **the cold device scan in the browser starts and then dies
+almost immediately**. Nothing about the disk, the WOZ data, the head position or
+the read cadence is wrong.
+
+**Also worth recording**: the overshoot the theory worried about is real in the
+harness, it is just not the bug. The harness makes 22 track-crossing reads, the
+worst advancing **187,429 bits** (~29 disk revolutions) in a single read, after a
+749,735-cycle gap. So any future fix that assumes reads are short will be
+fixing a latent robustness problem, not this failure.
+
+**Where to look next**: trace the ROM's PC through the first few hundred
+instructions after the reset in both environments and find the divergence point.
+The scan dies before it touches the floppy, so the question is what the browser's
+ROM takes that the harness's does not — most likely a softswitch, an interrupt,
+or the state that `iigsInitInterrupts()` installs, all of which are set up
+differently by `doBoot()` versus a bare `doReset()`.
 
 ### 27. Apple IIgs Mouse (ADB) & Speaker ($C030) — DATA PATH FIXED, CURSOR STILL PARTIAL
 

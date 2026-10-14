@@ -43,6 +43,7 @@ import { setTraceSettings } from "./tracelog"
 import { doGotoTimeTravelIndex, doSetThumbnailImage, doGetSaveStateWithSnapshots, doGetSaveState, doGoBackInTime, doGoForwardInTime, doRestoreSaveState } from "./save_restore"
 import { setSiriusJoyport } from "./devices/sirius_joyport"
 import { getCurrentMemory } from "./memory"
+import { getIwmReadStats } from "./devices/diskdata"
 
 // This file must have worker types, but not DOM types.
 // The global should be that of a dedicated worker.
@@ -116,6 +117,16 @@ export const passDriveProps = (props: DriveProps, replaceDiskData = false) => {
 
 export const passDriveSound = (sound: DRIVE) => {
   doPostMessage(MSG_WORKER.DRIVE_SOUND, sound)
+}
+
+// Apple IIgs IWM read-cadence instrumentation. Only ever touched when the UI
+// asks for it via ?iwmgaps=1, so it costs nothing in normal use. The UI polls
+// rather than the worker pushing every frame: a worker module can be
+// re-evaluated (Vite dev HMR, machine switch), which silently drops sticky
+// flags, whereas a request/response always answers. See the IwmReadStats
+// comment in devices/diskdata.ts for what the counters mean.
+export const passIwmReadStats = (stats: MessagePayload) => {
+  doPostMessage(MSG_WORKER.IWM_READ_STATS, stats)
 }
 
 const passMemory = (mem: Uint8Array) => {
@@ -498,6 +509,11 @@ if (typeof self !== "undefined") {
         break
       case MSG_MAIN.SLOT_CONFIG:
         doSetSlotConfig(e.data.payload as SlotConfig)
+        break
+      case MSG_MAIN.IWM_STATS_REQUEST:
+        // Answer immediately with whatever the sampler has accumulated for the
+        // current boot attempt.
+        passIwmReadStats(getIwmReadStats() as MessagePayload)
         break
       case MSG_MAIN.VERA_SD_IMAGE: {
         const payload = e.data.payload as { data: Uint8Array | null, name: string } | null

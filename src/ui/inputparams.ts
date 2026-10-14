@@ -1,6 +1,6 @@
 import { COLOR_MODE, MONITOR_MODE, RUN_MODE, UI_THEMES } from "../common/utility"
 import { useGlobalContext } from "./globalcontext"
-import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging, passSetSlotConfig } from "./main2worker"
+import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging, passSetSlotConfig, passSetIwmStatsEnabled } from "./main2worker"
 import { setDefaultBinaryAddress, handleSetDiskFromURL } from "./devices/disk/driveprops"
 import { loadOneDriveScript } from "./devices/disk/cloudscriptloader"
 import { isOneDriveMsalAuthCallback } from "./devices/disk/onedrive_authredirect"
@@ -40,6 +40,12 @@ export const handleInputParams = (paramString = "") => {
     passSetIsDebugging(true)
     passSetShowDebugTab(true)
     notifySettingsChanged(["panels.tab"], "external")
+  }
+
+  // ?iwmgaps=1 turns on the Apple IIgs IWM read-cadence instrumentation, which
+  // is off in normal use. The latest sample is readable as window.__iwmStats.
+  if (params.get("iwmgaps") === "1") {
+    passSetIwmStatsEnabled(true)
   }
 
   const mode = params.get("appmode") as string
