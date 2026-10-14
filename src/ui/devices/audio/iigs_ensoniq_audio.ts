@@ -19,6 +19,7 @@ const ensureContext = (): AudioContext | null => {
 export const playEnsoniqSamples = (samples: Int16Array, sampleRate: number) => {
   const ctx = ensureContext()
   if (!ctx) return
+  if (ctx.state === "suspended") ctx.resume()
   const frameCount = Math.floor(samples.length / 2)
   if (frameCount <= 0) return
   const block = samples as Int16Array
