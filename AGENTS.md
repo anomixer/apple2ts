@@ -1067,3 +1067,34 @@ emulation-mode path, which is what old IIe games use, now matches the 6502.
 
 
 
+
+### 30. Apple IIgs 5.25" Floppy Boot - Open, Nondeterministic Browser Failure - PARTIAL
+
+**Severity**: High. The IIgs 5.25" cold boot from a SmartPort-mounted floppy still never reaches a boot volume in a real browser worker, even though the byte-for-byte identical sequence runs all the way to ProDOS in jest.
+
+**What was tried this round** (all in test/gs, commits up to bf7f4599 + 32f3d65b):
+
+1. **Head re-calibration on reset** (`doResetDiskDrive()` now sets `quarterTrack = 0`; previously parked at the outer stop, track 70). Covered by `gs_floppy_late.test.ts`.
+2. **Forcing a cold scan on Ctrl-Reset when floppy media is present** (`doReset()` clears `$03F2-$03F4` only when `iigsHasFloppyMedia()` is true, so cold-boot proceeds; without media the warm path to the Applesoft `]` prompt is preserved). Covered by `gs_ctrl_reset.test.ts`.
+3. **Resetting the shared Disk II read-phase accumulator on reset / drive mount** (`cycleRemainder`, `fullRevolutionCount`, `headWindow`, `randPos` zeroed in `doResetDiskDrive`).
+4. **IWM read-cadence instrumentation** (`IwmReadStats` + `?iwmgaps=1` poll) in `devices/diskdata.ts`. Showed the browser **reads `$C0E8` exactly once** (the power-on disk self-test, 639 bits) and never enters the read loop, while the jest harness reads ~387,809 times. Slot 6 / Slot 7 IWM access counts were 12/9 vs 34,289/275.
+5. **Timing-offset theory overturned**: the browser executes the **first 183,565 instructions identically** to the harness (`00:FA62` reset vector -> identical cold boot). The difference is an extra iteration of the `FF:F9F7..FF:FA15` timing loop, not a logic divergence.
+6. **Whole-run histogram diff**: harness-only PCs (`05:4151` etc.) are all in the *booted ProDOS RWTS read loop*; browser-only PCs (`64:6339`, `74:5600`, `75:7387`) are all **language-card RAM**. The browser is executing code out of LC-RAM banks that the harness never touches.
+7. **Motor-time proven not the cause**: the motor-off delay was `setTimeout(1000)` wall-clock based, changed to **CPU-cycle based** (`MOTOR_OFF_CYCLES = 1_020_000`) in `32f3d65b`. Reads stayed at 1. The change is kept as an engineering improvement (deterministic, irrespective of host FPS).
+8. **ADB read was gated behind `iigsFloppyHasMedia()`** (see section 26) so a real floppy does not make the power-on disk self-test read turn into a partial 639-bit read.
+
+**What is still NOT resolved**:
+- The exact instruction that branches execution into a language-card RAM bank after the reset. The foreign-bank jump is timing-nondeterministic and rarely occurs in a single capture; one run produced the banks above, most others (running the bank $D0..FF set only) never triggered the detection even though the browser boot still failed.
+- Whether the jump is triggered by an in-emulator softswitch read, an interrupt, or host-timing variance in the boot profile.
+
+**Next step (recommended)**: capture loop of roughly 20 browser runs with `?romtrace=1` and aggregate the `foreign[]` entries; the first consistently appearing one will name the branching instruction and disassemble back to a fixable cause.
+
+**Live infrastructure** (kept in the tree, gated on query params, costs nothing by default):
+- `src/worker/romtrace.ts` -> `recordRomPc()` (once per instruction), now with `timeline` and `foreign`, behind `?romtrace=1` and `window.__romTrace` polling.
+- `devices/diskdata.ts` -> `IwmReadStats` behind `?iwmgaps=1` and `window.__iwmStats`.
+- Headless measurement is via `#tour-reset-button` click (synthetic Ctrl+R does not reliably reach the worker).
+- `GW_TRACE_OUT=path` jest env var writes the harness trace out for diffing (note: actual var name is `GS_TRACE_OUT`).
+
+**Reference for debugging**: `AGENTS.md section 26a/26b/26c`; ground truth `c:\dev\gssquared` (IWM2, RTC_PRAM).
+
+---
