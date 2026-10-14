@@ -44,6 +44,7 @@ import { doGotoTimeTravelIndex, doSetThumbnailImage, doGetSaveStateWithSnapshots
 import { setSiriusJoyport } from "./devices/sirius_joyport"
 import { getCurrentMemory } from "./memory"
 import { getIwmReadStats } from "./devices/diskdata"
+import { getRomTrace, setRomTraceEnabled, clearRomTrace } from "./romtrace"
 
 // This file must have worker types, but not DOM types.
 // The global should be that of a dedicated worker.
@@ -127,6 +128,11 @@ export const passDriveSound = (sound: DRIVE) => {
 // comment in devices/diskdata.ts for what the counters mean.
 export const passIwmReadStats = (stats: MessagePayload) => {
   doPostMessage(MSG_WORKER.IWM_READ_STATS, stats)
+}
+
+// Debug-only 65816 PC trace (?romtrace=1). See src/worker/romtrace.ts.
+export const passRomTrace = (trace: MessagePayload) => {
+  doPostMessage(MSG_WORKER.ROM_TRACE, trace)
 }
 
 const passMemory = (mem: Uint8Array) => {
@@ -515,6 +521,16 @@ if (typeof self !== "undefined") {
         // current boot attempt.
         passIwmReadStats(getIwmReadStats() as MessagePayload)
         break
+      case MSG_MAIN.ROM_TRACE_REQUEST: {
+        // Payload: {enable?: boolean, clear?: boolean}. Enabling and clearing
+        // travel with the request rather than living in a sticky worker flag,
+        // which a module re-evaluation would silently reset.
+        const req = (e.data.payload ?? {}) as { enable?: boolean, clear?: boolean }
+        if (req.enable !== undefined) setRomTraceEnabled(req.enable)
+        if (req.clear) clearRomTrace()
+        passRomTrace(getRomTrace() as MessagePayload)
+        break
+      }
       case MSG_MAIN.VERA_SD_IMAGE: {
         const payload = e.data.payload as { data: Uint8Array | null, name: string } | null
         if (!payload || !payload.data) {

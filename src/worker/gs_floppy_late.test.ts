@@ -1,6 +1,7 @@
 ﻿import { doSetMachineName, doSetRunMode, doReset, resetCpuSpeedForTesting } from "./motherboard"
 import { doSetEmuDriveNewData, getDriveStateByIndex } from "./devices/drivestate"
 import { getIwmReadStats } from "./devices/diskdata"
+import { clearRomTrace, getRomTrace, setRomTraceEnabled } from "./romtrace"
 import { memory } from "./memory"
 import { RUN_MODE } from "../common/utility"
 import { setIsTesting } from "./worker2main"
@@ -71,11 +72,17 @@ const scenario = (mountAtBoot: boolean, doAReset: boolean) => {
     expect(doSetEmuDriveNewData(mkProps(2))).toBe(true)
   }
   if (doAReset) {
+    clearRomTrace()
     doReset()
     doSetRunMode(RUN_MODE.RUNNING, false)
     run(1500)
   }
   console.log(`[STATS] ${JSON.stringify(getIwmReadStats())}`)
+  if (doAReset && process.env.GS_TRACE_OUT) {
+    // Set GS_TRACE_OUT to a path to dump the post-reset PC trace so it can be
+    // diffed against a browser run (see AGENTS.md section 26b).
+    fs.writeFileSync(process.env.GS_TRACE_OUT, JSON.stringify(getRomTrace()))
+  }
   return bootedProDos()
 }
 
@@ -83,9 +90,11 @@ describe("Apple IIgs 5.25 inch floppy boot", () => {
   beforeEach(() => {
     jest.useFakeTimers()
     setIsTesting()
+    setRomTraceEnabled(true)
   })
 
   afterEach(() => {
+    setRomTraceEnabled(false)
     doSetRunMode(RUN_MODE.PAUSED, false)
     resetCpuSpeedForTesting()
     jest.useRealTimers()

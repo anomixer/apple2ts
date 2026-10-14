@@ -1,6 +1,6 @@
 import { COLOR_MODE, MONITOR_MODE, RUN_MODE, UI_THEMES } from "../common/utility"
 import { useGlobalContext } from "./globalcontext"
-import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging, passSetSlotConfig, passSetIwmStatsEnabled } from "./main2worker"
+import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging, passSetSlotConfig, passSetIwmStatsEnabled, passSetRomTraceEnabled, passResetRomTrace } from "./main2worker"
 import { setDefaultBinaryAddress, handleSetDiskFromURL } from "./devices/disk/driveprops"
 import { loadOneDriveScript } from "./devices/disk/cloudscriptloader"
 import { isOneDriveMsalAuthCallback } from "./devices/disk/onedrive_authredirect"
@@ -46,6 +46,17 @@ export const handleInputParams = (paramString = "") => {
   // is off in normal use. The latest sample is readable as window.__iwmStats.
   if (params.get("iwmgaps") === "1") {
     passSetIwmStatsEnabled(true)
+  }
+
+  // ?romtrace=1 turns on the debug 65816 PC trace, which is off in normal use.
+  // The latest sample is readable as window.__romTrace, and
+  // window.__romTraceReset() marks a fresh boot attempt.
+  if (params.get("romtrace") === "1") {
+    passSetRomTraceEnabled(true)
+    if (typeof window !== "undefined") {
+      ;(window as unknown as { __romTraceReset?: () => void }).__romTraceReset = () =>
+        passResetRomTrace()
+    }
   }
 
   const mode = params.get("appmode") as string

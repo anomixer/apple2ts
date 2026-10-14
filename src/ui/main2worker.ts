@@ -390,6 +390,25 @@ export const passSetIwmStatsEnabled = (enabled: boolean) => {
   iwmStatsTimer = window.setInterval(poll, 500)
 }
 
+// ?romtrace=1 only: poll the worker for the debug 65816 PC trace. The trace
+// window has to be cleared at a known point, so the caller passes
+// window.__romTraceReset() to mark a fresh boot attempt.
+let romTraceTimer = 0
+export const passSetRomTraceEnabled = (enabled: boolean) => {
+  if (!enabled) {
+    if (romTraceTimer) { clearInterval(romTraceTimer); romTraceTimer = 0 }
+    doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST, { enable: false })
+    return
+  }
+  if (romTraceTimer) return
+  const poll = () => doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST, { enable: true })
+  poll()
+  romTraceTimer = window.setInterval(poll, 1000)
+}
+export const passResetRomTrace = () => {
+  doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST, { clear: true })
+}
+
 export const passSetSoftSwitches = (addresses: Array<number> | null) => {
   doPostMessage(MSG_MAIN.SOFTSWITCHES, addresses)
 }
@@ -518,6 +537,8 @@ let machineState: MachineState = {
 
 export let lastIwmReadStats: unknown = null
 export const getLastIwmReadStats = () => lastIwmReadStats
+export let lastRomTrace: unknown = null
+export const getLastRomTrace = () => lastRomTrace
 
 export const doOnMessage = (e: MessageEvent): {speed: number, helptext: string} | null => {
   switch (e.data.msg as MSG_WORKER) {
@@ -576,6 +597,13 @@ export const doOnMessage = (e: MessageEvent): {speed: number, helptext: string} 
       lastIwmReadStats = e.data.payload
       if (typeof window !== "undefined") {
         ;(window as unknown as { __iwmStats?: unknown }).__iwmStats = lastIwmReadStats
+      }
+      break
+    }
+    case MSG_WORKER.ROM_TRACE: {
+      lastRomTrace = e.data.payload
+      if (typeof window !== "undefined") {
+        ;(window as unknown as { __romTrace?: unknown }).__romTrace = lastRomTrace
       }
       break
     }

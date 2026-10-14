@@ -548,6 +548,70 @@ ROM takes that the harness's does not — most likely a softswitch, an interrupt
 or the state that `iigsInitInterrupts()` installs, all of which are set up
 differently by `doBoot()` versus a bare `doReset()`.
 
+### 26c. 65816 PC Trace — the Runs Agree, Then the Browser Ends Up Executing RAM
+
+Built to answer 26b's "where to look next". Same debug-only pattern: a PC
+histogram plus the first 300,000 and last 600 program counters executed after a
+reset.
+
+**Added**
+
+- `src/worker/romtrace.ts`: `recordRomPc()` called once per instruction from
+  `CPU65816.processInstruction()`, a single boolean check when disabled.
+  `getRomTrace()` returns `{instructions, first, last, hist}`.
+- `?romtrace=1` in the URL turns on a 1 Hz poll; the result is on
+  `window.__romTrace` and `window.__romTraceReset()` marks a fresh boot attempt.
+  Enable and clear travel *with* the request, for the worker-reload reason noted
+  in 26b.
+- `GS_TRACE_OUT=<path> jest src/worker/gs_floppy_late.test.ts -t "boots after
+  Ctrl-Reset"` writes the harness trace out for diffing.
+
+**Testing note that cost real time**: synthesised `Ctrl+R` key events do *not*
+reliably reach the worker in a headless run — one capture started mid-execution
+instead of at the reset vector, which is what made an early run look like the
+reset had vanished. Clicking the UI's reset button (`#tour-reset-button`) is
+deterministic and is what any further browser measurement should use.
+
+**Result 1 — the two runs are the same program for a long time.** The first
+**183,565** instructions after the reset are bit-identical between the harness
+and the browser, starting `00:FA62, 00:FA64, 00:FA67, 00:FA69, 00:FA6A,
+00:FA6B, 00:FA6C, 00:FE36, ...` — the same cold-boot path. So `doReset()`, the
+cleared `$03F2-$03F4` signature, `iigsInitInterrupts()` and the disk mount are
+all correct in the browser.
+
+**Result 2 — the first difference is a timing loop, not a logic difference.** At
+instruction 183,565 the ROM is polling in `FF:F9F7..FF:FA15`:
+
+```
+harness  ... FF:FA0A  FF:F9F7  FF:F9F8  FF:F9F9  ...
+browser  ... FF:FA0A  FF:FA0C  FF:FA0D  FF:FA0E  FF:FA10 ... FF:FA15  FF:F9F7  ...
+```
+
+The browser runs the loop one extra iteration before falling through to
+`FF:F9F7`, then rejoins. The sequences stay offset by a few instructions from
+there on, so **index-by-index diffing is useless past this point** — a whole-run
+PC histogram comparison is the only usable tool.
+
+**Result 3 — and the histogram is where it gets interesting.** Over a whole
+post-reset run, each side executes 277 program counters the other never touches:
+
+| | PCs only this side runs | what they are |
+|---|---|---|
+| harness | 277, e.g. `05:4151` ×2,327,109, `05:4149` ×136,889 | the booted ProDOS RWTS read loop — i.e. the *consequence* of the disk booting |
+| browser | 277, e.g. `75:7387` ×1,840, `64:6339` ×465, `64:63xx`, `74:5600` | **language-card RAM** |
+
+On an Apple IIgs banks `$00-$DF` are RAM and only `$D0-$FF` is ROM, so the
+browser is **executing code out of language-card RAM banks `$64`, `$74` and
+`$75`** — addresses the harness never goes near. Those are not the IIgs ROM, so
+the browser's machine is jumping somewhere it should not and running whatever is
+in RAM there.
+
+**Status**: this is the first concrete lead for the browser-only failure and it
+moves the question well away from the floppy. The next step is to catch the
+jump: record a short PC context window the first time execution enters a bank
+outside `$00/$D0-$FF` after a reset, which names the instruction that branched
+there.
+
 ### 27. Apple IIgs Mouse (ADB) & Speaker ($C030) — DATA PATH FIXED, CURSOR STILL PARTIAL
 
 **Reported symptoms**: after mounting `GSOS601.po` on S7,D1 and booting to the

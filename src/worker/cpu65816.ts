@@ -4,6 +4,8 @@
  * Based on the upstream web-a2e implementation.
  */
 
+import { recordRomPc } from "./romtrace"
+
 export enum Status816 {
     C = 0x01, // Carry
     Z = 0x02, // Zero
@@ -225,6 +227,8 @@ export class CPU65816 implements ICPU {
     }
 
     public processInstruction(traceCallback?: ((str: string) => void) | null): number {
+        // Debug-only PC trace (?romtrace=1). Off by default.
+        recordRomPc((this.PB << 16) | this.PC)
         this.cycles = 0
         this.addrMode = ADDR_MODE_816.NONE
         this.addrCrossed = false
