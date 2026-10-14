@@ -516,20 +516,64 @@ register.
   Ctrl-Reset-to-Applesoft behaviour is unchanged (`gs_ctrl_reset.test.ts`).
 
 ### Still outstanding
-**The Finder cursor still does not move.** The report reaches the guest and is
-consumed, but on the real IIgs GS/OS drives the cursor from the ADB *device*
-register rather than from `$C024`. Tracing shows GS/OS issues `$C026` commands
-`$B3`/`$A5` (transmit 2 bytes) and `$73` (receive), and reads the mouse with a
-**POLL FDB DEVICE** of device 3 register 0. No such poll is ever observed
-during boot or during mouse motion, so the guest's EventManager never sees a
-mouse event.
+**The Finder cursor still does not move — but the hypothesis above is WRONG.**
+An instrumented GS/OS 6.0.1 boot (tracing every `$C024`–`$C027` access together
+with the caller's `PB:PC`) disproves the "GS/OS polls the ADB device register"
+claim. What actually happens:
 
-The `$C024` reads that *do* happen appear to come from the ROM's VBL task, not
-from GS/OS. The next step is to find why the guest stops polling the ADB device
-register — most likely it only does so in response to the ADB interrupt, and
-the IIgs IRQ dispatcher may need the ADB to be reported as a distinct
-`$C041`/`$C046` interrupt source rather than being folded into the master
-`$C046` bit 7 as `iigsInterruptPending()` does now.
+- **GS/OS never touches the ADB after boot.** During the boot phase GS/OS issues
+  79 `$C026` commands (`$07`, `$00`, `$32`, `$24`, `$73`, `$09`, `$51`, `$08`,
+  `$a5`, `$01`, `$0e`, `$0f`, `$b3`, `$03`, `$04`, `$05`, `$06`, `$ff`, `$10`)
+  and 23 `$C026` reads, then issues **zero** further `$C026` commands. After a
+  mouse move only `$C027` and `$C024` are read.
+- **The IIgs ROM's own ADB task drives the mouse**, not GS/OS. Every `$C024`
+  read comes from `FF:C4DC` and `FF:C4E9`. Disassembling the ROM (128K image,
+  bank `FF` = offset `0x10000`) gives:
+
+  ```assembly
+  FF:C4D2  LDA $C027      ; bit 7 = mouse report waiting
+  FF:C4D5  BPL $C48F
+  FF:C4D7  LSR A          ; carry ends up holding bit 5 of the status
+  FF:C4D8  LSR A
+  FF:C4D9  LDA $C024      ; X byte
+  FF:C4DC  TAX
+  FF:C4DD  BCS $C48F      ; bit 5 set -> leave after the X byte
+  FF:C4DF  LDA $C027
+  FF:C4E2  AND #$02       ; bit 1 = "the next $C024 read is the Y byte"
+  FF:C4E4  BEQ $C48F
+  FF:C4E6  LDA $C024      ; Y byte
+  FF:C4E9  TAY
+  FF:C4EA  CLC
+  FF:C4EB  RTS
+  ```
+
+  So `$C024` *is* the right path, and the `$C027` bit layout already implemented
+  (`bit 7` data waiting, `bit 5` skip, `bit 1` Y-next) is exactly what this ROM
+  code expects. (The bit-5 and bit-6 semantics were verified by hand against the
+  shift sequence — a `LSR` takes carry from bit 0, so `LSR`/`LSR` leaves the
+  original bit 5 in carry, and `$C0` has bit 5 clear.)
+- **The reports are byte-for-byte correct.** A UI move of (+0.12, +0.05) becomes
+  `ADB_COUNTS_X/Y` of (76, 10), which is split into reports of X=$3F/Y=$0A then
+  X=$0D/Y=0. The ROM's own unpack at `FF:9D01`/`FF:9D05` sees A=$0A and A=$3F,
+  matching, and it then runs the full accumulator at `FF:9D32`–`FF:9D84` and
+  `FF:9E8B`–`FF:9EA8` to build the 16-bit cursor position.
+- **The ADB interrupt works.** `iigsADB.interruptPending()` asserts (mouse
+  interrupt enabled in `$C027` bit 6, report latched) and then releases —
+  `hasMouseData()` reads 0 for 30 consecutive frames after the motion, so the
+  line is not latched and there is no IRQ storm.
+
+Headless Chrome confirms the end state: GS/OS reaches the Finder and the menu-bar
+clock keeps ticking (12:09:17 → 12:09:28), the arrow cursor *is* drawn at the
+top left, and it does not move; hovering the "File" title does not highlight the
+menu, and a click does not select a volume icon.
+
+**Where the break actually is**: somewhere between the ROM's accumulator
+(`FF:9D32` onward) and the GS/OS event manager. The ROM keeps fetching into banks
+`FE`, `00`, `04`, `06`, `07`, `08` and `E1` after a report, so control does leave
+`FF`, but nothing downstream consumes it. Closing this needs a disassembly of
+`FF:9CE7`–`FF:9EA8` (the ROM's report-to-event conversion) plus the GS/OS
+`EventManager` entry it is supposed to reach — that is the next step, and it is
+OS internals rather than emulator plumbing.
 
 **Regression tests**: `src/worker/gs_mouse_sound.test.ts` (mouse event routing,
 report direction/magnitude/button encoding, speaker output) and the existing
