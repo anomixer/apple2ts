@@ -3,6 +3,8 @@ import { passMachineState, passSoftSwitchDescriptions, passWorkerOperationResult
 import { s6502, setState6502, setCycleCount, setPC, getStackString, get6502Instructions } from "./instructions"
 import { hiresAddressToLine, RUN_MODE, TEST_DEBUG, DEFAULT_SLOT_CONFIG, DEFAULT_SLOT_CONFIG_GS, HEATMAP_STATE, MEMORY_DUMP_STATE, AUTO_SNAPSHOT } from "../common/utility"
 import { resetFloppyDrives, doPauseDrive, getHardDriveState } from "./devices/drivestate"
+import { iigsEnsoniq } from "./devices/iigs_ensoniq"
+import { passEnsoniqSound } from "./worker2main"
 // import { slot_omni } from "./roms/slot_omni_cx00"
 import { SWITCHES, overrideSoftSwitch, resetSoftSwitches, setVideo7Override,
   restoreSoftSwitches, getSoftSwitchDescriptions, 
@@ -1303,6 +1305,24 @@ const doAdvance6502 = () => {
   cpuSpeed = (speedInCyclesPerMS < 10000) ? Math.round(speedInCyclesPerMS / 10) / 100 :
     Math.round(speedInCyclesPerMS / 100) / 10
   
+  // Apple IIgs Ensoniq ES5503 audio output, once per emulated frame.
+  if ((machineName === "APPLE2GS")) {
+    const ensoniqProcessorId = Math.floor(s6502.cycleCount / 46727)
+    // simple last-frame tracker attached to global
+    if ((globalThis as any).__lastEnsoniqFrame !== ensoniqProcessorId) {
+      (globalThis as any).__lastEnsoniqFrame = ensoniqProcessorId
+      const osce = Math.max(1, iigsEnsoniq.osce)
+      const outRate = Math.max(1, Math.floor(7159090 / 8 / (osce + 2)))
+      const numSamples = Math.max(1, Math.round(outRate / 60))
+      try {
+        const pcm = iigsEnsoniq.generateSamples(numSamples)
+        passEnsoniqSound(pcm, outRate)
+      } catch (e) {
+        console.error("ensoniq frame gen error", e)
+      }
+    }
+  }
+
   handleGamepads()
   pollKeyboardRepeat()
   updateExternalMachineState()

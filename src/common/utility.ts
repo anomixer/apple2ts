@@ -55,6 +55,7 @@ export enum MSG_WORKER {
   VERA_SD_IMAGE_DATA,
   IWM_READ_STATS,
   ROM_TRACE,
+  ENSONIQ_SOUND,
 }
 
 export interface VeraSdStatus {

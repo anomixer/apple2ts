@@ -187,6 +187,14 @@ export const passSerialConfig = (config: SerialConfig) => {
   doPostMessage(MSG_WORKER.SERIAL_CONFIG_CHANGE, config)
 }
 
+export const passEnsoniqSound = (samples: Int16Array, sampleRate: number) => {
+  try {
+    doPostMessage(MSG_WORKER.ENSONIQ_SOUND as any, { samples, sampleRate })
+  } catch (error) {
+    console.error(`worker2main: passEnsoniqSound error: ${error}`)
+  }
+}
+
 export const passWorkerOperationResult = (
   operationId: number,
   error?: string,
