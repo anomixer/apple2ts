@@ -3,8 +3,6 @@
 
 // (unused removed)
 
-import { s6502 } from "../instructions"
-
 export const ensoniqDocRam = new Uint8Array(0x10000)
 
 interface Oscillator {
