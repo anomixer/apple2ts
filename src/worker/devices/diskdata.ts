@@ -6,6 +6,11 @@ import { setSlotDriver, setSlotIOCallback } from "../memory"
 import { disk2driver } from "../roms/slot_disk2_cx00"
 
 let motorOffTimeout: NodeJS.Timeout | number = 0
+// CPU-cycle deadline for the motor-off delay, and the drive it applies to.
+// Zero means "no pending timeout". See stopMotor() for why this is measured in
+// cycles rather than wall-clock time.
+let motorOffDeadline = 0
+let motorOffDrive: DriveState | null = null
 let dataRegister = 0
 let dataRegHold = false
 let cycleRemainder = 0
@@ -344,6 +349,8 @@ const doWriteByte = (ds: DriveState, dd: Uint8Array, cycles: number) => {
 
 const doMotorTimeout = (ds: DriveState) => {
   motorOffTimeout = 0
+  motorOffDeadline = 0
+  motorOffDrive = null
   if (!MOTOR_RUNNING) {
     ds.motorRunning = false
   }
@@ -357,22 +364,48 @@ const doMotorTimeout = (ds: DriveState) => {
 }
 
 const startMotor = (ds: DriveState) => {
-  if (motorOffTimeout) {
+  if (motorOffDeadline) {
+    // A previous spin-up window was still pending (the motor was being turned
+    // on again before it timed out). Drop it so the new window starts clean.
+    motorOffDeadline = 0
+    motorOffDrive = null
     clearTimeout(motorOffTimeout)
     motorOffTimeout = 0
   } else {
     if (doDebugDrive) motorOnTime = Date.now()
     cycleRemainder = 0
   }
+  motorOffDeadline = 0
+  motorOffDrive = ds
   ds.motorRunning = true
   passDriveData()
   passDriveSound(DRIVE.MOTOR_ON)
 }
 
+// The motor-off delay used to be a wall-clock setTimeout(1000). That ties the
+// emulated machine's drive spin-up window to real time, while everything else in
+// the machine - including the IWM's Logic State Sequencer and the ROM's own
+// "wait for the drive" loop - is measured in CPU cycles. Whenever the two clocks
+// drift (a browser that cannot hit 60 fps runs fewer CPU cycles per wall-clock
+// second than the 1.02 MHz the machine is nominally at) the drive stops spinning
+// before the ROM has finished waiting for it, the boot scan gives up, and the
+// Apple IIgs never reaches the floppy. Expressing the delay in CPU cycles keeps
+// the two clocks locked together no matter how the host renders.
+const MOTOR_OFF_CYCLES = 1020000
+
 const stopMotor = (ds: DriveState) => {
-  if (motorOffTimeout === 0) {
-    motorOffTimeout = setTimeout(() => doMotorTimeout(ds), 1000)
+  if (motorOffDeadline === 0) {
+    motorOffDeadline = s6502.cycleCount + MOTOR_OFF_CYCLES
+    motorOffDrive = ds
   }
+}
+
+// Called once per frame from the run loop, in place of the wall-clock timer.
+export const processFloppyMotorTimeout = () => {
+  if (motorOffDeadline === 0 || s6502.cycleCount < motorOffDeadline) return
+  motorOffDeadline = 0
+  const ds = motorOffDrive
+  if (ds) doMotorTimeout(ds)
 }
 
 let debugCache:number[] = []

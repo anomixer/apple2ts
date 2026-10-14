@@ -10,12 +10,25 @@
 //   hist  - how many times each program counter was executed, which shows where
 //           a run is spinning (a scan that dies looks completely different from
 //           a scan that is churning through slot ROMs).
+export interface ForeignEntry {
+  pc: number
+  bank: number
+  // The program counters immediately before the jump, so the instruction that
+  // branched out of the ROM can be identified.
+  context: number[]
+}
+
 export interface RomTrace {
   enabled: boolean
   instructions: number
   first: number[]
   last: number[]
+  // PC sampled every TIMELINE_STRIDE instructions. A full sequence is far too
+  // long to ship out of the worker, but this is enough to see where a run goes
+  // next: which routine it enters, and how long it stays there.
+  timeline: number[]
   hist: Record<string, number>
+  foreign: ForeignEntry[]
 }
 
 // Large enough to cover a whole boot scan (the harness runs ~9M instructions
@@ -24,12 +37,25 @@ export interface RomTrace {
 const MAX_SEQUENCE = 300000
 const MAX_LAST = 600
 const MAX_HIST = 400
+const MAX_FOREIGN = 8
+// How many program counters of lead-in to keep for each foreign-bank entry.
+const FOREIGN_CONTEXT = 40
+// How often, in instructions, to sample the PC into `timeline`.
+const TIMELINE_STRIDE = 50000
 
 let enabled = false
 let instructions = 0
 const first: number[] = []
 const last: number[] = []
 const hist = new Map<number, number>()
+const foreign: ForeignEntry[] = []
+const timeline: number[] = []
+
+// On an Apple IIgs only banks $D0-$FF are ROM; $00 is where the 65816 comes up.
+// Anything else is RAM, so executing there means something branched somewhere it
+// should not have. That is the fingerprint of the browser-only boot failure
+// (AGENTS.md section 26c), so capture where it first happens.
+const isExpectedBank = (bank: number) => bank === 0x00 || bank >= 0xd0
 
 export const setRomTraceEnabled = (value: boolean) => { enabled = value }
 
@@ -38,6 +64,8 @@ export const clearRomTrace = () => {
   first.length = 0
   last.length = 0
   hist.clear()
+  foreign.length = 0
+  timeline.length = 0
 }
 
 // Called once per 65816 instruction. Deliberately a single boolean check plus
@@ -51,6 +79,20 @@ export const recordRomPc = (pc24: number) => {
   last.push(pc24)
   if (last.length > MAX_LAST) last.shift()
   hist.set(pc24, (hist.get(pc24) ?? 0) + 1)
+  // Record one timeline sample every TIMELINE_STRIDE instructions, so the
+  // whole run can be reconstructed cheaply (~instructions/50000 samples) and
+  // the moment a run falls into a ROM routine or the idle loop is visible.
+  if (timeline.length === 0 || instructions - timeline.length * TIMELINE_STRIDE >= TIMELINE_STRIDE) {
+    timeline.push(pc24)
+  }
+  const bank = (pc24 >>> 16) & 0xff
+  if (foreign.length < MAX_FOREIGN && !isExpectedBank(bank)) {
+    foreign.push({
+      pc: pc24,
+      bank,
+      context: last.slice(Math.max(0, last.length - 1 - FOREIGN_CONTEXT), last.length - 1),
+    })
+  }
 }
 
 export const getRomTrace = (): RomTrace => {
@@ -59,5 +101,5 @@ export const getRomTrace = (): RomTrace => {
     .slice(0, MAX_HIST)
   const histOut: Record<string, number> = {}
   for (const [pc, count] of entries) histOut[pc.toString(16)] = count
-  return { enabled, instructions, first, last, hist: histOut }
+  return { enabled, instructions, first, last, timeline, hist: histOut, foreign }
 }

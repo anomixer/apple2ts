@@ -67,7 +67,7 @@ import { vidhd } from "./devices/vidhd"
 import { enableMockingboard, resetMockingboard } from "./devices/mockingboard"
 import { clearSlotCardStateHandlers } from "./devices/slot_card_state"
 import { resetMouse, onMouseVBL } from "./devices/mouse"
-import { enableDiskDrive, enableDiskDrive35, iwmResetTiming } from "./devices/diskdata"
+import { enableDiskDrive, enableDiskDrive35, iwmResetTiming, processFloppyMotorTimeout } from "./devices/diskdata"
 import { advanceKeySequence, interruptKeySequence, pollKeyboardRepeat, sendPastedText } from "./devices/keyboard"
 import {
   advanceConditionalInputSequence,
@@ -1228,6 +1228,10 @@ const doAdvance6502 = () => {
         processCycleCountCallbacks()
       }
     }
+    // Floppy motor-off delay, measured in CPU cycles so it stays locked to the
+    // emulated machine's clock rather than to wall time. See stopMotor() in
+    // devices/diskdata.ts.
+    processFloppyMotorTimeout()
     if (!checkConditionalInputStop()) advanceKeySequence()
     if (advanceConditionalInputSequence()) {
       doSetRunMode(RUN_MODE.PAUSED, false, undefined, {reason: "input-sequence"})
