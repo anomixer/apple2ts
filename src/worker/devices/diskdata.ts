@@ -48,6 +48,17 @@ const POSITION_TO_DIRECTION = [
 export const doResetDiskDrive = (driveState: DriveState) => {
   MOTOR_RUNNING = false
   doMotorTimeout(driveState)
+  // Reset the shared read-phase state. These are module-level globals that
+  // accumulate fractional bit phase between motor steps; if they are left
+  // stale (e.g. after reading for a while before reset, or after mounting a
+  // new image mid-session) the LSS nibble timing slips and the ROM syncs
+  // briefly then gives up (measured: trackLocation stops at ~639 bits
+  // instead of reaching 47,111). Real hardware starts from a clean phase on
+  // reset.
+  cycleRemainder = 0
+  fullRevolutionCount = 0
+  headWindow = 0
+  randPos = 0
   // Recalibrate the head to track 0. This used to park the head at
   // maxQuarterTrack (the outermost track), which works for a cold boot because
   // the ROM's boot scan seeks inwards and re-calibrates - but a warm reset
