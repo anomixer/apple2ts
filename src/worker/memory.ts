@@ -16,6 +16,7 @@ import { vidhd } from "./devices/vidhd"
 import { isDebugging } from "./motherboard"
 import { iigsClock } from "./iigs_clock"
 import { iigsADB } from "./iigs_adb"
+import { iigsEnsoniq } from "./devices/iigs_ensoniq"
 import { iwmReadDataRegister, iwmResetTiming, iwmStepHead } from "./devices/diskdata"
 import { getDriveDataByIndex, getDriveStateByIndex } from "./devices/drivestate"
 
@@ -992,16 +993,16 @@ const memGetSoftSwitch = (addr: number): number => {
               return 0x00;
 
           case 0xC03C: // DOC Sound Control
-              return (iigsRegisters[0x3C] & 0x70) | 0x0F;
+              return iigsEnsoniq.readControl();
 
-          case 0xC03D: // DOC Sound Data ($E0 IRQ status = 0xFF / bit 7 set = no sound IRQ pending)
-              return 0xFF;
+          case 0xC03D: // DOC Sound Data (DOC regs / RAM depending on control bit 6)
+              return iigsEnsoniq.readData();
 
           case 0xC03E: // DOC Sound Address Low
-              return iigsRegisters[0x3E];
+              return iigsEnsoniq.readAddrLow();
 
           case 0xC03F: // DOC Sound Address High
-              return iigsRegisters[0x3F];
+              return iigsEnsoniq.readAddrHigh();
 
           case 0xC041: // INTEN
               return iigsRegisters[0x41] & 0x1F;
@@ -1304,6 +1305,19 @@ const memSetSoftSwitch = (addr: number, value: number) => {
 
             case 0xC03A: // SCC Channel B Data
             case 0xC03B: // SCC Channel A Data
+                break;
+
+            case 0xC03C: // DOC Sound Control
+                iigsEnsoniq.writeControl(value);
+                break;
+            case 0xC03D: // DOC Sound Data
+                iigsEnsoniq.writeData(value);
+                break;
+            case 0xC03E: // DOC Sound Address Low
+                iigsEnsoniq.writeAddrLow(value);
+                break;
+            case 0xC03F: // DOC Sound Address High
+                iigsEnsoniq.writeAddrHigh(value);
                 break;
 
             case 0xC041: // INTEN
