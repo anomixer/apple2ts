@@ -382,3 +382,17 @@ export const iigsEnsoniq = new IigsEnsoniq()
 export function ensoniqReset() {
   iigsEnsoniq.reset()
 }
+
+// How much a program actually talks to the chip. Cheap counters, always on (four
+// integer increments), so a test or the worker can answer "did this program ever
+// program the DOC?" instead of guessing from the silence.
+export const docAccess = { control: 0, data: 0, addrLow: 0, addrHigh: 0, reads: 0, framesWithOsc: 0 }
+
+export const resetDocAccess = () => {
+  docAccess.control = 0
+  docAccess.data = 0
+  docAccess.addrLow = 0
+  docAccess.addrHigh = 0
+  docAccess.reads = 0
+  docAccess.framesWithOsc = 0
+}

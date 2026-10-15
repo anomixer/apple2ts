@@ -1421,7 +1421,109 @@ event ever reaches it".
 
 ---
 
-### 35. Nondeterministic Bus Noise Made the IIgs Run Differently Every Time - FIXED
+### 35. IIgs Sound - authoritative references found, and the chip is NOT the blocker
+
+#### Where the real documentation lives
+
+Apple's own developer material, all of it usable:
+
+| resource | what it is |
+|---|---|
+| [apple2.gs/technotes](https://apple2.gs/technotes/) | index of **102 Apple Developer Technical Support notes (1986-1991)**, plain text |
+| `tn-iigs-011` | **Ensoniq DOC Swap-Mode Anomaly** - the spurious zero-crossing on high-to-low swaps, why the Sound Tool Set uses swap mode, and why the IIgs caps out around 4 generators |
+| `tn-iigs-023` | **Toolbox Use of DOC RAM** - the Note Synthesizer uses an oscillator playing DOC RAM `$00-$FF` at zero volume as its timer, and **zero bytes in that page can hang the system** |
+| `tn-iigs-019` | Multichannel Output with the Note Synthesizer |
+| `tn-iigs-037` | Free-Form Synthesizer Tips (Sound Tool Set) |
+| `tn-iigs-009` | IIGS Sound Expansion Connector analog impedances |
+| `tn-iigs-054` | MIDI Drivers |
+| `tn-iigs-030` | Apple IIgs **Hardware Reference** updates |
+| [buchty.net/ensoniq/5503.html](http://www.buchty.net/ensoniq/5503.html) | the **full ES5503 register reference**, transcribed from the Apple IIGS Hardware Manual pages (Apple never shipped a DOC datasheet; the IIgs manual is the only public source) |
+| [KansasFest 1993 - Gunn, "IIGS Sound"](https://www.kansasfest.org/wp-content/uploads/1993-gunn-sound.pdf) | article on the hardware and the Sound Manager (PDF) |
+| `SOUND.A2.GS` parts on apple2.org.za mirrors | the Sound Manager / DOC programming series; part 6 is the Sound Manager |
+
+The register set, from buchty (transcribed from Apple's manual):
+
+```
+common   $E0  Oscillator Interrupt Register   bit 7 IRQ, bits 5-1 oscillator number
+         $E1  Oscillator Enable Register      value = oscillator_count * 2
+         $E2  A/D Conversion Register
+per-osc  $00+n / $20+n   frequency (16-bit)
+         $40+n           volume (8-bit, multiplying DAC)
+         $60+n           data (read-only, last byte read from wave memory)
+         $80+n           wavetable pointer (page-aligned)
+         $A0+n           control: bits 7-4 channel, bit 3 interrupt enable,
+                         bits 2-1 mode (00 free-run, 01 one-shot, 10 sync, 11 swap),
+                         bit 0 halt (r/w, set automatically on completion in
+                         modes 01/10/11)
+         $C0+n           wavetable size: bits 5-3 size (256B..32KB in 8 steps),
+                         bits 2-0 address-bus resolution
+sample rate   SR = DOC_clk / (8 * (oscillators_enabled + 2)),  DOC_clk = 7159090
+```
+
+Cross-checked against gssquared and confirmed identical: `$E1` is
+`osce = ((data >> 1) & 0x1f) + 1` with a reset count of **1** (`m_rege0 = 0xff`,
+`m_rege1 = 2`, `m_oscsenabled = 1`, `osc.data = 0x80`), the rate formula is
+`(7159090 / 8) / (oscsenabled + 2)`, and the 64KB DOC RAM is `memset(0)` at
+startup (`soundglu.cpp:489`) - which is exactly what `ensoniqDocRam` does. Free-run
+mode stops at the end of the wave **or at a zero byte**, which matches the model's
+halt-on-zero.
+
+`src/worker/devices/iigs_ensoniq.ts` also now exports `docAccess`
+(`control`/`data`/`addrLow`/`addrHigh` write counts and `reads`), kept permanently
+because they are four integer increments and they are what turns "the IIgs is silent"
+into a diagnosis.
+
+#### What the chip actually did while MCS was stuck
+
+`gs_mcs_freeze.test.ts` boots MCS, injects an ADB click and a keypress, then reads
+the chip back at the end:
+
+```
+[MCS] DOC: osce=32 soundadrl=$be systemVolume=0.333 startedOscillators=0
+[MCS] DOC access (control/data/addrLow/addrHigh writes, reads): 25 132078 139 5 396
+```
+
+- `osce = 32` - the program wrote `$3E` to the Oscillator Enable Register, selecting
+  **all 32 oscillators**. A sound driver did initialize the chip.
+- 132,078 `$C03D` writes - that is two full passes through the 64KB DOC RAM, i.e.
+  waveforms were uploaded.
+- 139 `$C03E` and 5 `$C03F` writes - DOC registers were addressed and programmed.
+- **`startedOscillators = 0`** - not one oscillator has its halt bit clear with a
+  volume and a frequency. Every one ends with `control` bit 0 set, `vol = 0`,
+  `freq = 0`.
+
+That is the *initialised but silent* state: driver up, waveforms loaded, no note
+started. **There is no bug in the DOC model, and no bug in the Sound GLU wiring.**
+MCS's sound, MCS's drawing and MCS's input handling are all blocked by the same
+thing - its startup never gets as far as playing a note or opening a window.
+
+#### Debugging note that cost real time and is worth keeping
+
+The counters were first added only for `$C03C` and `$C03D`, and the run then reported
+`addrLow = 0, addrHigh = 0`. The obvious reading - "the program never sets a DOC
+address" - is **wrong**, and it would have sent the next hour down a dead end. What
+was actually true is that the write path had no counters for those two registers.
+Logging the distinct `$C020-$C04F` addresses the program writes, before trusting any
+per-address counter, is what settled it: `$C03E = $00` and `$C03F = $00` were both
+written, once each, in the expected straight-line sequence
+`$C03C $05` -> `$C03E $00` -> `$C03F $00` -> `$C03D $80`.
+
+**A zero count is not evidence of absence until the counter is known to be complete.**
+
+#### Open, for when the event-delivery bug is fixed
+
+- **`$00-$FF` of DOC RAM.** `tn-iigs-023` says zero bytes there can hang the system,
+  because the Note Synthesizer clocks its envelope updates from an oscillator playing
+  that page at zero volume. Our DOC RAM starts as zeros, same as gssquared, so this is
+  not a divergence - but if the Note Synthesizer path is ever needed, that page has to
+  be filled or the software that relies on the timer will stall.
+- **Swap mode.** `tn-iigs-011` explains the anomaly and why the Sound Tool Set uses
+  it; our handling of the odd-oscillator volume side-effect in `generateSamples()` has
+  not been checked against it.
+
+---
+
+### 36. Nondeterministic Bus Noise Made the IIgs Run Differently Every Time - FIXED
 
 The "$F12E loader crash" from section 34 turned out not to be a bug in that loader at
 all. The machine was behaving **differently on every run**, and sometimes the

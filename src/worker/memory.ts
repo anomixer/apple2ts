@@ -16,7 +16,7 @@ import { vidhd } from "./devices/vidhd"
 import { isDebugging } from "./motherboard"
 import { iigsClock } from "./iigs_clock"
 import { iigsADB } from "./iigs_adb"
-import { iigsEnsoniq } from "./devices/iigs_ensoniq"
+import { iigsEnsoniq, docAccess } from "./devices/iigs_ensoniq"
 import { iwmReadDataRegister, iwmResetTiming, iwmStepHead } from "./devices/diskdata"
 import { getDriveDataByIndex, getDriveStateByIndex } from "./devices/drivestate"
 
@@ -1000,15 +1000,23 @@ const memGetSoftSwitch = (addr: number): number => {
               return 0x00;
 
           case 0xC03C: // DOC Sound Control
+              docAccess.reads++
+              docAccess.control++
               return iigsEnsoniq.readControl();
 
           case 0xC03D: // DOC Sound Data (DOC regs / RAM depending on control bit 6)
+              docAccess.reads++
+              docAccess.data++
               return iigsEnsoniq.readData();
 
           case 0xC03E: // DOC Sound Address Low
+              docAccess.reads++
+              docAccess.addrLow++
               return iigsEnsoniq.readAddrLow();
 
           case 0xC03F: // DOC Sound Address High
+              docAccess.reads++
+              docAccess.addrHigh++
               return iigsEnsoniq.readAddrHigh();
 
           case 0xC041: // INTEN
@@ -1316,15 +1324,19 @@ const memSetSoftSwitch = (addr: number, value: number) => {
                 break;
 
             case 0xC03C: // DOC Sound Control
+                docAccess.control++
                 iigsEnsoniq.writeControl(value);
                 break;
             case 0xC03D: // DOC Sound Data
+                docAccess.data++
                 iigsEnsoniq.writeData(value);
                 break;
             case 0xC03E: // DOC Sound Address Low
+                docAccess.addrLow++
                 iigsEnsoniq.writeAddrLow(value);
                 break;
             case 0xC03F: // DOC Sound Address High
+                docAccess.addrHigh++
                 iigsEnsoniq.writeAddrHigh(value);
                 break;
 

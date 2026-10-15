@@ -4,6 +4,7 @@ import { doSetEmuDriveNewData } from "./devices/drivestate"
 import { MouseCardEvent, resetMouse } from "./devices/mouse"
 import { setKeyboardState } from "./devices/keyboard"
 import { iigsADB } from "./iigs_adb"
+import { iigsEnsoniq, docAccess, resetDocAccess } from "./devices/iigs_ensoniq"
 import { RUN_MODE } from "../common/utility"
 import { setIsTesting } from "./worker2main"
 import * as fs from "fs"
@@ -119,6 +120,10 @@ test("MCS freeze: does the ROM VBL / system-task path ever run, and what is in $
       lastLocalFileWriteTime: 0,
     } as DriveProps)
     expect(mounted).toBe(true)
+    resetDocAccess()
+
+    // Is the chip actually producing sound? Count the transition from no active
+    // oscillators to some, which is what a real driver starting a note looks like.
 
     const cpu = getCPU() as any
     const origPI = cpu.processInstruction.bind(cpu)
@@ -184,7 +189,25 @@ test("MCS freeze: does the ROM VBL / system-task path ever run, and what is in $
     reportSpin(cpu, hist)
     const adb = iigsADB as unknown as { hasMouseData: () => boolean }
     console.log(`[MCS] ADB hasMouseData after click: ${adb.hasMouseData()}`)
-
+    // Did the program ever program the Ensoniq? MCS's sound driver sets the
+    // chip up - enables oscillators and uploads waveforms into DOC RAM - so a
+    // healthy boot shows non-zero control/data/addr writes. Whether any
+    // oscillator was ever started is the separate question, and it is the one
+    // that answers "does this program make a sound".
+    const chip = iigsEnsoniq as unknown as {
+      osce: number
+      oscillators: Array<Record<string, number>>
+      soundadrl: number
+      systemVolume: number
+    }
+    let started = 0
+    for (const o of chip.oscillators) {
+      if (!(o.control & 1) && o.vol > 0 && o.freq > 0) started++
+    }
+    console.log(`[MCS] DOC: osce=${chip.osce} soundadrl=$${chip.soundadrl.toString(16)} ` +
+      `systemVolume=${chip.systemVolume.toFixed(3)} startedOscillators=${started}`)
+    console.log(`[MCS] DOC access (control/data/addrLow/addrHigh writes, reads): ` +
+      `${docAccess.control} ${docAccess.data} ${docAccess.addrLow} ${docAccess.addrHigh} ${docAccess.reads}`)
     // Phase 3: the screen still shows the ProDOS 8 startup banner, which waits for
     // a keypress. Send one and see whether MCS actually loads in this harness.
     hist.clear()
