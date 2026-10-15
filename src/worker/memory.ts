@@ -1182,9 +1182,10 @@ export const memGet = (addr: number, checkWatchpoints = true): number => {
         value = noSlotClock.read(addr)
         checkSlotIO(addr)
       } else {
-        // Empty slots return random bus noise.
+        // Empty slots return the floating bus, the way gssquared returns
+        // floating_bus_read() for any read with no handler behind it.
         if (slotIsActive(page - 0xC0) && !slotHasCard[page - 0xC0]) {
-          value = Math.floor(256 * Math.random())
+          value = getFloatingBus()
         }
         checkSlotIO(addr)
       }
@@ -1569,6 +1570,24 @@ const hiResDouble = new Uint8Array(80 * 192)
 let hiResCurrent = hiResSingle
 let hiResLines = 192
 
+// The floating bus holds the last byte the video scanner fetched. Every read of
+// unmapped or unhandled space returns it, which is what gssquared does:
+//
+//   mmu.hpp:60        uint8_t floating_bus_val = 0xEE;   (power-on value)
+//   mmu.hpp:176-178   set_floating_bus() / floating_bus_read()
+//   VideoScannerIIgs::video_cycle()   video_byte = ram[address];
+//                                     mmu->set_floating_bus(video_byte);
+//   mmu_iigs.cpp:139  read_c0xx() returns floating_bus_read() by default
+//   mmu.cpp:47,84     a missing page or read handler returns floating_bus_read()
+//
+// apple2ts returned Math.random() for empty slot $C0xx space instead. On the
+// Apple IIgs slots 1-6 are empty, so every probe of, say, $C300 got a fresh
+// random byte, which made the whole machine nondeterministic: the same MCS run
+// crashed into a byte ramp on one start and landed in valid code on the next.
+let floatingBus = 0xee
+export const getFloatingBus = (): number => floatingBus
+export const setFloatingBus = (value: number) => { floatingBus = value & 0xff }
+
 export const exportMemoryToHiresLine = (line: number) => {
   const doubleRes = SWITCHES.DHIRES.isSet && SWITCHES.COLUMN80.isSet
   const video7foreground = SWITCHES.DHIRES.isSet && !SWITCHES.COLUMN80.isSet && SWITCHES.STORE80.isSet
@@ -1585,6 +1604,7 @@ export const exportMemoryToHiresLine = (line: number) => {
       hiResDouble[line * 80 + 2 * i + 1] = memory[addr + i]
       hiResDouble[line * 80 + 2 * i] = memory[RamWorksMemoryStart + addr + i]
     }
+    setFloatingBus(hiResDouble[line * 80 + 79])
   } else {
     if (line === 0) {
       hiResCurrent = hiResSingle
@@ -1594,6 +1614,7 @@ export const exportMemoryToHiresLine = (line: number) => {
     const addr = pageOffset + 40 * Math.trunc(line / 64) +
       1024 * (line % 8) + 128 * (Math.trunc(line / 8) & 7)
     hiResSingle.set(memory.slice(addr, addr + 40), line * 40)
+    setFloatingBus(hiResSingle[line * 40 + 39])
   }
 }
 
