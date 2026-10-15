@@ -88,13 +88,7 @@ export class IigsEnsoniq {
         case 0x20: return (this.oscillators[osc].freq >> 8) & 0xff
         case 0x40: return this.oscillators[osc].vol & 0xff
         case 0x60: return this.oscillators[osc].data & 0xff
-        case 0x80: {
-          let retval = 0
-          if (this.oscillators[osc].wavetblpointer & 0x10000) retval |= 0x40
-          retval |= (this.oscillators[osc].wavetblsize << 3)
-          retval |= this.oscillators[osc].resolution & 0x07
-          return retval & 0xff
-        }
+        case 0x80: return (this.oscillators[osc].wavetblpointer >> 8) & 0xff
         case 0xa0: return this.oscillators[osc].control & 0xff
         case 0xc0: {
           let retval = 0
@@ -143,8 +137,10 @@ export class IigsEnsoniq {
         case 0x40: this.oscillators[osc].vol = data & 0xff; break
         case 0x60: break // ignore writes
         case 0x80: {
-          this.oscillators[osc].wavetblpointer = (data << 8) | (this.oscillators[osc].wavetblpointer & ~0xff00) & 0x0000
-          // keep bit16 as-is
+          // Wave table pointer high byte. Bit 16 is owned by the $C0 register,
+          // so preserve it; everything below bit 16 comes from this byte.
+          this.oscillators[osc].wavetblpointer =
+            (this.oscillators[osc].wavetblpointer & 0x10000) | ((data & 0xff) << 8)
           break
         }
         case 0xa0: {
@@ -204,7 +200,13 @@ export class IigsEnsoniq {
   }
 
   writeControl(data: number) {
+    // Bit 7 (busy) is read-only and always clears on write.
     this.soundctl = (data & 0x7F)
+    // In register mode (bit 6 clear) only the low address byte is meaningful;
+    // a leftover RAM pointer must not leak into register accesses.
+    if (!(this.soundctl & 0x40)) {
+      this.soundadrh = 0
+    }
   }
 
   writeData(data: number) {
