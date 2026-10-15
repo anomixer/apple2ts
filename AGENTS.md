@@ -1666,3 +1666,70 @@ Four details worth keeping, each of which cost a debugging cycle:
   loop version produced `?NEXT WITHOUT FOR` in the browser while working in jest,
   because a dropped character mangled the `FOR`.
 
+---
+
+### 37. Cross-checking the IIgs ADB against KEGS - three places we track state and never use it
+
+`C:\dev\kegs` is worth keeping as a second reference: 55KB of `adb.c` and 27KB of
+`doc.c`, plain C, and Kenton Groomwell's comments explain the intent rather than
+just the mechanism.
+
+#### What KEGS confirms we already have right
+
+The `$C024` mouse contract is identical, which rules out the report format as the
+cause of the event-delivery bug:
+
+- `delta = target - reported`, clamped to ±63, and **the reported position advances
+  by exactly the delta that was returned** (`adb.c:1557-1560`) so the next read
+  reports the remainder. `iigs_adb.ts latchMouseReport()` does the same by
+  subtracting the clamped delta from `pendingX/pendingY`.
+- Bit 7 is "button released", bit 6 is direction, bits 5-0 are the magnitude.
+- `$C024` alternates X then Y, gated on `$C027` bit 1.
+- The cursor is only advanced while the Event Manager is considered active, decided
+  by reading the Tool Locator pointer at `$E1/03C8-$E1/03CA` and then a word at
+  `tool_start + 24`. **This is exactly the check AGENTS.md section 29a already
+  verified as satisfied** (`$E103C8` -> `$7EF22A`, `tool+$18` = `0/1B`), so KEGS and
+  gssquared agree and apple2ts already passes that gate.
+
+#### Where apple2ts tracks state and then never reads it
+
+KEGS's `adb_read_c024()` opens with:
+
+```c
+if(((g_adb_mode & 0x2) != 0) || (g_mouse_dev_addr != g_mouse_ctl_addr)){
+        /* mouse is off, return 0, or mouse is not autopoll */
+        g_adb_mouse_valid_data = 0;
+        adb_clear_mouse_int();
+        return 0;
+}
+```
+
+Three differences, all in `src/worker/iigs_adb.ts`:
+
+1. **`modes` is tracked but never used.** Commands `$04` (set modes), `$05` (clear
+   modes) and `$07` (synch) all update `this.modes` correctly, and nothing reads it.
+   In KEGS, `g_adb_mode & 0x02` makes `$C024` return 0 and drop the mouse IRQ, and
+   `g_adb_mode & 0x01` (`adb.c:2172`) turns keyboard autopoll off so keys are
+   delivered as SRQs instead of being polled.
+2. **`$06` (set configuration) only stores the bytes.** `iigs_adb.ts:204` saves the
+   three configuration bytes into `configuration[]` and stops. KEGS's
+   `adb_set_config()` uses them: `g_mouse_ctl_addr = val0 >> 4` and
+   `g_kbd_ctl_addr = val0 & 0x0f`, i.e. **the first configuration byte tells the
+   micro-controller where the mouse and keyboard now live on the ADB bus**, and a
+   change is reported as an error.
+3. **`mouseAddr` is a constant.** `iigs_adb.ts:90` sets `private mouseAddr =
+   ADDR_MOUSE` and every other assignment writes the same constant (lines 253, 419).
+   It can never differ from the controller's view, so the
+   `g_mouse_dev_addr != g_mouse_ctl_addr` condition KEGS uses to stop reporting can
+   never be detected here.
+
+These are all cases where KEGS is *stricter* than apple2ts, so they do not by
+themselves explain "no events arrive". They are the best concrete leads found so
+far, because all three change **when the ADB reports motion**, and the ROM's ADB
+task at `FF:C4D2` (which section 27 established is what drives the cursor) is
+downstream of exactly that decision.
+
+**Next step, in order**: make `$C024` honour `modes & 0x02`, then make `$06` update
+the controller's mouse and keyboard addresses, and log the first ADB configuration
+command GS/OS sends during a boot so it is known which nibble it actually uses.
+
