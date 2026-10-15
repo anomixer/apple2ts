@@ -42,7 +42,7 @@ import { receiveCommData } from "./devices/superserial/serial"
 import { setTraceSettings } from "./tracelog"
 import { doGotoTimeTravelIndex, doSetThumbnailImage, doGetSaveStateWithSnapshots, doGetSaveState, doGoBackInTime, doGoForwardInTime, doRestoreSaveState } from "./save_restore"
 import { setSiriusJoyport } from "./devices/sirius_joyport"
-import { getCurrentMemory } from "./memory"
+import { getCurrentMemory, memGet24 } from "./memory"
 import { getIwmReadStats } from "./devices/diskdata"
 import { getRomTrace, setRomTraceEnabled, clearRomTrace } from "./romtrace"
 
@@ -530,13 +530,30 @@ if (typeof self !== "undefined") {
         passIwmReadStats(getIwmReadStats() as MessagePayload)
         break
       case MSG_MAIN.ROM_TRACE_REQUEST: {
-        // Payload: {enable?: boolean, clear?: boolean}. Enabling and clearing
-        // travel with the request rather than living in a sticky worker flag,
-        // which a module re-evaluation would silently reset.
-        const req = (e.data.payload ?? {}) as { enable?: boolean, clear?: boolean }
+        // Payload: {enable?: boolean, clear?: boolean, peek?: number[]}.
+        // Enabling and clearing travel with the request rather than living in a
+        // sticky worker flag, which a module re-evaluation would silently reset.
+        const req = (e.data.payload ?? {}) as { enable?: boolean, clear?: boolean, peek?: number[] }
         if (req.enable !== undefined) setRomTraceEnabled(req.enable)
         if (req.clear) clearRomTrace()
-        passRomTrace(getRomTrace() as MessagePayload)
+        const trace = getRomTrace() as unknown as Record<string, unknown>
+        // A PC histogram says where the machine is spinning but not what it is
+        // spinning on. Peeking at the code under the current PC and at the zero
+        // page flags around $A0-$B0 turns "stuck at 00:861D" into a diagnosis.
+        const cur = (trace.last as number[])[(trace.last as number[]).length - 1]
+        if (typeof cur === "number") {
+          const code: number[] = []
+          for (let k = 0; k < 24; k++) code.push(memGet24((cur & 0xffff0000) | ((cur + k) & 0xffff)))
+          const zp: number[] = []
+          for (let a = 0x00a0; a <= 0x00af; a++) zp.push(memGet24(a))
+          trace.peekPc = cur
+          trace.peekCode = code
+          trace.peekZp = zp
+        }
+        if (req.peek) {
+          trace.peekValues = req.peek.map((addr) => memGet24(addr >>> 0))
+        }
+        passRomTrace(trace)
         break
       }
       case MSG_MAIN.VERA_SD_IMAGE: {

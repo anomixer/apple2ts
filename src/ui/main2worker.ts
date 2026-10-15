@@ -402,12 +402,22 @@ export const passSetRomTraceEnabled = (enabled: boolean) => {
     return
   }
   if (romTraceTimer) return
-  const poll = () => doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST, { enable: true })
+  const poll = () => doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST,
+    romTracePeek.length ? { enable: true, peek: romTracePeek } : { enable: true })
   poll()
   romTraceTimer = window.setInterval(poll, 1000)
 }
 export const passResetRomTrace = () => {
   doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST, { clear: true })
+}
+
+// ?romtrace=1 only: ask the worker to include these 24-bit addresses in every
+// trace sample, so emulator memory can be inspected from the browser. The values
+// come back in window.__romTrace.peekValues.
+let romTracePeek: number[] = []
+export const passSetRomTracePeek = (addrs: number[]) => {
+  romTracePeek = addrs.slice(0, 64)
+  doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST, { enable: true, peek: romTracePeek })
 }
 
 export const passSetSoftSwitches = (addresses: Array<number> | null) => {

@@ -1176,6 +1176,10 @@ gssquared's `iigs_aux_linear_to_phys`, and `is_aux_linear()` there returns
 - The CPU parks in a polling loop: `00:861D`, whose bytes are `96 96 96 95 95 95`
   = `BIT $96,X` / `BIT $95,X` / `STA $95,X`, with X = `$0E`, so it is polling zero page
   `$A3`/`$A4`. Both bytes stay 0 forever. It is waiting for a flag nobody sets.
+  **WITHDRAWN - see section 34. This is wrong.** The CPU is executing a data stream and
+  happened to be walking through a byte ramp when the reading was taken; `$A3`/`$A4` were
+  zero because the surrounding record is `8D 00 00 00 00`, not because anything polled
+  them. Nothing is stuck at `00:861D`.
 
 **What was ruled out**, each by measurement in headless Chrome against `mcs.2mg`:
 
@@ -1315,5 +1319,104 @@ correct (`22 00 10 E1` is `JSL $E1:1000`), but a stride-4 table scan silently mi
 stride-2 tables - `$FE:9928` is stride 2, confirmed by `$FE:9919 LDA $9928` /
 `$FE:991F LDA $992A` being 16-bit loads. Treat any "no table found" result from a naive
 scan as unproven.
+
+---
+
+### 34. MCS In The Browser - the "freeze at 00:861D" was a MISREAD, and both environments now agree
+
+Section 33 showed the harness does not reproduce the MCS freeze. This section records
+the browser measurement that explains why, and corrects section 32's central claim.
+
+#### New debug hook: emulator memory is now readable from the browser
+
+A PC histogram says where the machine is spinning but not what it is spinning on.
+`window.__romTracePeek(addrs)` (only defined with `?romtrace=1`) sends a list of 24-bit
+addresses with every trace sample, and the worker answers with `peekPc`, `peekCode` (24
+bytes at the current PC), `peekZp` (zero page `$A0-$AF`) and `peekValues`. This is the
+only way to inspect emulator memory from a page, and it is what turned the vague "spins
+at $C340" readings into diagnoses.
+
+#### The browser freeze needs no input at all
+
+Booting `mcs.2mg` and doing **nothing**:
+
+```
+BEFORE  pc=01:33CD  instr=13,002,155   (the 16-bit delay loop, same as the harness)
+AFTER   pc=00:85E6  instr= 6,532,064   code: 94 94 93 91 91 90 8F 8F 8F 8F ...
+        zp$A0-$AF: 8D 00 00 00 00 8D 00 00 00 00 8D 00 ...
+```
+
+and the 600-instruction tail is a straight walk forward through memory -
+`00:85D3, 00:85D4, 00:85D5, ... 00:861D, 00:861F, 00:8621, 00:8623`. **The machine is
+executing a data stream, not polling.** Section 32 read `00:861D`'s bytes as
+`BIT $96,X` / `BIT $95,X` / `STA $95,X` polling zero page `$A3`/`$A4`; those bytes are
+part of a byte ramp (`...8C 8D 8F 90 93 94 95 95 95 96 98 98`) that the CPU happened to
+be stepping through. `$A3`/`$A4` were `$00` because the surrounding data record is
+`8D 00 00 00 00`, not because anything was polling them. **That reading was wrong and is
+withdrawn.**
+
+The crash address differs every run (`00:8149`, `00:6F02`, `00:85E6`), it happens with no
+input whatsoever, and the path into it is the 8-bit block copier at `$00:F12E`:
+
+```
+$F12E  B1 4C  91 4E      LDA ($4C),Y / STA ($4E),Y
+$F132  B0 31              BCS +$31
+$F134  CA C8 D0 F3        DEX / INY / BNE -13      ; the copy loop
+$F137  A5 4D E6 4F        LDA $4D / INC $4F
+$F13B  EE 73 FE D0 03 EE 74 FE    INC $FE73 / INC $FE74   ; 16-bit source pointer
+```
+
+So: if you never press a key at the ProDOS 8 v1.2 startup banner, the machine eventually
+falls out of the banner path into this loader and ends up executing data. **It is a real
+bug, but it is not the event-delivery bug.**
+
+#### With a keypress, the browser matches the harness exactly
+
+`Input.dispatchKeyEvent` with `type: "rawKeyDown"` reaches the worker (`keyDown` does
+not - it is dropped before the emulator sees it). With one synthetic `a`:
+
+| | browser | jest harness |
+|---|---|---|
+| before key | `01:33CC`, `01:33CD` delay loop | same |
+| main loop | `01:A369` = `4C 1E A4 / AD 33 20 / C9 4C / ...` (`JMP $A41E`) | `01:A64C` = `REP #$30 / LDA $A64A / AND #$00FF / ASL A / TAX / LDA $E0:20E3` |
+| `$C029` | `$C1` | - |
+| SCB `$E0:7D00` | `$44` (bit 6 = 640-pixel mode) | - |
+| SHR `$E0:2000` | `4C 2D 21 08 2F 4D 55 53 49 43 47 53` = the ASCII `/-!./MUSICGS` | - |
+
+Both are parked in the same code, both are idling in MCS's main event loop, and **both
+draw nothing**: the hidden canvas is the right SHR size (640x400, so `processSuperHiRes`
+is running) but 100% black - zero lit pixels sampled. The text page is `$A0` throughout
+(flash spaces, which render as black), so the legacy text path also shows nothing. The
+`/-!./MUSICGS` string at `$E0:2000` is MCS's title text sitting in Super Hi-Res memory
+that has never been turned into pixels.
+
+#### Where this leaves things
+
+The confirmed picture is now:
+
+1. MCS boots to the ProDOS 8 v1.2 banner and needs one keypress.
+2. After it, MCS runs its main event loop correctly in both environments.
+3. It draws nothing and processes no input, in both environments.
+
+So the MCS symptom and the GS/OS Finder cursor symptom really are one thing, and neither
+is a crash, a spin, or a rendering failure. Both are "the program is alive and idle and no
+event ever reaches it".
+
+**Open leads, in the order they are worth checking:**
+
+- **Ruled out: `$C029 = $C1`.** It looks wrong (Super Hi-Res bit 7 and text bit 0 both
+  set) until it is compared against a working reference. GS/OS 6.0.1's Finder, which
+  renders perfectly, leaves `$C029 = $81`. MCS leaves `$C1`. The only difference is
+  **bit 6**, and in gssquared bit 6 is not a display mode at all - `set_new_video()`
+  (`src/display/display.cpp:372`) only looks at bit 7 (SHR) and bit 5 (mono), and bit 6
+  is consumed solely by the MMU for aux linearization
+  (`src/mmus/mmu_iigs.hpp:166`, `is_aux_linear() { return g_aux_linear || g_shr_enabled; }`).
+  apple2ts already mirrors that exactly in `isIigsAuxLinear()`. The bit-6 difference is
+  therefore benign and the screen is not black because of the video mode.
+- With no keypress the loader at `$00:F12E` runs into data. Independent bug, and it is
+  reachable without any input, so it is the cheaper of the two to fix.
+- The remaining question is still "why does MCS run and draw nothing while GS/OS's Finder
+  draws its desktop but ignores the mouse". Both are alive and idle, so it is not a
+  crash, not a spin, and not a video-mode problem.
 
 ---

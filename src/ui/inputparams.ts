@@ -1,6 +1,6 @@
 import { COLOR_MODE, MONITOR_MODE, RUN_MODE, UI_THEMES } from "../common/utility"
 import { useGlobalContext } from "./globalcontext"
-import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging, passSetSlotConfig, passSetIwmStatsEnabled, passSetRomTraceEnabled, passResetRomTrace } from "./main2worker"
+import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging, passSetSlotConfig, passSetIwmStatsEnabled, passSetRomTraceEnabled, passResetRomTrace, passSetRomTracePeek } from "./main2worker"
 import { setDefaultBinaryAddress, handleSetDiskFromURL } from "./devices/disk/driveprops"
 import { loadOneDriveScript } from "./devices/disk/cloudscriptloader"
 import { isOneDriveMsalAuthCallback } from "./devices/disk/onedrive_authredirect"
@@ -54,8 +54,15 @@ export const handleInputParams = (paramString = "") => {
   if (params.get("romtrace") === "1") {
     passSetRomTraceEnabled(true)
     if (typeof window !== "undefined") {
-      ;(window as unknown as { __romTraceReset?: () => void }).__romTraceReset = () =>
-        passResetRomTrace()
+      const w = window as unknown as {
+        __romTraceReset?: () => void
+        __romTracePeek?: (addrs: number[]) => void
+      }
+      w.__romTraceReset = () => passResetRomTrace()
+      // Ask the worker for specific 24-bit addresses alongside each trace sample.
+      // The answer lands in window.__romTrace.peekValues, which is the only way to
+      // read emulator memory from the browser without a dedicated request.
+      w.__romTracePeek = (addrs: number[]) => passSetRomTracePeek(addrs)
     }
   }
 
