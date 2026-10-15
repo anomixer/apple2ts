@@ -1098,3 +1098,126 @@ emulation-mode path, which is what old IIe games use, now matches the 6502.
 **Reference for debugging**: `AGENTS.md section 26a/26b/26c`; ground truth `c:\dev\gssquared` (IWM2, RTC_PRAM).
 
 ---
+
+### 31. Apple IIgs Ensoniq ES5503 ("DOC") Emulation - MOSTLY DONE, ONE GAP KNOWN
+
+**Status**: the chip emulates and is audible; GS/OS 6.0.1 still boots to the Finder; worker suite 757 pass. What does NOT work is events reaching applications, which is a separate and now well-characterised fault (section 32).
+
+#### What was built
+
+- `src/worker/devices/iigs_ensoniq.ts` - the ES5503: 32 oscillators, 64KB wave RAM
+  (`ensoniqDocRam`), and the Sound GLU register interface.
+- `memory.ts` wires `$C03C`-$C03F` (Sound Control / Data / Address Low / Address High)
+  for both reads and writes. Before this, reads were hard-coded stubs.
+- `motherboard.ts` generates one PCM block per emulated frame and posts it via
+  `passEnsoniqSound` (`MSG_WORKER.ENSONIQ_SOUND`); `src/ui/devices/audio/iigs_ensoniq_audio.ts`
+  queues the blocks on an AudioContext, registered through `registerAudioContext` so it
+  obeys the same mute button and gesture rules as the speaker.
+- `iigsEnsoniq.reset()` is called from `doBoot()` so a cold boot starts from the chip's
+  power-on state.
+
+#### Four real bugs found, each by testing rather than guessing
+
+1. **Wave table pointer (`$80`) was broken.** The read returned a copy of the `$C0`
+   register (bank/size/resolution) instead of the pointer, and the write rebuilt the
+   pointer with an expression that always evaluated to 0. Every wave table therefore
+   landed at address 0 and the chip played garbage or nothing. This was the "no sound"
+   cause.
+2. **Register mode left a stale high address byte.** A write to `$C03C` with bit 6
+   clear has to clear `soundadrh`, otherwise a leftover wave RAM pointer offsets
+   register accesses. gssquared does this in `ensoniq_write_C0xx`.
+3. **`$C03D` is a pipeline, not a direct read.** Real DOC hardware (and MAME, and
+   gssquared's `ensoniq_doc_data_read_pipeline`) returns the *previously latched* value
+   and simultaneously fetches the byte at the *current* address. IIgs software relies on
+   the "priming read, set `$C03E`/`$C03F`, data read" idiom, so returning the current
+   address directly gave every such sequence stale data. `$E0` is also only fetched once
+   per transaction, because the ROM's IRQ dispatcher reads `$C03D` twice and would
+   otherwise acknowledge two oscillators while servicing one.
+4. **The low nibble of `$C03C` is the analog system volume** and was ignored, so software
+   that muted still produced output. It is now applied, slewed with a ~20ms time constant
+   because firmware flips the nibble around DOC accesses and a step change chops the
+   waveform.
+
+Tests: `src/worker/gs_ensoniq.test.ts`, 8 cases - register round trips, wave RAM mode with
+auto-increment, the oscillator-enable register, audible PCM from a keyed-on oscillator,
+silence when halted, the `$C03D` pipeline, the volume nibble and busy, and `$E0`
+acknowledging a pending oscillator interrupt.
+
+#### Also fixed while in here: the Super Hi-Res aux window
+
+Enabling Super Hi-Res linearizes the Mega II aux window `$2000-$9FFF`; the physical aux
+array is interleaved (`$2000`/`$6000` halves), so a linear CPU address has to be folded:
+
+```
+x    = linear - $2000
+phys = $2000 + ((x & 1) << 14) | (x >> 1)
+```
+
+Applied to bank `$E1` reads and writes, to the bank `$01` shadow that feeds it, and
+inverted in `getShr()` before handing the buffer to `vidhd.extractShrBuffer`. This is
+gssquared's `iigs_aux_linear_to_phys`, and `is_aux_linear()` there returns
+`g_aux_linear || g_shr_enabled` - enabling SHR linearizes aux just as the explicit
+`$C029` bit 6 does.
+
+### 32. IIgs Events Never Reach Applications - OPEN (blocks Finder mouse and MCS)
+
+**Symptom set**, all from the same root cause:
+
+- GS/OS 6.0.1 Finder: the arrow cursor is drawn but never moves; hovering "File" does
+  not highlight the menu; clicking a volume icon does not select it. The ADB itself is
+  byte-for-byte equivalent to gssquared and the interrupt line asserts and releases
+  cleanly (sections 27 and 29a). GS/OS reads the ROM's cursor accumulator and sees it
+  advance, but never turns that into an event.
+- Music Construction Set (`mcs.2mg`, slot 7): the title screen renders correctly in
+  Super Hi-Res, and after the click that dismisses it the machine freezes. The screen
+  shows correct 80-column text with a repeating pattern over it - the program stopped
+  part-way through drawing its own screen. Confirmed the UI is NOT in SHR mode at that
+  moment (`vidhdActive === false`), so the pattern is in the text page itself.
+- The CPU parks in a polling loop: `00:861D`, whose bytes are `96 96 96 95 95 95`
+  = `BIT $96,X` / `BIT $95,X` / `STA $95,X`, with X = `$0E`, so it is polling zero page
+  `$A3`/`$A4`. Both bytes stay 0 forever. It is waiting for a flag nobody sets.
+
+**What was ruled out**, each by measurement in headless Chrome against `mcs.2mg`:
+
+| hypothesis | result |
+|---|---|
+| Ensoniq IRQ storm (added in section 31) | disabling the sound IRQ entirely reproduced the identical freeze |
+| SmartPort / disk I/O | `$C7C0` called 394 times, `$C7C3` once; disk reads work |
+| Super Hi-Res rendering / aux linearization | the linearization fix changed nothing here, and the UI is not in SHR mode |
+| `$C019` VBL flag | handled correctly via `SWITCHES.VBLINV` |
+| 80-column firmware `WAIT` at `$C340` | seen in one run with no disk mounted; a red herring |
+
+**What the ROM says.** Dumping `src/worker/roms/rom_gs_system.ts` (128KB, bank `$FE` at
+offset 0, bank `$FF` at offset 0x10000) and scanning it:
+
+- `$FFB5DE` is genuinely `38 6B` = `SEC; RTL` and `$FFB5E2` is `18 6B` = `CLC; RTL`, so
+  the addresses `iigsInitInterrupts()` points its "unclaimed" stubs at are correct.
+- There is **no interrupt-vector table in the ROM that can simply be copied**: zero hits
+  for `LDA`/`STA $E10070` or `$E10014` as long absolute (`AF`/`8F .. 01 E1`), and zero
+  runs of 3-byte `$E1` pointers. The ROM installs vectors with computed loops, e.g. at
+  `$FFB5E4`: `LDA $E103E5` / `LDY #$01` / `LDA $01,Y` / `JSR $B664` / `INX` / `CPX #$04`.
+- `$FFB7CC` is the ROM's full interrupt manager. It opens with `XCE` (leaving emulation
+  mode), `REP #$30`, then `PHP`/`PHB`/`PHD`; it manipulates `$C035` (STAT), reads
+  `$C039`/`$C03A`/`$C03B` (SCC), and dispatches through E1 vectors such as
+  `JSL $E10020`.
+
+**Likely mechanism.** `iigsInitInterrupts()` synthesises the whole E1 vector table and
+leaves every entry in `$E10014-$E1007C` as `JML $FFB5DE` (`SEC; RTL`, unclaimed). If
+GS/OS drivers hang their event handlers off those vectors expecting the ROM's init to
+have populated them, every dispatch returns immediately and no event is ever delivered -
+which is exactly "events never arrive", and explains both the dead Finder cursor and the
+MCS freeze from one cause.
+
+**Caveat**: the ad-hoc 65816 disassembler used above has an incomplete opcode table and
+desynchronises after about `$FFB7DC`, so the dispatch path inside `$FFB7CC` is not yet
+verified. Do not treat that part as settled.
+
+**Next step**: finish the disassembler (add `XCE`/`REP`/`SEP`/`XBA`/`PHD`/`PLD`/`STZ`/
+`TCD`/`TSB`/`TRB`/`COP` and the 65816 long forms), then confirm which E1 vectors
+`$FFB7CC` dispatches to and who is supposed to fill them. The alternative is to let the
+ROM's own interrupt-init run instead of synthesising the table - note the existing
+comment in `iigsInitInterrupts()` that installing `$FFB7CC` "spins and never reaches the
+OS event loop"; that judgement was made without knowing the stub table is all unclaimed,
+and is worth re-testing.
+
+---

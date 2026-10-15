@@ -30,6 +30,31 @@ Single-instance cards automatically handle slot exclusivity, and UI peripheral b
 
 ---
 
+## Apple IIgs Emulation Status
+
+Apple2TS emulates the 65816 CPU and a substantial part of the IIgs hardware. GS/OS 6.0.1 cold-boots to the Finder desktop in Super Hi-Res (640x400), slots conform to real IIgs hardware, and the Ensoniq ES5503 sound chip is emulated and audible.
+
+**What works**
+
+- 65816 CPU in both emulation and native mode, with full WDC cycle accounting
+- ROM 01 boot, POST, cold and warm reset, Ctrl-Reset to the Applesoft prompt
+- Super Hi-Res at 640x400 (200 scanlines doubled), with the Mega II aux `$2000-$9FFF` linearization done correctly
+- Slot 7 SmartPort hard drives: ProDOS 8, A2DeskTop, and GS/OS 6.0.1
+- Slot 6 built-in 5.25" drives and slot 5 built-in 3.5" drives through the IWM, with a bootable 5.25" path
+- ADB: keyboard and mouse reports are byte-for-byte equivalent to gssquared
+- Ensoniq ES5503 "DOC": 32 oscillators, 64KB wave RAM, the `$C03C`-`$C03F` Sound GLU interface with its pipelined data read, oscillator interrupts, and per-frame PCM output
+- RTC and 256-byte battery RAM, ADB, VBL/quarter-second interrupts
+
+**Known gaps**
+
+- **Events do not reach applications.** The GS/OS Finder cursor does not move and clicks do not select; interactive programs that wait on an event flag (for example Music Construction Set) freeze after their first screen. The ADB data path and the interrupt line are both correct, so the fault is in how the synthesised Bank `$E1` interrupt vector table is populated. See `AGENTS.md` sections 31 and 32 for the measurements and the current theory.
+- Slot 5 (3.5") has no GCR encoder yet, so 3.5" media cannot be read back.
+- Floppy boot in a real browser worker can fail intermittently; the jest harness boots reliably.
+
+The authoritative reference for hardware behaviour is [gssquared](https://github.com/ct6502/gssquared).
+
+---
+
 ## AI Agent Integration
 
 **[AI Agent Integration Guide](src/ui/mcp/README.md)**
