@@ -1201,23 +1201,119 @@ offset 0, bank `$FF` at offset 0x10000) and scanning it:
   `$C039`/`$C03A`/`$C03B` (SCC), and dispatches through E1 vectors such as
   `JSL $E10020`.
 
-**Likely mechanism.** `iigsInitInterrupts()` synthesises the whole E1 vector table and
-leaves every entry in `$E10014-$E1007C` as `JML $FFB5DE` (`SEC; RTL`, unclaimed). If
-GS/OS drivers hang their event handlers off those vectors expecting the ROM's init to
-have populated them, every dispatch returns immediately and no event is ever delivered -
-which is exactly "events never arrive", and explains both the dead Finder cursor and the
-MCS freeze from one cause.
+**Likely mechanism (ORIGINAL THEORY - SINCE REFUTED, do not build on it).**
+`iigsInitInterrupts()` synthesises the whole E1 vector table and leaves every entry in
+`$E10014-$E1007C` as `JML $FFB5DE` (`SEC; RTL`, unclaimed). If GS/OS drivers hang their
+event handlers off those vectors expecting the ROM's init to have populated them, every
+dispatch returns immediately.
 
-**Caveat**: the ad-hoc 65816 disassembler used above has an incomplete opcode table and
-desynchronises after about `$FFB7DC`, so the dispatch path inside `$FFB7CC` is not yet
-verified. Do not treat that part as settled.
+**MEASURED REFUTATION (see section 33).** This is wrong. The ROM never writes
+`$E1:00C0-$E1:0110` at all, GS/OS does not use those slots, and the dispatch that the
+theory relied on never executes. Keep the symptom table above, discard the mechanism.
 
-**Next step**: finish the disassembler (add `XCE`/`REP`/`SEP`/`XBA`/`PHD`/`PLD`/`STZ`/
-`TCD`/`TSB`/`TRB`/`COP` and the 65816 long forms), then confirm which E1 vectors
-`$FFB7CC` dispatches to and who is supposed to fill them. The alternative is to let the
-ROM's own interrupt-init run instead of synthesising the table - note the existing
-comment in `iigsInitInterrupts()` that installing `$FFB7CC` "spins and never reaches the
-OS event loop"; that judgement was made without knowing the stub table is all unclaimed,
-and is worth re-testing.
+---
+
+### 33. IIgs Event Delivery - MEASURED, two theories refuted, the real cause is still open
+
+This section records instrumentation done with `src/worker/gs_mcs_freeze.test.ts`, which
+boots `mcs.2mg` in the jest harness, injects an ADB mouse click and a keypress through
+the real input path, counts execution in six ROM ranges, and dumps Bank `$E1`.
+
+#### The ROM really does install its own vectors - we are not running on stubs
+
+At runtime, after GS/OS and MCS have loaded:
+
+```
+$E1:0010 (interrupt manager vector): 5c cc b7 ff   = JML $FFB7CC
+$E1:0030 (VBL dispatcher vector):    5c de b5 ff   = JML $FFB5DE   (SEC; RTL, unclaimed)
+$E1:0070 (system task vector):       5c de b5 ff   = JML $FFB5DE   (SEC; RTL, unclaimed)
+$E1:1000  6b 00 00 00  6b 00 00 00  5c ab c7 00  5c 1c 21 ff
+$E1:1010  5c 32 1e ff  5c 2d 1d ff  5c 91 2f ff  5c 95 2f ff
+$E1:1020  00 00 ...                                        (all zero)
+$E1:1030  00 00 00 00  00 00  5c df 33 ff                 = JML $FF33DF at $E1:1036
+```
+
+Two things follow:
+
+1. **`$E1:0010` is `JML $FFB7CC`, not our hard-coded `JML $FF79C8`.** The ROM's own
+   interrupt-init overwrites what `iigsInitInterrupts()` installs. So the "minimal
+   interrupt manager" in our table is dead code, and the machine really does run on the
+   ROM's full manager. This is the "no stub, all for real" outcome - it just happens by
+   itself.
+2. **`$E1:1008-$E1:101C` hold real handlers** (`$00C7AB`, `$FF211C`, `$FF1E32`, `$FF1D2D`,
+   `$FF2F91`, `$FF2F95` - the last two match the ROM's own `5C 91 2F FF / 5C 95 2F FF` at
+   `$FF:1DF7`). So the `$E1:1000` software-interrupt vector area IS populated at runtime.
+
+#### The ROM VBL / system-task path never runs at all
+
+Execution counts over the whole run, six ROM ranges:
+
+| range | what it is | hits |
+|---|---|---|
+| `$FE:9874-$FE:9960` | ROM VBL / system-task dispatcher | **0** |
+| `$FE:96CB-$FE:9720` | the ROM routine that installs `$E1:0030 = $FE9874` | **0** |
+| `$FF:C070-$FF:C0B0` | ROM BRK/IRQ firmware | 519, all during boot, **0 after** |
+| `$FF:C700-$FF:C7C6` | software-interrupt dispatch + copyright fallback | **0** |
+| `$FF:B7CC-$FF:B860` | ROM full interrupt manager | **0** |
+| `$FF:79C8-$FF:7A10` | our hard-coded "minimal" interrupt manager | **0** |
+
+and the dispatcher's own state stays empty for the entire run:
+
+```
+$E1:00D8=0 $E1:00D9=0 $E1:00DA=0   (the task queue; $FE:9874 does
+                                   ORA $E1:00DA / BEQ $98F2 when it is empty)
+$E1:00DC=0 $E1:00DD=0 $E1:00DE=0 $E1:00DF=0   (its two 16-bit counters)
+```
+
+So `$FE:9874` is unreachable dead code, and `iigsInitInterrupts()`'s hard-coded
+`$E10030 = JML $FE9874` is overwritten with the unclaimed stub anyway. **`$FF:C700` is
+confirmed dead**: the "(C) Apple, 1986 ... Print Registered" string at `$FF:C763` never
+prints, so no call ever lands in that fallback.
+
+**This does not mean the ROM VBL path is the bug.** GS/OS replaces the ROM's interrupt
+handler with its own native-mode one once it loads, which is exactly why `$FF:C070`
+stops after boot and `$E1:0030` is left unclaimed.
+
+#### MCS does not freeze in the harness, and the browser freeze is a DIFFERENT fault
+
+This is the most important correction. In the browser MCS froze with the CPU in a
+**8-bit** loop at `00:861D` polling zero page `$A3`/`$A4`. In the jest harness:
+
+- Boot lands on the **ProDOS 8 v1.2 startup banner**, which waits for a keypress. The
+  injected ADB click does nothing (`ADB hasMouseData` is consumed, the banner stays).
+- One injected keypress (`setKeyboardState({key: 0x41})`) advances it: the PC moves from
+  `01:33CC` to `01:A637` and the hot loop becomes `01:A64C-$01:A666` (~120k iterations
+  over 1500 frames), i.e. **MCS is running its main event loop, idling, not frozen.**
+- The loop is real code: `01:A64C` = `C2 30 / AD 4A A6 / 29 FF 00 / 0A / AA / BF E3 20 E0`
+  = `REP #$30 / LDA $A64A / AND #$00FF / ASL A / TAX / LDA $E0:20E3`, i.e. MCS walking an
+  event queue whose pointer lives at `$E0:20E3`.
+- The text page still shows the ProDOS 8 banner because MCS draws in Super Hi-Res.
+
+**So `00:861D` polling zp `$A3`/`$A4` and `01:A64C` polling `$E0:20E3` are two different
+states.** The jest harness does not reproduce the browser freeze, so browser-only
+instrumentation is required to chase that one.
+
+#### Where this leaves the event-delivery bug
+
+What is confirmed: ADB reports are byte-correct (section 29a), the IRQ line asserts and
+releases cleanly (section 27), GS/OS reads the ROM's cursor accumulator and sees it
+advance (section 29a), and MCS reaches and idles in its main event loop. What is not
+confirmed: any mechanism. Two theories are now dead - the "unclaimed E1 stub" theory
+above, and the "ROM VBL task queue is empty" theory, since GS/OS does not use it.
+
+**Next step**: the shared symptom (dead Finder cursor + MCS idling with no events) has to
+be chased inside GS/OS's own EventManager, and it must be measured in the browser with
+`?romtrace=1`, because the harness no longer reaches the state that fails. The
+`$E1:1020`/`$E1:1021` slot is worth watching on that pass: `$FF:C7B0` reads it as the
+return address for the ROM's registered user hook
+(`LDA $E1:1021 / PHA / LDA $E1:1020 / PHA / RTS`), and it is zero at runtime, so nothing
+has registered through that mechanism.
+
+**Tooling note**: the 65816 disassembler used for the ROM scans is
+`C:\Users\USER\AppData\Local\Temp\opencode\dis2.cjs`. Its long-operand byte order is
+correct (`22 00 10 E1` is `JSL $E1:1000`), but a stride-4 table scan silently misses
+stride-2 tables - `$FE:9928` is stride 2, confirmed by `$FE:9919 LDA $9928` /
+`$FE:991F LDA $992A` being 16-bit loads. Treat any "no table found" result from a naive
+scan as unproven.
 
 ---
