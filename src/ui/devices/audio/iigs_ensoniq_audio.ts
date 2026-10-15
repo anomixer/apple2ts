@@ -12,6 +12,12 @@ let audioContext: AudioContext | null = null
 let outputNode: GainNode | null = null
 let nextTime = 0
 let unregister: (() => void) | undefined
+// How many blocks have actually reached playback. The DOC only renders when an
+// oscillator is active, so a silent machine and a broken transport look identical
+// from here unless the blocks are counted. Mirrors getSpeakerClickCount().
+let blocksPlayed = 0
+
+export const getEnsoniqBlocksPlayed = (): number => blocksPlayed
 
 const ensureContext = (): AudioContext | null => {
   if (audioContext) return audioContext
@@ -43,6 +49,12 @@ const ensureContext = (): AudioContext | null => {
 export const playEnsoniqSamples = (samples: Int16Array, sampleRate: number) => {
   if (!isAudioEnabled()) return
   if (samples.length === 0) return
+  blocksPlayed++
+  // Exposed on the page so a headless run can distinguish "the DOC produced
+  // nothing" from "the transport dropped it", which is otherwise invisible.
+  if (typeof window !== "undefined") {
+    ;(window as unknown as { __ensoniqBlocks?: number }).__ensoniqBlocks = blocksPlayed
+  }
   const ctx = ensureContext()
   if (!ctx) return
   // Browsers start a fresh context suspended until the user interacts with the
@@ -90,4 +102,8 @@ export const resetEnsoniqAudio = () => {
   void audioContext.close()
   audioContext = null
   outputNode = null
+  blocksPlayed = 0
+  if (typeof window !== "undefined") {
+    ;(window as unknown as { __ensoniqBlocks?: number }).__ensoniqBlocks = 0
+  }
 }

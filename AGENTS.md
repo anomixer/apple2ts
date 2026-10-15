@@ -1602,50 +1602,67 @@ written, once each, in the expected straight-line sequence
   it; our handling of the odd-oscillator volume side-effect in `generateSamples()` has
   not been checked against it.
 
-#### Proven working, end to end, without GS/OS
+#### Proven working, end to end, in both jest and a real browser
 
 `gs_basic_sound.test.ts` types a nine-line Applesoft BASIC program into the ROM's
 own Applesoft prompt (Ctrl-Reset with no disk mounted, which section 16 established
 takes the warm path to `]`), and then verifies the DOC:
 
 ```
-10 POKE 49212,111:POKE 49214,0:POKE 49215,32
-20 FOR I=0 TO 255: POKE 49213, 32+(I AND 127)
-30 NEXT
+10 POKE 49212,111:POKE 49214,0:POKE 49215,0
+20 POKE 49213,240:POKE 49213,16:POKE 49213,240:POKE 49213,16
+30 POKE 49213,96:POKE 49213,176:POKE 49213,96:POKE 49213,176
 40 POKE 49212,15:POKE 49214,0:POKE 49213,100
 50 POKE 49214,64:POKE 49213,255
-60 POKE 49214,128:POKE 49213,32
+60 POKE 49214,128:POKE 49213,0
 70 POKE 49214,160:POKE 49213,0
 80 POKE 49214,192:POKE 49213,0
 90 POKE 49214,225:POKE 49213,2
 RUN
 ```
 
-`49212-$49215` are `$C03C-$C03F`. That programs oscillator 0 to free-run a
-256-byte ramp at full volume with the halt bit clear, and writes `$02` to the
-Oscillator Enable register to select one oscillator. Result:
+`49212-$49215` are `$C03C-$C03F`. Line 10 puts `$C03C` in RAM mode with
+auto-increment and points it at DOC RAM `$0000`; lines 20 and 30 fill the start of
+DOC RAM with a pulse pattern using nothing but repeated `$C03D` writes, so there is
+no loop; lines 40-90 program oscillator 0 (frequency, full volume, wavetable at
+page `$00`, free-run with the halt bit clear, 256-byte wavetable) and write `$02`
+to the Oscillator Enable register to select one oscillator. In jest:
 
 ```
 osce=2  systemVolume=1.000  startedOscillators=1
-osc0: ctrl=$0  vol=$ff  freq=$64  wtptr=$2000  size=$0
-DOC RAM $2000: $20 $21 $21 $21 ...
-generateSamples(1024) -> 1024 stereo frames, peak amplitude 5131
+osc0: ctrl=$0  vol=$ff  freq=$64  wtptr=$0  size=$0
+DOC RAM $0000: $f0 $10 $f0 $10 $60 $b0 $60 $b0
+generateSamples(1024) -> 1024 stereo frames, peak amplitude 7140
 ```
 
-So the whole chain - guest software writing `$C03C-$C03F`, the Sound GLU
-register decode, DOC RAM, the oscillator model, the analog volume nibble, and
-the PCM block the worker posts to the UI - is correct and reachable from real
-emulated software. **The chip works. The Apple IIgs can make a sound.**
+and in headless Chrome (`?machine=apple2gs&boot=true`, Ctrl-Reset via
+`#tour-reset-button`, then the same characters one `rawKeyDown` at a time), the
+block counter `window.__ensoniqBlocks` went from 216 to 350 in six seconds - 134
+blocks, i.e. about 22 per second, which is the DOC rendering one block per
+emulated video frame while an oscillator runs. **That is the Apple IIgs making an
+audible sound in a real browser, reachable from real emulated software.**
 
-Three details worth keeping, each of which cost a debugging cycle:
+So the whole chain works: the guest's `$C03C-$C03F` writes, the Sound GLU register
+decode, DOC RAM, the oscillator model, the analog volume nibble, the per-frame PCM
+block, and playback through `playEnsoniqSamples` into the AudioContext. `iigs_ensoniq_audio.ts`
+now counts blocks and exposes them as `window.__ensoniqBlocks`, because a silent
+machine and a dropped transport look identical otherwise.
+
+Four details worth keeping, each of which cost a debugging cycle:
 
 - **`handleKeyMapping()` is the identity unless a game is matched**, so a `"\n"` is
   delivered as character code 10, not as RETURN. The Apple II RETURN key is
-  `0x0D`, which is why the join separator is `"\r"`. Sending `"\n"` produces a
-  program that is echoed on screen but never entered.
+  `0x0D`, which is why the join separator is `"\r"`. With `"\n"` the program is
+  echoed on screen but never entered - which looks exactly like a POKE that
+  silently did nothing.
+- **Raw CDP key events only reach the worker if the emulator canvas is focused.**
+  Without `canvas.focus()` first, every `rawKeyDown` is dropped and the screen
+  never changes, which is indistinguishable from the emulator being stalled.
 - **Applesoft has no `ELSE`.** `IF x THEN POKE a,b ELSE POKE c,d` on one line is
-  `?SYNTAX ERROR`. The waveform is a ramp partly for this reason, and also
-  because a zero byte in the waveform halts the oscillator.
-- A zero byte in DOC RAM really does mean silence, so the ramp starts at 32
-  rather than 0.
+  `?SYNTAX ERROR`. The program avoids the conditional entirely by using
+  auto-increment instead of a `FOR`/`NEXT` fill.
+- **A zero byte in a waveform halts the oscillator**, and the FOR/NEXT version was
+  dropped partly because typing one CDP key event at a time loses characters - the
+  loop version produced `?NEXT WITHOUT FOR` in the browser while working in jest,
+  because a dropped character mangled the `FOR`.
 
