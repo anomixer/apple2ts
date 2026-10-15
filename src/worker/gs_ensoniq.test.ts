@@ -22,10 +22,13 @@ const writeReg = (reg: number, value: number) => {
   set(0xC03D, value)
 }
 
-// Read one DOC register.
+// Read one DOC register. $C03D is a one-access pipeline (it returns the
+// previous latch and fetches the current address), so priming read then data
+// read is the correct idiom.
 const readReg = (reg: number) => {
   set(0xC03C, 0x00)
   set(0xC03E, reg & 0xff)
+  get(0xC03D)      // priming read
   return get(0xC03D)
 }
 
@@ -127,6 +130,37 @@ test("a halted oscillator produces silence", () => {
   for (let i = 0; i < pcm.length; i++) {
     expect(pcm[i]).toBe(0)
   }
+})
+
+test("$C03D reads are pipelined: priming read then data read", () => {
+  // Wave RAM at $0200/$0201 hold two distinct values.
+  set(0xC03C, 0x40)          // RAM mode, no auto-increment
+  set(0xC03E, 0x00)
+  set(0xC03F, 0x02)
+  set(0xC03D, 0x11)
+  set(0xC03E, 0x01)
+  set(0xC03D, 0x22)
+
+  // Priming read returns the previous latch, and fetches $0200.
+  set(0xC03E, 0x00)
+  const priming = get(0xC03D)
+  expect(priming).toBe(0x22)
+  // Data read returns what the priming read latched.
+  expect(get(0xC03D)).toBe(0x11)
+
+  // Same for $0201.
+  set(0xC03E, 0x01)
+  expect(get(0xC03D)).toBe(0x11)
+  expect(get(0xC03D)).toBe(0x22)
+})
+
+test("sound control low nibble is the analog system volume", () => {
+  set(0xC03C, 0x0f)  // full volume
+  expect(iigsEnsoniq.systemVolume).toBeCloseTo(1)
+  set(0xC03C, 0x00)  // mute
+  expect(iigsEnsoniq.systemVolume).toBeCloseTo(0)
+  // A read never reports busy, and bit 7 is not echoed back.
+  expect(get(0xC03C) & 0x80).toBe(0)
 })
 
 test("reading $E0 acknowledges a pending oscillator interrupt", () => {

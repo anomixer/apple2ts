@@ -59,6 +59,14 @@ export class IigsEnsoniq {
   osce = 1
   rege0 = 0xff
   irqCallback: ((state: boolean) => void) | null = null
+  // $C03D is a pipeline: see readData(). Tracks whether $E0 was already
+  // fetched in the current transaction so the two-read idiom cannot ack twice.
+  e0FetchedThisTxn = false
+  // Analog system volume from the low nibble of $C03C, 0..1. Slewed rather
+  // than applied instantly: firmware and demos flip the nibble around DOC
+  // accesses and a step change would chop the waveform (audible LF distortion).
+  systemVolume = 1
+  smoothedVolume = 1
 
   reset() {
     this.soundctl = 0x00
@@ -68,6 +76,9 @@ export class IigsEnsoniq {
     this.rege0 = 0xff
     this.rege1 = 2
     this.osce = 1
+    this.e0FetchedThisTxn = false
+    this.systemVolume = 1
+    this.smoothedVolume = 1
     for (let i = 0; i < 32; i++) {
       const o = this.oscillators[i]
       o.freq = 0; o.wtsize = 256; o.control = 0; o.vol = 0; o.data = 0x80
@@ -176,20 +187,39 @@ export class IigsEnsoniq {
     return (this.soundctl & 0x70) | 0x0F
   }
 
+  // Sound GLU $C03D read: a one-access pipeline, as on real DOC hardware and in
+  // MAME/gssquared (ensoniq_doc_data_read_pipeline). The read returns the value
+  // latched by the *previous* access and simultaneously fetches the byte at the
+  // current address into the latch.
+  //
+  // This matters: IIgs software (and the ROM's own IRQ dispatcher, which reads
+  // $C03D twice) relies on priming read -> set address -> read to get data. If a
+  // read returned the current address directly, every such sequence returned
+  // stale or wrong data and the caller spun or acted on garbage - which is what
+  // hung Music Construction Set right after its main screen appeared.
   readData(): number {
+    const ret = this.sounddata
     const fullAddr = ((this.soundadrh << 8) | this.soundadrl) & 0xffff
     if (this.soundctl & 0x40) {
       this.sounddata = ensoniqDocRam[fullAddr]
     } else {
-      this.sounddata = this.readDoc(this.soundadrl)
+      // Reading $E0 acknowledges the lowest pending oscillator interrupt. The
+      // two-read idiom above would ack two oscillators while servicing one, so
+      // only fetch $E0 once per transaction. A $C03C/$C03E/$C03F write starts
+      // a new transaction.
+      if (this.soundadrl !== 0xe0 || !this.e0FetchedThisTxn) {
+        this.e0FetchedThisTxn = (this.soundadrl === 0xe0)
+        this.sounddata = this.readDoc(this.soundadrl)
+      }
     }
-    // auto increment
+    // Busy (bit 7) is read-only and must never be left stuck after a data read.
+    this.soundctl &= ~0x80
     if (this.soundctl & 0x20) {
-      let a = (fullAddr + 1) & 0xffff
-      this.soundadrl = a & 0xff
-      this.soundadrh = (a >> 8) & 0xff
+      const next = (fullAddr + 1) & 0xffff
+      this.soundadrl = next & 0xff
+      this.soundadrh = (next >> 8) & 0xff
     }
-    return this.sounddata & 0xff
+    return ret & 0xff
   }
 
   readAddrLow(): number {
@@ -202,6 +232,11 @@ export class IigsEnsoniq {
   writeControl(data: number) {
     // Bit 7 (busy) is read-only and always clears on write.
     this.soundctl = (data & 0x7F)
+    this.e0FetchedThisTxn = false
+    // The low nibble is the analog system volume. Ignoring it means software
+    // that sets volume 0 still makes noise; ignoring silence means the chip is
+    // simply mute.
+    this.systemVolume = (data & 0x0f) / 15
     // In register mode (bit 6 clear) only the low address byte is meaningful;
     // a leftover RAM pointer must not leak into register accesses.
     if (!(this.soundctl & 0x40)) {
@@ -210,6 +245,9 @@ export class IigsEnsoniq {
   }
 
   writeData(data: number) {
+    // A data write also loads the latch, so a following $C03D read returns it
+    // (the pipeline returns the previous latch, not the just-written byte).
+    this.sounddata = data & 0xff
     const fullAddr = ((this.soundadrh << 8) | this.soundadrl) & 0xffff
     if (this.soundctl & 0x40) {
       ensoniqDocRam[fullAddr] = data & 0xff
@@ -224,10 +262,12 @@ export class IigsEnsoniq {
   }
 
   writeAddrLow(data: number) {
+    this.e0FetchedThisTxn = false
     this.soundadrl = data & 0xff
   }
 
   writeAddrHigh(data: number) {
+    this.e0FetchedThisTxn = false
     this.soundadrh = data & 0xff
   }
 
@@ -322,14 +362,17 @@ export class IigsEnsoniq {
         o.control = ctrl & 0xff
       }
     }
-    // mix -> buffer
-    const mixptr = mix
+    // mix -> buffer, applying the smoothed analog system volume
+    const gain = this.smoothedVolume
     for (let i = 0; i < numFrames * chan; i++) {
-      let sample = Math.floor(mixptr[i] / 8)
+      let sample = Math.floor(mix[i] * gain / 8)
       if (sample > 32767) sample = 32767
       if (sample < -32768) sample = -32768
       buffer[i] = sample
     }
+    // Slew towards the target over roughly 20ms of samples.
+    const alpha = Math.min(1, numFrames / (0.020 * Math.max(1, 28000)))
+    this.smoothedVolume += (this.systemVolume - this.smoothedVolume) * alpha
     return buffer
   }
 }
