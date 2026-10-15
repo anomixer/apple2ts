@@ -1421,7 +1421,88 @@ event ever reaches it".
 
 ---
 
-### 35. IIgs Sound - authoritative references found, and the chip is NOT the blocker
+### 35. Nondeterministic Bus Noise Made the IIgs Run Differently Every Time - FIXED
+
+The "$F12E loader crash" from section 34 turned out not to be a bug in that loader at
+all. The machine was behaving **differently on every run**, and sometimes the
+difference happened to walk it into a byte ramp.
+
+#### The symptom that gave it away
+
+The same jest test, unchanged, produced:
+
+```
+run A: instr=14,415,182  PB=0 PC=861f   <- executing a byte ramp
+run B: instr=15,361,969  PB=0 PC=e03b   <- valid code
+run C: instr=30,883,632  PB=0 PC=c34c   <- valid code
+run D: instr=15,361,976  PB=0 PC=e03b   <- same as B
+```
+
+An emulator whose run loop is a fixed cycle budget cannot do that. Something in the
+memory path had to be non-reproducible.
+
+#### The cause
+
+`memGet()` returned `Math.floor(256 * Math.random())` for `$C0xx` space belonging to an
+empty slot. On the Apple IIgs, `DEFAULT_SLOT_CONFIG_GS` leaves **slots 1-6 empty** (they
+are motherboard hardware, not cards), so every probe of that space got a fresh random
+byte. Instrumenting it counted **76 reads in a single MCS boot, the first at `$C300`**
+- the 80-column firmware entry, which software branches on.
+
+#### The fix, taken from gssquared rather than invented
+
+gssquared returns the floating bus for any read with nothing behind it:
+
+```
+mmu.hpp:60                    uint8_t floating_bus_val = 0xEE;   (power-on value)
+mmu.hpp:176-178               set_floating_bus() / floating_bus_read()
+VideoScannerIIgs::video_cycle()   video_byte = ram[address];
+                                  mmu->set_floating_bus(video_byte);
+mmu_iigs.cpp:139              read_c0xx() returns floating_bus_read() by default
+mmu.cpp:47, 84                a missing page or read handler returns floating_bus_read()
+```
+
+apple2ts now does the same. `memory.ts` keeps a `floatingBus` byte (power-on `$EE`),
+`exportMemoryToHiresLine()` puts the last byte of each scanned line on it, and an empty
+slot's `$C0xx` read returns it.
+
+#### Result
+
+Two consecutive runs of `gs_mcs_nokey.test.ts` are now byte-for-byte identical:
+
+```
+[SETTLED] instr=7582014 PB=1 PC=33cd
+[ESCAPE]  bank $01 -> bank $00 at instr#7020062 via 0:0934
+[FINAL]   instr=15316988 PB=0 PC=e03b
+```
+
+and the machine stays in valid code instead of falling into the byte ramp. The test
+asserts the PC is outside `$8000-$8700`, which is where every one of the section 34
+crashes landed.
+
+#### Scope, deliberately kept narrow
+
+gssquared also returns the floating bus for the Apple IIe `$C070-$C07F` paddle reads
+(`gamecontroller.cpp:224/240/506`), for unhandled `$C0xx` reads
+(`mmu_ii.cpp:214`) and for the `$C068-$C06F` high-bit mirrors. apple2ts returns random
+bytes there on purpose - there is a test asserting it (`softswitches.test.ts`,
+"$C07x returns random noise"), and `rand()` is capped at `0xB4` specifically because
+Castle Wolfenstein depends on the cassette noise. Those were left alone: they are not on
+the IIgs path, and the empty-slot fix alone was enough to make the machine
+deterministic. **If that deliberate deviation is ever revisited, the test has to change
+with it.**
+
+#### Still unverified in the browser
+
+The user's dev server on port 6502 went down before the browser re-check, so this fix is
+verified in the jest harness only. The browser confirmation is still worth doing:
+`?romtrace=1&drive=0#.../mcs.2mg`, no input, and check that `getRomTrace().last` stays
+out of `$8000-$8700` in bank 0.
+
+
+---
+
+### 36. IIgs Sound - authoritative references found, and the chip is NOT the blocker
 
 #### Where the real documentation lives
 
@@ -1521,84 +1602,3 @@ written, once each, in the expected straight-line sequence
   it; our handling of the odd-oscillator volume side-effect in `generateSamples()` has
   not been checked against it.
 
----
-
-### 36. Nondeterministic Bus Noise Made the IIgs Run Differently Every Time - FIXED
-
-The "$F12E loader crash" from section 34 turned out not to be a bug in that loader at
-all. The machine was behaving **differently on every run**, and sometimes the
-difference happened to walk it into a byte ramp.
-
-#### The symptom that gave it away
-
-The same jest test, unchanged, produced:
-
-```
-run A: instr=14,415,182  PB=0 PC=861f   <- executing a byte ramp
-run B: instr=15,361,969  PB=0 PC=e03b   <- valid code
-run C: instr=30,883,632  PB=0 PC=c34c   <- valid code
-run D: instr=15,361,976  PB=0 PC=e03b   <- same as B
-```
-
-An emulator whose run loop is a fixed cycle budget cannot do that. Something in the
-memory path had to be non-reproducible.
-
-#### The cause
-
-`memGet()` returned `Math.floor(256 * Math.random())` for `$C0xx` space belonging to an
-empty slot. On the Apple IIgs, `DEFAULT_SLOT_CONFIG_GS` leaves **slots 1-6 empty** (they
-are motherboard hardware, not cards), so every probe of that space got a fresh random
-byte. Instrumenting it counted **76 reads in a single MCS boot, the first at `$C300`**
-- the 80-column firmware entry, which software branches on.
-
-#### The fix, taken from gssquared rather than invented
-
-gssquared returns the floating bus for any read with nothing behind it:
-
-```
-mmu.hpp:60                    uint8_t floating_bus_val = 0xEE;   (power-on value)
-mmu.hpp:176-178               set_floating_bus() / floating_bus_read()
-VideoScannerIIgs::video_cycle()   video_byte = ram[address];
-                                  mmu->set_floating_bus(video_byte);
-mmu_iigs.cpp:139              read_c0xx() returns floating_bus_read() by default
-mmu.cpp:47, 84                a missing page or read handler returns floating_bus_read()
-```
-
-apple2ts now does the same. `memory.ts` keeps a `floatingBus` byte (power-on `$EE`),
-`exportMemoryToHiresLine()` puts the last byte of each scanned line on it, and an empty
-slot's `$C0xx` read returns it.
-
-#### Result
-
-Two consecutive runs of `gs_mcs_nokey.test.ts` are now byte-for-byte identical:
-
-```
-[SETTLED] instr=7582014 PB=1 PC=33cd
-[ESCAPE]  bank $01 -> bank $00 at instr#7020062 via 0:0934
-[FINAL]   instr=15316988 PB=0 PC=e03b
-```
-
-and the machine stays in valid code instead of falling into the byte ramp. The test
-asserts the PC is outside `$8000-$8700`, which is where every one of the section 34
-crashes landed.
-
-#### Scope, deliberately kept narrow
-
-gssquared also returns the floating bus for the Apple IIe `$C070-$C07F` paddle reads
-(`gamecontroller.cpp:224/240/506`), for unhandled `$C0xx` reads
-(`mmu_ii.cpp:214`) and for the `$C068-$C06F` high-bit mirrors. apple2ts returns random
-bytes there on purpose - there is a test asserting it (`softswitches.test.ts`,
-"$C07x returns random noise"), and `rand()` is capped at `0xB4` specifically because
-Castle Wolfenstein depends on the cassette noise. Those were left alone: they are not on
-the IIgs path, and the empty-slot fix alone was enough to make the machine
-deterministic. **If that deliberate deviation is ever revisited, the test has to change
-with it.**
-
-#### Still unverified in the browser
-
-The user's dev server on port 6502 went down before the browser re-check, so this fix is
-verified in the jest harness only. The browser confirmation is still worth doing:
-`?romtrace=1&drive=0#.../mcs.2mg`, no input, and check that `getRomTrace().last` stays
-out of `$8000-$8700` in bank 0.
-
----
