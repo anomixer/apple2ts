@@ -44,6 +44,10 @@ const MOD_LATCH = 0x20;
 
 const ADDR_KEYBOARD = 0x02;
 const ADDR_MOUSE = 0x03;
+// ADB micro-controller mode bits (set by $04, cleared by $05, set by $07 synch).
+// KEGs's adb_set_new_mode() prints "Disabling keyboard/mouse" for both.
+export const ADB_MODE_KBD_AUTOPOLL_OFF = 0x01;
+export const ADB_MODE_MOUSE_OFF = 0x02;
 
 const ADB_VERSION = 0x06;               // GS/OS 6 reports version 6
 
@@ -88,6 +92,10 @@ export class IIGSADB {
   // "transmit 2 bytes"), byte 1 carries the device address, the handler id and
   // the SRQ-enable flag. GS/OS identifies devices by reading this.
   private mouseAddr = ADDR_MOUSE;
+  // Where the ADB micro-controller thinks the mouse is, set by the "set
+  // configuration" command. KEGS keeps the same split (g_mouse_dev_addr vs
+  // g_mouse_ctl_addr) and stops reporting the mouse when they diverge.
+  private mouseCtlAddr = ADDR_MOUSE;
   private mouseRegs = new Uint8Array(8);
   private mouseHasData = false;
 
@@ -201,16 +209,12 @@ export class IIGSADB {
       case 0x05:                          // clear modes
         this.modes &= ~a1;
         break;
-      case 0x06:                          // set configuration bytes
-        this.configuration[0] = a1;
-        this.configuration[1] = this.cmd[2] ?? 0;
-        this.configuration[2] = this.cmd[3] ?? 0;
+      case 0x06:                         // set configuration bytes
+        this.setConfiguration(a1, this.cmd[2] ?? 0, this.cmd[3] ?? 0);
         break;
       case 0x07:                          // synch
         this.modes = a1;
-        this.configuration[0] = this.cmd[2] ?? 0;
-        this.configuration[1] = this.cmd[3] ?? 0;
-        this.configuration[2] = this.cmd[4] ?? 0;
+        this.setConfiguration(this.cmd[2] ?? 0, this.cmd[3] ?? 0, this.cmd[4] ?? 0);
         break;
       case 0x08:                          // write micro-controller memory
         this.ucMemory[a1 & 0xff] = this.cmd[2] ?? 0;
@@ -246,11 +250,28 @@ export class IIGSADB {
     }
   }
 
+  // The ADB "set configuration" command ($06, and $07 synch). The first
+  // configuration byte tells the micro-controller where the mouse (high nibble)
+  // and the keyboard (low nibble) now live on the ADB bus, which is how KEGS's
+  // adb_set_config() detects that a device moved. A change is an error condition
+  // there, but its adb_error() only logs, so nothing is set. The keyboard nibble
+  // is deliberately not kept: apple2ts's keyboard has no autopoll path to gate
+  // (keys are only ever delivered by the $11 "send keycode" command, which is
+  // KEGS's non-autopoll shape), so KEGS's g_adb_mode & 0x01 check has nothing to
+  // switch here and tracking it would be another field nothing reads.
+  private setConfiguration(val0: number, val1: number, val2: number) {
+    this.configuration[0] = val0;
+    this.configuration[1] = val1;
+    this.configuration[2] = val2;
+    this.mouseCtlAddr = (val0 >> 4) & 0x0f;
+  }
+
   // 01xxxxxx - commands addressed to the FDB (bus) controller.
   private fdbCommand(value: number) {
     if (value === 0x40) {
       // Reset the FDB: both devices go back to their power-on state.
       this.mouseAddr = ADDR_MOUSE;
+      this.mouseCtlAddr = ADDR_MOUSE;
       this.keyboardAddr = ADDR_KEYBOARD;
       this.initDeviceRegisters();
     }
@@ -303,6 +324,11 @@ export class IIGSADB {
   // register (how GS/OS reads the mouse) or through $C024. This is what drives
   // $C027 bit 7 and, when GS/OS has enabled it, the ADB interrupt.
   hasMouseData(): boolean {
+    // KEGs's adb_read_c024() refuses the mouse and drops the interrupt when the
+    // ADB mode says the mouse is off, or when the micro-controller's idea of
+    // where the mouse is no longer matches its physical address.
+    if ((this.modes & ADB_MODE_MOUSE_OFF) !== 0) return false
+    if (this.mouseAddr !== this.mouseCtlAddr) return false
     return this.reportInProgress
       || this.mouseHasData
       || this.pendingX !== 0
@@ -346,6 +372,9 @@ export class IIGSADB {
   //   bit 6 = direction (1 = moved negative: left for X, up for Y)
   //   bits 5-0 = magnitude of the displacement, 0..63
   readMouseData(): number {
+    // KEGs's adb_read_c024() returns 0 when the mouse is off, rather than
+    // whatever happens to be latched.
+    if (!this.hasMouseData()) return 0
     // The report is already latched into the device register by queueMouse /
     // setMouseButton; reading $C024 just hands it out one byte at a time.
     if (this.reportInProgress) {
@@ -417,6 +446,7 @@ export class IIGSADB {
     this.ucMemory = new Uint8Array(256);
     this.errorByte = 0;
     this.mouseAddr = ADDR_MOUSE;
+    this.mouseCtlAddr = ADDR_MOUSE;
     this.keyboardAddr = ADDR_KEYBOARD;
     this.initDeviceRegisters();
     this.pendingX = 0;

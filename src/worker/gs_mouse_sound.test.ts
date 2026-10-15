@@ -97,3 +97,108 @@ test("IIgs $C030 speaker click reaches the audio output", () => {
     jest.useRealTimers()
   }
 })
+
+// KEGS conformance for the ADB mouse-off conditions (adb.c:1445).
+//
+//   if(((g_adb_mode & 0x2) != 0) || (g_mouse_dev_addr != g_mouse_ctl_addr)){
+//           /* mouse is off, return 0, or mouse is not autopoll */
+//           g_adb_mouse_valid_data = 0;
+//           adb_clear_mouse_int();
+//           return 0;
+//   }
+//
+// apple2ts used to keep the mouse reporting regardless, because modes was
+// tracked but never read and mouseAddr was a constant that could never differ
+// from the controller's view.
+test("the ADB mouse goes silent when the mode byte says mouse off", () => {
+  jest.useFakeTimers()
+  setIsTesting()
+  try {
+    doSetMachineName("APPLE2GS")
+    doSetRunMode(RUN_MODE.PAUSED, false)
+    iigsADB.reset()
+    resetMouse()
+    const adb = iigsADB as unknown as {
+      hasMouseData: () => boolean, readMouseData: () => number,
+    }
+    const readReport = () => {
+      const x = adb.readMouseData()
+      const y = adb.readMouseData()
+      return { x: x & 0x3f, y: y & 0x7f }
+    }
+
+    // Straight ahead: a movement produces a report.
+    MouseCardEvent({ x: 0.5, y: 0.5, buttons: -1 })
+    MouseCardEvent({ x: 0.6, y: 0.6, buttons: -1 })
+    expect(adb.hasMouseData()).toBe(true)
+    const forward = readReport()
+    expect(forward.x).toBeGreaterThan(0)
+
+    // $C026 command $04 with $02: set the ADB mode bit that disables the mouse.
+    memSet24(0xC026, 0x04)
+    memSet24(0xC026, 0x02)
+    expect(adb.hasMouseData()).toBe(false)
+
+    // And while it is off, a movement is not reported at all.
+    MouseCardEvent({ x: 0.7, y: 0.7, buttons: -1 })
+    expect(adb.hasMouseData()).toBe(false)
+    expect(adb.readMouseData()).toBe(0)
+
+    // $05 clears it again.
+    memSet24(0xC026, 0x05)
+    memSet24(0xC026, 0x02)
+    expect(adb.hasMouseData()).toBe(true)
+  } finally {
+    doSetRunMode(RUN_MODE.PAUSED, false)
+    resetCpuSpeedForTesting()
+    jest.useRealTimers()
+  }
+})
+
+test("the ADB mouse goes silent when the configuration command moves it", () => {
+  jest.useFakeTimers()
+  setIsTesting()
+  try {
+    doSetMachineName("APPLE2GS")
+    doSetRunMode(RUN_MODE.PAUSED, false)
+    iigsADB.reset()
+    resetMouse()
+    const adb = iigsADB as unknown as {
+      hasMouseData: () => boolean, readMouseData: () => number,
+    }
+
+    MouseCardEvent({ x: 0.5, y: 0.5, buttons: -1 })
+    MouseCardEvent({ x: 0.6, y: 0.6, buttons: -1 })
+    expect(adb.hasMouseData()).toBe(true)
+
+    // $06 set configuration: byte 0 is the keyboard nibble in the low bits and
+    // the mouse nibble in the high bits (KEGS adb_set_config). $34 says the
+    // mouse is now at 3 and the keyboard at 4, which is where they already are.
+    // $06 takes three parameter bytes; only the first moves the addresses.
+    memSet24(0xC026, 0x06)
+    memSet24(0xC026, 0x34)
+    memSet24(0xC026, 0x00)
+    memSet24(0xC026, 0x00)
+    memSet24(0xC026, 0x00)
+    memSet24(0xC026, 0x00)
+    expect(adb.hasMouseData()).toBe(true)
+
+    // $44 moves the mouse to address 4, which the physical mouse is not at.
+    memSet24(0xC026, 0x06)
+    memSet24(0xC026, 0x44)
+    memSet24(0xC026, 0x00)
+    memSet24(0xC026, 0x00)
+    expect(adb.hasMouseData()).toBe(false)
+
+    // Moving it back to 3 restores reporting.
+    memSet24(0xC026, 0x06)
+    memSet24(0xC026, 0x34)
+    memSet24(0xC026, 0x00)
+    memSet24(0xC026, 0x00)
+    expect(adb.hasMouseData()).toBe(true)
+  } finally {
+    doSetRunMode(RUN_MODE.PAUSED, false)
+    resetCpuSpeedForTesting()
+    jest.useRealTimers()
+  }
+})
