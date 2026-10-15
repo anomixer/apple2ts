@@ -343,8 +343,8 @@ export const memGet24 = (address: number): number => {
             }
             return megaIIAux[offset];
         }
-        // For $0000-$BFFF, direct RAM access
-        return megaIIAux[offset];
+        // For $0000-$BFFF, direct RAM access (linearize the SHR window)
+        return megaIIAux[isIigsAuxLinear() ? iigsAuxLinearToPhys(offset) : offset];
     }
 
     // Bank 00: Standard Apple IIe memory map (including ROM and Soft Switches)
@@ -418,7 +418,10 @@ export const memSet24 = (address: number, data: number) => {
             return;
         }
         // Regular RAM
-        megaIIAux[offset] = data;
+        // The SHR window is linearized in CPU space but interleaved in the
+        // physical Mega II aux array, so direct bank $E1 accesses have to be
+        // folded back. gssquared's megaiiRead/megaiiWrite do exactly this.
+        megaIIAux[isIigsAuxLinear() ? iigsAuxLinearToPhys(offset) : offset] = data;
         return;
     }
 
@@ -452,9 +455,11 @@ export const memSet24 = (address: number, data: number) => {
             return;
         }
         memory[RamWorksMemoryStart + offset] = data;
-        // Super Hi-Res ($2000-$9FFF) shadowing into Mega II Bank E1
+        // Super Hi-Res ($2000-$9FFF) shadowing into Mega II Bank E1. The aux
+        // window is linearized in CPU space and interleaved physically, so the
+        // shadow target has to be folded like a direct $E1 access.
         if (offset >= 0x2000 && offset < 0xA000 && !(iigsRegisters[0x35] & 0x08)) {
-            megaIIAux[offset] = data;
+            megaIIAux[isIigsAuxLinear() ? iigsAuxLinearToPhys(offset) : offset] = data;
         }
         return;
     }
@@ -1692,9 +1697,47 @@ export const getHgr2Memory = () => {
   return memory.slice(0x4000, 0x6000)
 }
 
+// $C029 NEWVIDEO bit 7 turns on the Super Hi-Res display, and doing so
+// linearizes the Mega II aux window $2000-$9FFF. The physical Mega II aux
+// interleave is $2000/$6000 halves, so a linear CPU address has to be folded:
+//
+//   x   = linear - $2000
+//   phys = $2000 + ((x & 1) << 14) | (x >> 1)
+//
+// Without this, getShr() reads the two halves in the wrong order and the screen
+// comes out as a repeating garbage tile over correct 80-column text - which is
+// exactly what Music Construction Set's main screen did. See
+// gssquared/src/mmus/iigs_aux_linear.hpp and mmu_iigs.hpp is_aux_linear(),
+// where enabling SHR linearizes aux just as the explicit $C029 bit 6 does.
+export const iigsAuxLinearToPhys = (linear: number): number => {
+  if (linear < 0x2000 || linear > 0x9fff) return linear
+  const x = linear - 0x2000
+  return 0x2000 + (((x & 1) << 14) | (x >> 1))
+}
+
+// True when the aux $2000-$9FFF window is linearized: either $C029 bit 6 was
+// set explicitly, or SHR is on (bit 7). gssquared: is_aux_linear() returns
+// g_aux_linear || g_shr_enabled, with the comment that GS/OS draws its boot
+// screen with $41 (linear, display off) and then switches to $81, expecting the
+// mapping to persist.
+export const isIigsAuxLinear = (): boolean => (iigsRegisters[0x29] & 0xc0) !== 0
+
+// Copy the SHR window out of the Mega II aux array, undoing the interleave when
+// the window is linearized. vidhd.extractShrBuffer() expects the linear layout.
+const extractShrFromAux = (aux: Uint8Array): Uint8Array => {
+  if (!isIigsAuxLinear()) {
+    return vidhd.extractShrBuffer(aux, 0)
+  }
+  const linear = new Uint8Array(0x8000)
+  for (let a = 0x2000; a <= 0x9fff; a++) {
+    linear[a] = aux[iigsAuxLinearToPhys(a)]
+  }
+  return vidhd.extractShrBuffer(linear, 0x2000)
+}
+
 export const getShr = (): Uint8Array => {
   if (gsROM && gsROM.length > 0) {
-    return vidhd.extractShrBuffer(megaIIAux, 0)
+    return extractShrFromAux(megaIIAux)
   }
   if (!vidhd.enabled || !vidhd.active) {
     return new Uint8Array()
