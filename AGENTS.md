@@ -2067,6 +2067,59 @@ be found by tracing `$FF:9D6F`-`$FF:9D85` (the 16-bit add into `$04FC`/`$05FC`)
 and `$FF:9E8B` (the report-to-event conversion) with the guest's A and the
 cursor words logged, rather than by changing the CPU.
 
+#### Sweeping the report byte settles most of this - and corrects the section above
+
+`gs_sweep_xbyte.test.ts` hands the ROM one arbitrary `$C024` byte at a time
+and records what it writes to the cursor words, which avoids hand-decoding
+native-mode 8-bit ROM code entirely. Three results, in order of importance.
+
+**1. The accumulator decodes negative reports correctly.** Tracing the whole
+negative branch for a magnitude-0, bit-6-set report:
+
+```
+$9D53 LDX #$00FF   X=$00FF
+$9D5A PHX          S=$01B5 -> $01B4    (X flag set, one byte, $FF)
+$9D5B PHA          A low = $C0
+$9D8D PLA          A=$C0              <- delta low byte
+$9D8F ADC $047C    $C0 + $80 = $140 -> $40, carry
+$9D95 PLA          A=$FF              <- the sign-extension byte, present
+$9D96 ADC $057C    $FF + $01 + 1 = $101 -> $01
+```
+
+`$047C` goes `$0180 -> $0140`, i.e. **delta = -64, correct**. `PHY` and `PHX`
+push the same number of bytes and `push16` is provably correct (it pushes the
+high byte first, so the low byte lands on top). **So the section above is wrong
+where it says the fault is at `$FF:9D6F`-`$FF:9D85`: that code is fine, on both
+axes.** The `$AA` conclusion stands, the `$9Dxx` conclusion does not.
+
+**2. With the probe done correctly, bit 6 is the direction and the magnitude
+is exact.** Sweeping magnitudes 0,1,2,8,16,32,62,63 with bit 6 clear and bit 7
+either way, both axes give delta = magnitude to the unit, and the high word
+only advances on carry. That is the KEGS / gssquared layout, so
+`latchMouseReport()` and `iigsADBEvent()` are correct as they stand.
+
+**3. The remaining fault is the *leftover* motion, not the current report.** The
+first sweep, which wrote `mouseRegs` directly without clearing `pendingX` and
+`pendingY`, showed every bit-6-set byte driving the cursor to the axis maximum
+(X -> 639, Y -> 199) with magnitude 0 producing the same jump as magnitude 63.
+That is an artifact - and it is the right artifact to chase, because it is
+exactly what `consumeReport()` does in normal use:
+
+```
+private consumeReport() {
+  this.mouseHasData = false
+  this.reportInProgress = false
+  this.latchMouseReport()      // re-latches from whatever pendingX/pendingY is left
+}
+```
+
+A delta larger than the +/-63 a single report can carry is delivered as a
+second report, and that is the intended design (AGENTS section 27D). The
+symptom in section 41 - the cursor climbing monotonically and pinning in the
+corner - is what you get when the re-latched remainder carries the wrong
+direction. So the next thing to measure is the sign of `pendingX`/`pendingY`
+at each `consumeReport()`, not the opcode map and not the arithmetic.
+
 #### Two measurement traps hit along the way
 
 1. **GS/OS runs in native mode, so `$AD`/`$8D` are four-byte *long* forms.** A
