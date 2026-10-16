@@ -2036,6 +2036,37 @@ and `base_6502.cpp` are the references, and `gs_cycles.test.ts` already pins the
 published cycle counts so it will catch a regression. Until that is done, treat
 this as a lead, not a fix.
 
+#### The `$AA` lead is closed - gssquared agrees with us, the revert was right
+
+Checked against `c:\dev\gssquared\src\opcodes.hpp` rather than from memory:
+
+```
+opcodes.hpp:271  #define OP_TAX_IMP 0xAA
+opcodes.hpp:281  #define OP_TXA_IMP 0x8A
+opcodes.hpp:142  #define OP_DEX_IMP 0xCA
+opcodes.hpp:212  #define OP_PHY_IMP 0x5A
+opcodes.hpp:217  #define OP_PLY_IMP 0x7A
+```
+
+gssquared builds five cores - one emulation plus four native (8/8, 16/8,
+8/16, 16/16) - out of one template, and every one of them uses the 6502
+meaning for `$AA`, `$8A` and `$CA`. So apple2ts already matches the reference,
+and the mode switch would have been the deviation, not the fix. That is also
+why it broke the boot. Treat the native-mode remap as a non-issue and stop
+re-deriving it.
+
+The other half of the same observation explains the `$84` that looked like a
+stale high byte. With the M flag set the 65816 accumulator is 8 bits and **the
+high byte of A is the B register**. So `A = $84FF` during that pass means
+`A = $FF, B = $84`, and the ROM is deliberately carrying the sign there -
+`$84` is `$80 | $04`. Keeping the high byte untouched through `AND #$7F` and
+`ASL A` is correct behaviour, not a bug, and `cpu65816.ts` already does it.
+
+So the negative-motion fault is downstream of a correct accumulator and has to
+be found by tracing `$FF:9D6F`-`$FF:9D85` (the 16-bit add into `$04FC`/`$05FC`)
+and `$FF:9E8B` (the report-to-event conversion) with the guest's A and the
+cursor words logged, rather than by changing the CPU.
+
 #### Two measurement traps hit along the way
 
 1. **GS/OS runs in native mode, so `$AD`/`$8D` are four-byte *long* forms.** A
