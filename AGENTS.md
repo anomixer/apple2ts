@@ -1729,7 +1729,64 @@ far, because all three change **when the ADB reports motion**, and the ROM's ADB
 task at `FF:C4D2` (which section 27 established is what drives the cursor) is
 downstream of exactly that decision.
 
-**Next step, in order**: make `$C024` honour `modes & 0x02`, then make `$06` update
-the controller's mouse and keyboard addresses, and log the first ADB configuration
-command GS/OS sends during a boot so it is known which nibble it actually uses.
+---
+
+**Done**: both mouse-off conditions are now implemented (commit `afcb891c`), with a
+regression test for each. What is left on this list is logging the first ADB
+configuration command GS/OS sends during a boot.
+
+### 38. The VBL path is NOT the problem - measured properly this time
+
+Section 33 measured the ROM's VBL path as dead, but that was on `mcs.2mg`, where
+the machine never got past the ProDOS 8 banner. `gs_vbl_path.test.ts` repeats the
+measurement on **GS/OS 6.0.1 all the way to the Finder**, with an injected mouse
+move and click, counting execution in the ROM's interrupt and ADB machinery per
+phase. The result overturns the theory:
+
+| ROM range | boot to Finder | Finder idle | after mouse move |
+|---|---|---|---|
+| `$FE:9874` VBL/system-task dispatcher | **16,366** | **9,457** | 0 |
+| `$FE:96CB` VBL installer | 217 | 0 | 31 |
+| `$FF:C070` ROM BRK/IRQ firmware | 519 | 0 | 0 |
+| `$FF:B7CC` ROM full interrupt manager | **6,720** | **5,180** | **8,546** |
+| `$FF:C4D0` ROM ADB task (the `$C024` reader) | **0** | **0** | **0** |
+| `$FF:9CE0` ROM mouse accumulator | 0 | 0 | 0 |
+
+So:
+
+1. **The ROM's VBL path runs throughout the boot** (16,366 then 9,457 executions).
+   It only stops in phase 3, and that is because **GS/OS repoints `$E1:0030`**.
+   At the end of boot it is `$5c $74 $98 $fe` = `JML $FE9874`, our own hard-coded
+   value, and after GS/OS takes over it is `$5c $16 $83 $04` = `JML $048316` -
+   GS/OS's own VBL handler. That is normal and not a fault.
+2. **The ROM's full interrupt manager `$FF:B7CC` is the actual IRQ handler** and
+   runs constantly (6,720 / 5,180 / 8,546). Our `iigsInitInterrupts()`'
+   `JML $FF79C8` is overwritten by the ROM's own init, exactly as section 33 found,
+   and the minimal manager never runs.
+3. **The ROM's ADB task at `$FF:C4D0` never executes at all**, in any phase, even
+   after a mouse move. Section 27's claim that "the IIgs ROM's own ADB task drives
+   the mouse" does **not** hold in this configuration.
+4. **The cursor holes never move.** After a move and a click:
+   `$047C/$057C/$04FC/$05FC = 0/0/0/0` and `$E1:0190-$E1:0193 = 0 0 0 0`, while
+   `hasMouseData()` is **true** - the ADB has an unread report waiting the whole time.
+
+That last pair is the whole bug, and it is much narrower than everything ruled out
+before it. The ADB has a report. Something is supposed to read `$C024`, turn it into
+a cursor position and post an event. **Nothing does.** The cursor position is still
+zero, so nothing downstream can see motion at all - which is exactly why section
+29a's "the holes advance three units per frame" could not be reproduced: it is
+the *breakage*, not a fact about working behaviour.
+
+So the next question is not about the ROM, the VBL, the interrupt manager or the
+screen. It is: **on a working Apple IIgs, which code turns a pending `$C024` report
+into the cursor position?** KEGS answers half of it - `adb_read_c024()` is the only
+thing that ever writes `$047c`, `$057c`, `$04fc`, `$05fc` and `$E1/10190-10193`
+(`adb.c:1520-1543`), and it does it **at the moment `$C024` is read**, gated on the
+Event Manager being active. gssquared calls the same thing "the KEGS-style
+MMU-write (dead-reckoning) path" and keeps it behind
+`KEYGLOO_MOUSE_SYNC_INJECTION_ONLY=1`.
+
+**Next step**: find out who reads `$C024` under GS/OS 6.0.1 on a real machine, and
+if it is GS/OS rather than the ROM, instrument every 24-bit read of `$C024` with the
+caller's bank:PC during a Finder session. If nothing ever reads it, that is the bug.
 
