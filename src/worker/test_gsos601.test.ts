@@ -1,5 +1,5 @@
 import { doSetMachineName, doSetRunMode, doBoot, resetCpuSpeedForTesting, getCPU } from "./motherboard"
-import { memGet24, memory, megaIIAux, iigsRegisters, iigsGetVblPending } from "./memory"
+import { memGet24, memory, megaIIAux, iigsRegisters, iigsGetVblPending, getShr } from "./memory"
 import { SWITCHES } from "./softswitches"
 import { s6502 } from "./instructions"
 import { doSetEmuDriveNewData } from "./devices/drivestate"
@@ -197,17 +197,16 @@ test("Test boot with C:\\dev\\emu\\ap2\\GSOS601.po", () => {
     console.log("TEXT isSet:", SWITCHES.TEXT.isSet, "HIRES:", SWITCHES.HIRES.isSet, "DHIRES:", SWITCHES.DHIRES.isSet, "80COL:", SWITCHES.COLUMN80.isSet)
     console.log("NewVideo $C029:", iigsRegisters[0x29].toString(16), "Shadow $C035:", iigsRegisters[0x35].toString(16), "Speed $C036:", iigsRegisters[0x36].toString(16))
 
-    // Check SHR buffer
+    // Check SHR buffer. Read it through getShr(), the same path the renderer
+    // uses: once SHR is on, the aux window is linearized, so indexing megaIIAux
+    // at $2000+$i reads the wrong half of the screen entirely.
+    const shrPage = getShr()
     let shrNonZero = 0
-    for (let i = 0x2000; i < 0xA000; i++) {
-      if (megaIIAux[i] !== 0) shrNonZero++
+    for (let i = 0; i < shrPage.length; i++) {
+      if (shrPage[i] !== 0) shrNonZero++
     }
-    console.log(`SHR buffer non-zero bytes: ${shrNonZero}/32768`)
-
-    // Save SHR to BMP
-    const shrData = new Uint8Array(32768)
-    for (let i = 0; i < 32768; i++) shrData[i] = megaIIAux[0x2000 + i]
-    saveShrToBmp(shrData, "gsos_screen.bmp")
+    console.log(`SHR buffer non-zero bytes: ${shrNonZero}/${shrPage.length}`)
+    saveShrToBmp(shrPage, "gsos_screen.bmp")
 
     // Dump text screen if any
     let textLines: string[] = []

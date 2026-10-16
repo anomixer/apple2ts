@@ -1,5 +1,5 @@
 import { doSetMachineName, doSetRunMode, resetCpuSpeedForTesting } from "./motherboard"
-import { megaIIAux } from "./memory"
+import { getShr, isIigsAuxLinear } from "./memory"
 import { SWITCHES } from "./softswitches"
 import { doSetEmuDriveNewData } from "./devices/drivestate"
 import { RUN_MODE } from "../common/utility"
@@ -112,31 +112,83 @@ test(`Apple IIgs boots GS/OS 6.0.1 from ${PO_PATH}`, () => {
 
     console.log(`TEXT=${SWITCHES.TEXT.isSet} HIRES=${SWITCHES.HIRES.isSet} 80COL=${SWITCHES.COLUMN80.isSet}`)
 
-    let shrNonZero = 0
-    for (let i = 0x2000; i < 0xA000; i++) {
-      if (megaIIAux[i] !== 0) shrNonZero++
-    }
-    console.log(`SHR page 1 non-zero bytes: ${shrNonZero}/32768`)
-    expect(shrNonZero).toBeGreaterThan(30000)
+    // Read the SHR page exactly the way the renderer does. Reading megaIIAux
+    // directly is wrong as soon as SHR linearizes the aux window, and that is
+    // what made this test report a uniform grey screen while the emulator was
+    // drawing a real desktop - and, before the linearization fix, vice versa.
+    const shr = getShr()
+    console.log(`getShr() length=${shr.length} isIigsAuxLinear=${isIigsAuxLinear()}`)
+    // processSuperHiRes() bails out entirely on a short buffer, which is how a
+    // black Super Hi-Res screen happens. Assert the length first.
+    expect(shr.length).toBe(32768)
 
-    // The Finder fills the whole screen: the menu bar is on scan line 0 and
-    // the trash can at the bottom right. The GS/OS welcome screen only draws a
-    // box in the middle, so top and bottom rows stay empty when the boot has
-    // stalled.
-    const rowIsDrawn = (y: number) => {
-      const lineOffset = y * 160
-      for (let x = 0; x < 160; x++) {
-        if (megaIIAux[0x2000 + lineOffset + x] !== 0) return true
+    const decode = (shrData: Uint8Array) => {
+      const px = new Uint8Array(640 * 200 * 3)
+      for (let y = 0; y < 200; y++) {
+        const scb = shrData[SHR_SCB_OFFSET + y]
+        const palIdx = (scb & 0x0f) << 4
+        const is640 = (scb & 0x80) !== 0
+        for (let x = 0; x < 640; x++) {
+          let colorIndex: number
+          if (is640) {
+            const byteVal = shrData[y * 160 + (x >> 2)]
+            const shift = (3 - (x & 3)) * 2
+            colorIndex = palIdx | ([8, 12, 0, 4][x & 3] + (((byteVal >> shift) & 3)))
+          } else {
+            const byteVal = shrData[y * 160 + (x >> 1)]
+            colorIndex = palIdx | ((x & 1) ? (byteVal & 0x0f) : ((byteVal >> 4) & 0x0f))
+          }
+          const pOff = 0x7e00 + (colorIndex >> 4) * 32 + (colorIndex & 0x0f) * 2
+          const w = shrData[pOff] | (shrData[pOff + 1] << 8)
+          const o = (y * 640 + x) * 3
+          px[o] = ((w >> 8) & 0x0f) * 17
+          px[o + 1] = ((w >> 4) & 0x0f) * 17
+          px[o + 2] = (w & 0x0f) * 17
+        }
       }
-      return false
+      return px
     }
-    console.log(`line0 drawn=${rowIsDrawn(0)} line199 drawn=${rowIsDrawn(199)}`)
-    expect(rowIsDrawn(0)).toBe(true)
-    expect(rowIsDrawn(199)).toBe(true)
+    const px = decode(shr)
+    saveShrToBmp(shr, OUT_BMP)
 
-    const shrData = new Uint8Array(32768)
-    for (let i = 0; i < 32768; i++) shrData[i] = megaIIAux[0x2000 + i]
-    saveShrToBmp(shrData, OUT_BMP)
+    // A blank or single-colour screen satisfies "non-zero bytes > 30000" and
+    // "row 0 and row 199 are non-zero", which is why this test passed while the
+    // emulator showed nothing but a flat field. Assert on the decoded picture.
+    const colours = new Set<string>()
+    for (let i = 0; i < px.length; i += 3) colours.add(`${px[i]},${px[i + 1]},${px[i + 2]}`)
+    console.log(`decoded distinct colours: ${colours.size}`)
+    const scanlineColours = (y: number) => {
+      const s = new Set<string>()
+      for (let x = 0; x < 640; x++) {
+        const o = (y * 640 + x) * 3
+        s.add(`${px[o]},${px[o + 1]},${px[o + 2]}`)
+      }
+      return s
+    }
+    const scbSet = new Set<number>()
+    for (let y = 0; y < 200; y++) scbSet.add(shr[SHR_SCB_OFFSET + y])
+    console.log(`distinct SCB values: ${scbSet.size}; menu-bar row 0 colours: ${scanlineColours(0).size}; bottom row 199 colours: ${scanlineColours(199).size}`)
+
+    // The Finder desktop: many colours, several palettes in use, and a menu bar
+    // along the top and a trash can along the bottom that are not flat fills.
+    expect(colours.size).toBeGreaterThan(8)
+    expect(scbSet.size).toBeGreaterThan(1)
+    expect(scanlineColours(0).size).toBeGreaterThan(1)
+    expect(scanlineColours(199).size).toBeGreaterThan(1)
+    // Real ink on the screen: the menu bar titles and the disk icons are black.
+    // A stalled or blanked boot has none, even though it still fills the buffer.
+    let darkPixels = 0
+    for (let i = 0; i < px.length; i += 3) {
+      if (px[i] + px[i + 1] + px[i + 2] < 192) darkPixels++
+    }
+    console.log(`dark pixels: ${darkPixels}`)
+    expect(darkPixels).toBeGreaterThan(500)
+
+    // And the menu bar must not be a flat fill across the whole top of the
+    // screen: it carries the File/Edit/... titles, so it has both white and ink.
+    const topRow = scanlineColours(0)
+    console.log(`top row colours: ${Array.from(topRow).join(" / ")}`)
+    expect(topRow.size).toBeGreaterThanOrEqual(2)
   } finally {
     doSetRunMode(RUN_MODE.PAUSED, false)
     resetCpuSpeedForTesting()

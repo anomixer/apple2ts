@@ -1790,3 +1790,123 @@ MMU-write (dead-reckoning) path" and keeps it behind
 if it is GS/OS rather than the ROM, instrument every 24-bit read of `$C024` with the
 caller's bank:PC during a Finder session. If nothing ever reads it, that is the bug.
 
+---
+
+### 39. The Apple IIgs Super Hi-Res screen was NEVER DRAWN - a doubled offset in getShr()
+
+**This is the bug behind "the IIgs boots to a black screen".** It is one line,
+it has been there since section 31 added aux linearization, and every symptom in
+sections 27, 32, 33 and 34 was downstream of it.
+
+#### The bug
+
+`vidhd.extractShrBuffer(memory, auxMemoryStart)` already adds `$2000` itself:
+
+```ts
+extractShrBuffer(memory: Uint8Array, auxMemoryStart: number): Uint8Array {
+  const start = auxMemoryStart + 0x2000
+  return memory.slice(start, start + 0x8000)
+}
+```
+
+`extractShrFromAux()` in `memory.ts` passed `0x2000` as `auxMemoryStart` in the
+linearized branch, so the offset was applied twice and it read
+`linear[0x4000..0xC000]` out of a 0x8000-byte array - which clamps to
+**16384** bytes. `processSuperHiRes()` opens with
+`if (shrData.length < 0x8000) return false`, so on the Apple IIgs it **returned
+false on every single frame and the Super Hi-Res screen was never drawn at
+all**. Two more things had to be true for this to be invisible:
+
+- `extractShrFromAux()` allocated `linear` as `new Uint8Array(0x8000)` while
+  indexing it with linear CPU addresses up to `$9FFF`. The array has to be
+  `0xA000`, or `slice()` clamps a second time (to 24576).
+- the non-linearized branch passed `0` and was correct, so the bug only bit
+  once SHR was on - i.e. exactly when it mattered.
+
+#### Why it survived so long, and why the tests agreed with each other
+
+Because `processSuperHiRes` bailed out, the Apple IIgs fell through to the
+legacy 40/80-column renderer on every frame. That is why the ROM banner, the
+"Check startup device!" scan bar and ProDOS 8 text all looked correct, and why
+nobody noticed the GS/OS desktop was missing: **GS/OS was booting perfectly**,
+drawing a complete Finder desktop into aux memory, and the emulator threw it
+away every frame.
+
+Worse, the regression test was built to be satisfiable by a blank screen:
+
+```ts
+for (let i = 0x2000; i < 0xA000; i++) if (megaIIAux[i] !== 0) shrNonZero++
+expect(shrNonZero).toBeGreaterThan(30000)          // a flat fill passes
+expect(rowIsDrawn(0)).toBe(true)                  // a flat fill passes
+expect(rowIsDrawn(199)).toBe(true)
+```
+
+and it read `megaIIAux[0x2000 + i]`, which is the wrong half of the screen
+entirely once the window is linearized. So `gsos_boot.bmp` was a flat
+`221,221,221` field and `test_gsos601` reported `SHR non-zero 32444/32768`,
+while the emulator showed a black rectangle. **Two tests agreed with each
+other and both were reading the wrong memory.**
+
+Sections 23 and 25 recorded "GS/OS 6.0.1 boots to the Finder" on the strength
+of those assertions. That claim was wrong; the whole GS/OS event-delivery
+investigation in sections 27-38 was chasing a symptom of a missing frame
+buffer.
+
+#### The fix
+
+`src/worker/memory.ts`, `extractShrFromAux()`:
+
+```ts
+const linear = new Uint8Array(0xa000)     // was 0x8000
+for (let a = 0x2000; a <= 0x9fff; a++) linear[a] = aux[iigsAuxLinearToPhys(a)]
+return vidhd.extractShrBuffer(linear, 0)  // was 0x2000
+```
+
+#### Verified
+
+`gsos_boot.test.ts` now reads through `getShr()` exactly like the renderer and
+asserts on the decoded picture instead of on byte counts:
+`getShr().length === 32768`, more than 8 distinct colours, more than one distinct
+scanline control byte, more than 500 dark pixels, and both black and white in
+the menu-bar row. All of those fail on the old code.
+
+Headless Chrome, `?machine=apple2gs&boot=true&drive=0#.../GSOS601.po`: lit pixels
+on the hidden canvas went from **0** to **246710 of 256000 (96%)**, and the
+screenshot is a complete GS/OS 6.0.1 Finder desktop - menu bar (`File Edit
+Windows View Disk Special Colors` plus a ticking clock), blue lattice desktop,
+`MDVOL2`, `APPLEDISK5.25A`, `APPLEDISK5.25B`, `GSHK` and the Trash. Read
+straight out of `getShr()`: 8 distinct SCB values (`$80 $80 $81 $81 $81 $82 $83
+$84 $85 $86 ...`), all 200 rows in 640 mode, and a real 16-colour palette at
+`$7E00`.
+
+Worker suite 764 pass / 1 pre-existing `vera.test.ts` failure; ui suite 272/272;
+`tsc --noEmit` clean.
+
+#### What this invalidates
+
+Sections 27, 29a, 32, 33, 34 and 38 all reasoned about a machine whose Super
+Hi-Res output was never reaching the screen. The measured facts still stand
+(the ADB reports are byte-correct, `$FF:C4D0` never executes, the cursor holes
+stay at zero while `hasMouseData()` is true), but they were measured on a
+machine with no visible screen, and "the Finder ignores the mouse" may well
+have been "the Finder was never displayed". The event-delivery question needs
+re-measuring now that the desktop is actually on screen - the mouse may work.
+
+#### Two things that are still open, and one trap worth naming
+
+1. **`isSuperHiResScreen()` does not check that SHR is on.** It is
+   `handleGetMachineName() === "APPLE2GS" && handleGetVidhdActive()`, and
+   `motherboard.ts` computes `vidhdActive` on the IIgs as
+   `SWITCHES.NEWVIDEO.isSet`, which *is* `$C029 & 0x80`. So the gate is right -
+   but only by accident of that expression, and it is worth an explicit test.
+2. **Music Construction Set, at the ProDOS 8 v1.2 banner, draws a repeating
+   garbage tile over its own correct 80-column text.** In that state the canvas
+   is 818x560 (legacy aspect), so `processSuperHiRes` is not running and this is
+   not this bug; it is the HiRes page holding junk. Section 34 recorded this as
+   "the pattern is in the text page itself". Needs its own look.
+3. **The trap:** `extractShrBuffer(memory, auxMemoryStart)` silently adds
+   `$2000`. Passing the start of the SHR window as `auxMemoryStart` is
+   off-by-a-window, and because `Array.slice` clamps instead of throwing, the
+   only symptom is a short buffer that a caller is free to ignore. Whenever a
+   fixed-size buffer comes back short, suspect a clamped `slice`, not a caller
+   that forgot to check.

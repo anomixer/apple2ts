@@ -1761,11 +1761,18 @@ const extractShrFromAux = (aux: Uint8Array): Uint8Array => {
   if (!isIigsAuxLinear()) {
     return vidhd.extractShrBuffer(aux, 0)
   }
-  const linear = new Uint8Array(0x8000)
+  // linear[] is indexed by the linear CPU address, so it has to reach $9FFF:
+  // 0xA000 bytes, of which $2000-$9FFF is the SHR window handed on below.
+  const linear = new Uint8Array(0xa000)
   for (let a = 0x2000; a <= 0x9fff; a++) {
     linear[a] = aux[iigsAuxLinearToPhys(a)]
   }
-  return vidhd.extractShrBuffer(linear, 0x2000)
+  // auxMemoryStart is the offset of the aux block, and extractShrBuffer adds
+  // $2000 to it itself. `linear` already *is* the linearized $2000-$9FFF window,
+  // so it must be passed as 0. Passing 0x2000 here reads linear[0x4000..0xC000],
+  // which clamps to 16384 bytes, and processSuperHiRes then rejects the buffer
+  // with "shrData.length < 0x8000" and never draws anything - a black screen.
+  return vidhd.extractShrBuffer(linear, 0)
 }
 
 export const getShr = (): Uint8Array => {
