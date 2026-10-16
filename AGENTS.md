@@ -1958,3 +1958,101 @@ So section 38's measurement stands and is now the whole remaining problem: the
 ADB holds an unread report (`hasMouseData()` true) for as long as the pointer
 moves, and the cursor position words `$047C/$057C/$04FC/$05FC` never leave zero,
 so nothing downstream can produce an event.
+
+---
+
+### 41. Negative mouse motion is lost in the ROM accumulator - lead found, fix NOT shipped
+
+The Apple IIgs cursor still never appears, and now that the desktop renders
+(section 39) that is the only thing left. `gs_mouse_who.test.ts` measures it, and
+the result is unambiguous:
+
+```
+-> 0.30,0.30  $001A/$0011      (X = $047C/$057C, Y = $04FC/$05FC)
+-> 0.45,0.45  $007A/$002F      +$60 / +$1E   correct
+-> 0.60,0.60  $00DA/$004D      +$60 / +$1E   correct
+-> 0.75,0.75  $013A/$006B      +$60 / +$1E   correct
+<- 0.60,0.60  $027F/$00C7      +$45 / +$5C   WRONG DIRECTION
+<- 0.45,0.45  $027F/$00C7      clamped at the screen maximum (639 / 199)
+```
+
+The cursor advances monotonically, so it ends up pinned in the bottom-right
+corner of the screen, which is why the arrow is never visible and why hovering
+the `File` menu title does nothing. Confirmed in a real browser the same way,
+with `window.__romTracePeek`: X goes 26 -> 405 -> 639 and Y 17 -> 124 -> 199
+while the pointer is walked right and then back left.
+
+#### Everything upstream of the bug is correct
+
+Every `$C024` byte the guest actually reads is right, negative direction
+included, and is read by the ROM's own ADB task at `$FF:$C4D9` / `$FF:$C4E6`:
+
+```
+moving right:  $C4D9=$BF  $C4E6=$9E    $C4D9=$A1  $C4E6=$80   (+63,+30) (+33,0)
+moving left :  $C4D9=$FF  $C4E6=$DE    $C4D9=$E1  $C4E6=$80   (-63,-30) (-33,0)
+```
+
+That is the KEGS / gssquared layout (bit 7 button, bit 6 negative, bits 5-0
+magnitude), it matches `latchMouseReport()`, and `iigsADBEvent()` computes the
+host delta correctly (`dx = round((event.x - adbLastX) * 640)`). GS/OS polls
+`$C027` at `$00:$C447` and the ROM accumulator at `$FF:9D77` / `$FF:9D8A` writes
+the cursor words. So ADB, the report, the ROM task and the delta are all sound.
+
+#### Where it goes wrong
+
+Stepping the accumulator instruction by instruction while a leftward report is
+being consumed shows `$FF:9D4C` is opcode **`$AA`**, executing with `E=0` -
+native mode. The real 65816 maps `$AA` to **PLY** in native mode and to TAX only
+in emulation mode (same for `$8A`: TXA vs BRK, and `$CA`: DEX vs PHY). Our
+`cpu65816.ts` runs the 6502 meaning unconditionally, so at `$FF:9D4C` the ROM's
+sign-extension path executes `TAX` instead of `PLY` and a negative delta is
+folded in as if it were positive.
+
+The opcode table is visibly a blend - `0x8B` is PHB, `0xAB` is PLB, `0x0B` is
+PHD, `0x5A` is PHY, all native meanings, while `0x8A`/`0xAA`/`0xCA` keep the
+6502 meanings.
+
+#### The fix was attempted and reverted - do not re-apply it blind
+
+Making `$AA` (and separately `$8A`, `$CA`) switch on `emulationMode` **breaks the
+GS/OS boot**: the screen goes blank, `isIigsAuxLinear()` never becomes true, and
+the 65816 instructions-per-cycle ratio in `gs_cycles.test.ts` collapses from
+0.36 to 0.25, i.e. the machine is spinning. Tried both combinations:
+
+| change | gsos_boot | gs_cycles |
+|---|---|---|
+| `$AA` + `$CA` + `$8A` | fail | fail |
+| `$AA` + `$CA` only | fail | fail |
+| reverted | pass (129/129) | pass |
+
+So either the native-mode map I reconstructed from memory is wrong, or something
+else in the emulator is load-bearing on the 6502 meaning. Real GS/OS 6.0.1 works
+on real hardware, so the map cannot be wrong in the way that matters - which
+means the bug, if any, is subtler than a missing mode switch here.
+
+**Next step:** settle the 65816 native-mode opcode map against an authoritative
+implementation instead of from memory - `c:\dev\gssquared\src\cpus\cpu_65816.cpp`
+and `base_6502.cpp` are the references, and `gs_cycles.test.ts` already pins the
+published cycle counts so it will catch a regression. Until that is done, treat
+this as a lead, not a fix.
+
+#### Two measurement traps hit along the way
+
+1. **GS/OS runs in native mode, so `$AD`/`$8D` are four-byte *long* forms.** A
+   filter that only decodes 16-bit absolute addressing finds *zero* accesses to
+   `$C020-$C02F` and concludes the OS never touches the ADB. Wrapping
+   `iigsADB.readMouseData` / `readStatus` and reading `cpu.PB`/`cpu.PC` records
+   the real caller and needs no opcode decoding at all.
+2. **`readData` is `$C026`; `$C024` is `readMouseData`.** They are different
+   methods. Wrapping the wrong one reports a confident zero.
+3. A test helper that calls `memGet24` from inside a wrapped ADB method
+   re-enters that method, because reading `$C024` is what called it. Needs a
+   reentrancy guard.
+
+#### Also settled along the way
+
+Sections 27, 29a and 38 claimed the ROM's ADB task never executes and the cursor
+words never leave zero. Both are wrong, and wrong because those runs stopped at
+1100 frames, before the Finder was up. At 4000 frames the task runs, GS/OS polls
+`$C027` 16 times per gesture, and the cursor words track the pointer exactly in
+the positive direction. The remaining fault is the direction sign, nothing else.
