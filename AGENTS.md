@@ -1059,7 +1059,14 @@ emulation-mode path, which is what old IIe games use, now matches the 6502.
    - Unpacks via `START.GS.OS` OMF relocator to Bank 7E and relocates 14 blocks into Banks 00, 01, E0, and E1.
    - Transitions cleanly from ProDOS 8 block access to 16-bit SmartPort calls.
    - Successfully loads `PRO.FST`, `DRIVERS`, `SYSTEM.SETUP`, `TOOLS` (QuickDraw, Window Manager, `TOOL034`), control panels, and desk accessories (`TIME`, `CHRONOS II`).
-   - Launches `/SYSTEM/START` (official Apple IIgs Finder) and renders the full 640x200 Super Hi-Res desktop with menu bar, clock, disk icons, trash can, mouse pointer, and system modal dialogs.
+   - Launches `/SYSTEM/START` (official Apple IIgs Finder) and renders the full 640x200 Super Hi-Res desktop with menu bar, clock, disk icons, trash can, and system modal dialogs.
+   - **The arrow cursor is NOT drawn and the mouse is effectively dead**: negative
+     motion is lost, so the cursor climbs monotonically and pins in the corner of
+     the screen. Hovering a menu title does not highlight it and a click does not
+     select anything. Everything up to and including the ROM's accumulator is
+     verified correct - see sections 27-41, and 41's byte sweep in particular for
+     the fact that it rules the CPU, the ADB report layout and the ROM arithmetic
+     all out.
 
 ## Reference Materials
 - **GSSquared**: `c:\dev\gssquared\` (Primary reference: `RTC_PRAM.hpp`, `IWM2.hpp`, `display.cpp`, `DevelopLog.md`, `mmu_iie.cpp`, `computer.cpp`)
@@ -1961,7 +1968,7 @@ so nothing downstream can produce an event.
 
 ---
 
-### 41. Negative mouse motion is lost in the ROM accumulator - lead found, fix NOT shipped
+### 41. Negative mouse motion is lost - narrowed to leftover ADB motion, fix NOT shipped
 
 The Apple IIgs cursor still never appears, and now that the desktop renders
 (section 39) that is the only thing left. `gs_mouse_who.test.ts` measures it, and
@@ -1998,7 +2005,7 @@ host delta correctly (`dx = round((event.x - adbLastX) * 640)`). GS/OS polls
 `$C027` at `$00:$C447` and the ROM accumulator at `$FF:9D77` / `$FF:9D8A` writes
 the cursor words. So ADB, the report, the ROM task and the delta are all sound.
 
-#### Where it goes wrong
+#### Where it goes wrong (this part is now superseded - see the sweep below)
 
 Stepping the accumulator instruction by instruction while a leftward report is
 being consumed shows `$FF:9D4C` is opcode **`$AA`**, executing with `E=0` -
