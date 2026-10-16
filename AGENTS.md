@@ -1910,3 +1910,51 @@ re-measuring now that the desktop is actually on screen - the mouse may work.
    only symptom is a short buffer that a caller is free to ignore. Whenever a
    fixed-size buffer comes back short, suspect a clamped `slice`, not a caller
    that forgot to check.
+
+---
+
+### 40. Copying a disk image into public/disks kills the vite dev server
+
+This is not an emulator bug but it cost two measurement rounds, and it looks
+exactly like "the emulator has no display" if you only look at the page.
+
+```
+node:internal/fs/watchers:323
+Error: EBUSY: resource busy or locked,
+  watch 'C:\dev\apple2ts\public\disks\GSOS601.po'
+      at NodeFsHandler._watchWithNodeFs (vite/dist/node/chunks/node.js:9561:20)
+```
+
+Vite's file watcher dies on a 32MB file in `public/` and the whole node
+process exits. The browser then shows Chrome's `ERR_CONNECTION_REFUSED` page,
+which is a blank screen - so it reads as an emulator regression and sends you
+hunting through commits that have nothing to do with it. It happened twice in
+one session: once during the original investigation, and again after the
+section 39 fix had already been verified.
+
+**Workaround in use:** serve the images from a separate static server instead,
+and point the URL fragment at it. `C:\Users\USER\AppData\Local\Temp\opencode\diskserver.cjs`
+serves `C:\dev\emu\ap2` on port 6503 with `Access-Control-Allow-Origin: *`:
+
+```
+http://localhost:6502/?machine=apple2gs&boot=true&drive=0#http://localhost:6503/GSOS601.po
+```
+
+**Check the server before blaming the emulator.** A `lit=0` canvas with no DOM
+errors and an `apple2canvas` of the right size means the page loaded; a canvas
+that does not exist at all, or `document.querySelectorAll('canvas').length === 0`,
+means the page never loaded. Those two look identical in a screenshot.
+
+#### Confirmed after the section 39 fix, in a real browser
+
+With the desktop finally visible, the outstanding event bug was re-tested on a
+live GS/OS 6.0.1 Finder rather than through assertions. The machine is healthy -
+the menu bar renders, the clock ticks (3:57:58, then 4:12:21 across runs), and
+all six drive slots and four disk icons draw - but moving the pointer over the
+`File` menu title does not highlight it and clicking it does not drop the menu,
+and the GS/OS arrow cursor is not on screen at all.
+
+So section 38's measurement stands and is now the whole remaining problem: the
+ADB holds an unread report (`hasMouseData()` true) for as long as the pointer
+moves, and the cursor position words `$047C/$057C/$04FC/$05FC` never leave zero,
+so nothing downstream can produce an event.
