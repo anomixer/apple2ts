@@ -348,8 +348,18 @@ export class IIGSADB {
     const buttonBit = this.mouseButton ? 0x00 : 0x80;
     this.pendingX -= dx;
     this.pendingY -= dy;
-    this.mouseRegs[0] = (Math.abs(dx) & 0x3f) | (dx < 0 ? 0x40 : 0x00) | buttonBit;
-    this.mouseRegs[1] = (Math.abs(dy) & 0x3f) | (dy < 0 ? 0x40 : 0x00) | buttonBit;
+    // Bits 6-0 are a *seven-bit two's complement* displacement, not a direction
+    // bit plus a magnitude. gssquared encodes it as (delta & 0x3F) with bit 6
+    // set for a negative delta (ADB_Mouse::encode_relative_motion), so -63 goes
+    // out as $41 and -1 as $7F. The IIgs ROM's accumulator (FF:9D49-FF:9D9E)
+    // pushes $FF as the sign byte on a negative report and then adds the 16-bit
+    // pair to the cursor, which turns the field into (field - 128) - so it only
+    // decodes correctly if the field is already a two's complement. Encoding
+    // the absolute magnitude made every negative report arrive as
+    // (magnitude - 64): a -63 move read as -1 and a -1 move as -63, so
+    // leftward motion was essentially lost and the cursor only ever climbed.
+    this.mouseRegs[0] = (dx & 0x3f) | (dx < 0 ? 0x40 : 0x00) | buttonBit;
+    this.mouseRegs[1] = (dy & 0x3f) | (dy < 0 ? 0x40 : 0x00) | buttonBit;
     this.mouseHasData = true;
     this.buttonChanged = false;
   }
@@ -369,8 +379,9 @@ export class IIGSADB {
   // bit 1 to know the second read is the Y byte). The format is the standard
   // ADB mouse register 0 layout:
   //   bit 7 = button 0 (1 = released)
-  //   bit 6 = direction (1 = moved negative: left for X, up for Y)
-  //   bits 5-0 = magnitude of the displacement, 0..63
+  //   bits 6-0 = signed displacement, -63..+63, two's complement
+  // so the displacement decodes as: (byte & 0x7F) with 0x40 subtracted when
+  // that bit is set. -63 is $41, -1 is $7F, +63 is $3F.
   readMouseData(): number {
     // KEGs's adb_read_c024() returns 0 when the mouse is off, rather than
     // whatever happens to be latched.

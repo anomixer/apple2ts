@@ -1,4 +1,4 @@
-# Apple IIgs Emulation Engineering Notes (Apple2ts)
+﻿# Apple IIgs Emulation Engineering Notes (Apple2ts)
 
 ## Overview
 This document records the engineering process and troubleshooting steps taken during the implementation of Apple IIgs (65816 CPU) support in the `apple2ts` emulator.
@@ -1060,13 +1060,19 @@ emulation-mode path, which is what old IIe games use, now matches the 6502.
    - Transitions cleanly from ProDOS 8 block access to 16-bit SmartPort calls.
    - Successfully loads `PRO.FST`, `DRIVERS`, `SYSTEM.SETUP`, `TOOLS` (QuickDraw, Window Manager, `TOOL034`), control panels, and desk accessories (`TIME`, `CHRONOS II`).
    - Launches `/SYSTEM/START` (official Apple IIgs Finder) and renders the full 640x200 Super Hi-Res desktop with menu bar, clock, disk icons, trash can, and system modal dialogs.
-   - **The arrow cursor is NOT drawn and the mouse is effectively dead**: negative
-     motion is lost, so the cursor climbs monotonically and pins in the corner of
-     the screen. Hovering a menu title does not highlight it and a click does not
-     select anything. Everything up to and including the ROM's accumulator is
-     verified correct - see sections 27-41, and 41's byte sweep in particular for
-     the fact that it rules the CPU, the ADB report layout and the ROM arithmetic
-     all out.
+   - **The arrow cursor now tracks the pointer correctly (both directions).**
+     Two separate bugs: (section 42) the ADB mouse report encoded the absolute
+     magnitude instead of a seven-bit two's complement, so every leftward report
+     decoded as roughly -1; and (section 43) the 65816 ADC overflow flag was
+     computed with (!x && y) !== 0, which in JavaScript is true whenever the
+     first term is boolean false, so V was set for every add whose operands had
+     different signs — exactly the case that cannot overflow. The ROM's cursor
+     reconciliation then treated every leftward move as out of bounds and clamped
+     it to 639. Both fixed; gs_cursor_draw.test.ts verifies the position is an
+     exact affine function of the pointer (offset -102) across interleaved
+     left/right moves. The remaining open piece is the GS/OS event-manager side
+     (turning that motion into a visible arrow redraw / a usable click target),
+     not the position tracking itself.
 
 ## Reference Materials
 - **GSSquared**: `c:\dev\gssquared\` (Primary reference: `RTC_PRAM.hpp`, `IWM2.hpp`, `display.cpp`, `DevelopLog.md`, `mmu_iie.cpp`, `computer.cpp`)
@@ -2147,3 +2153,162 @@ words never leave zero. Both are wrong, and wrong because those runs stopped at
 1100 frames, before the Finder was up. At 4000 frames the task runs, GS/OS polls
 `$C027` 16 times per gesture, and the cursor words track the pointer exactly in
 the positive direction. The remaining fault is the direction sign, nothing else.
+
+
+### 42. Negative mouse motion: the ADB report was the wrong encoding - FIXED
+
+**This is the bug behind every "negative motion is lost" observation in sections 27,
+29a, 38, 41 and the `$AA` dead end in section 41.** The report encoding in
+`latchMouseReport()` encoded the *absolute* magnitude into the low six bits. The
+correct encoding is a **seven-bit two's complement**.
+
+#### The bug
+
+```ts
+// was
+this.mouseRegs[0] = (Math.abs(dx) & 0x3f) | (dx < 0 ? 0x40 : 0x00) | buttonBit;
+// now
+this.mouseRegs[0] = (dx & 0x3f) | (dx < 0 ? 0x40 : 0x00) | buttonBit;
+```
+
+Two independent sources agree, and apple2ts was the odd one out:
+
+- **gssquared** `ADB_Mouse::encode_relative_motion`:
+  `(uint8_t)(xrel & 0x3F) | (moved_right ? 0x40 : 0x00)`. That is
+  `(xrel & 0x3F)`, not `abs(xrel) & 0x3F`.
+- **The IIgs ROM's own decoder**, derived (native-mode 65816, E=0).
+
+The ROM decodes a negative report's field `v` as `v - 128`, so a move of `-m`
+was delivered as `m - 64`:
+
+| host move | old field | ROM applied | correct field | ROM applies |
+|---|---|---|---|---|
+| -1 | `$41` | **-63** | `$7F` | -1 |
+| -8 | `$48` | **-56** | `$78` | -8 |
+| -32 | `$60` | -32 | `$60` | -32 |
+| -63 | `$7F` | **-1** | `$41` | -63 |
+
+Leftward motion was therefore wildly wrong, and happened to be correct only at
+`-32` (the one magnitude where `m - 64 == -m`). The single bit-6-set data
+point — probe byte `$40` (magnitude 0) giving `delta = -64` exactly — was the
+tell: under the correct encoding a zero delta has bit 6 clear.
+
+#### What the fix did and did not fix
+
+Negative motion now reaches the ROM's accumulator correctly. The *visible*
+symptom was *not* gone yet: the accumulator was correct (384 -> 321 for a -63
+report), but the ROM's cursor reconciliation then overwrote the holes from
+`$E1:$02B8-$02BD`. That remaining layer is the subject of **section 43**.
+
+#### Regression tests
+
+- `src/worker/gs_mouse_neg.test.ts` - boots GS/OS 6.0.1, then for a right, left
+  and up move asserts the *accumulator's own* result at `$FF:$9D92`/`$FF:$9D7A`
+  and the exact report bytes. This failed on the old code (384 -> 383 instead of
+  384 -> 321) and passes now.
+- `src/worker/gs_mouse_sound.test.ts` - decodes the report as a 7-bit two's
+  complement and asserts a backward move is the exact negation of a forward one.
+---
+
+### 43. 65816 ADC overflow flag — fixed by a JavaScript `!== 0` type bug (THE real fix behind the tracking cursor)
+
+**Symptom**: section 42's ADB encoding fix made the *reports* correct, and
+instrumentation confirmed that the ROM's cursor accumulator (`$FF:$9D8D-$9D9E`)
+computed the right answer (`384 - 63 = 321`, then `321 - 33 = 288`), yet the
+cursor still only ever climbed and pinned at 639 — for a *leftward* move the
+accumulator's result was overwritten to the screen maximum by the reconcile
+routine at `$FF:$9EC1-$9ED4` / `$FF:$9EDA-$9EEA`, which copies `$E1:$02BC/$02BD`
+(639) into `$047C/$057C`. The accumulator was fine; the wrong-value path was the
+out-of-bounds branch at `$FF:$9E76` being taken on every negative move.
+
+**Root cause — two layers**:
+
+1. **The reconcile branches on V.** The cursor accumulator adds the signed 16-bit
+   delta as two 8-bit ADCs (accumulator is in 8-bit mode there: M=1, two
+   `PLA`, each pulling a single byte). After the low-byte add, the routine called
+   at `$FF:$9E8B` does `BIT $07FC` / `BVC $9E86`; if V were set correctly
+   (only when A and the operand share a sign and the result does not), the real
+   out-of-bounds case would be rare. On real hardware `$FF + $01` (+ carry) could
+   not overflow and V stays clear — but in apple2ts V came back **set** on
+   every add whose operands had different signs.
+
+2. **The 65816 ADC overflow flag was computed with strict inequality against the
+   number `0`:**
+
+   ```ts
+   this.setFlag(Status816.V, (!((a8 ^ operand) & 0x80) &&
+                                 ((a8 ^ result8) & 0x80)) !== 0);
+   ```
+
+   `((a8 ^ operand) & 0x80)` is a *number*; `!that` is a *boolean*; and `&&`
+   therefore returns a **boolean `false`** when the first term fails. In
+   JavaScript, strict inequality never coerces across types: **`false !== 0` is
+   `true`**. So the whole expression reported *overflow* whenever the operands
+   had different signs — the case that *cannot* overflow — and reported *no*
+   overflow only in the opposite-sign-result-does-change-sign case. In other
+   words, the V flag ended up set essentially the wrong way round.
+
+   Six sites shared the same mistake:
+   - 8-bit binary ADC (`opADC`, `eightBit`)
+   - 16-bit binary ADC (`opADC`, 16-bit)
+   - 8-bit binary SBC (`opSBC`, `eightBit`)
+   - 16-bit binary SBC (`opSBC`, 16-bit)
+   - 8-bit decimal-mode ADC (the `v = (!...) && ...` line)
+   - 16-bit decimal-mode ADC (the same `v = ...` line)
+
+   That is why the ADC *looked* right in gssquared-style read comparisons but the
+   cursor still never moved left: the ROM trusts V absolutely.
+
+**Fix:**
+
+```ts
+private static readonly overflow8 = (a: number, b: number, r: number): boolean =>
+    ((~(a ^ b)) & (a ^ r) & 0x80) !== 0;
+private static readonly overflow16 = (a: number, b: number, r: number): boolean =>
+    ((~(a ^ b)) & (a ^ r) & 0x8000) !== 0;
+```
+
+placed on `CPU65816` itself, and every `.setFlag(Status816.V, ...)` call site
+replaced with `(CPU65816.overflow8(...)` / `CPU65816.overflow16(...)`)`. The
+bitwise form always yields a number, so the `!== 0` comparison behaves as
+intended: V is now set **exactly** when the two operands share a sign and the
+result does not.
+
+**Measurement that proved it**, all instrumented through a fake-timer jest
+harness that steps the ROM through `$FF:$9D8D-$9E7F` on a real mouse move:
+
+| move | entry P at `$9E76` | V | `BVC $9E86` at `$9E7F` | path |
+|---|---|---|---|---|
+| RIGHT | `$36` | clear | **taken** -> `$9E86` | reconcile skipped, holes survive |
+| LEFT | `$77` | **stuck set** (wrong) | not taken -> `$9E81` -> `$9E9A` | clamped to `$E1:$02BC` = 639 |
+
+After the fix the `BVC` is taken in *both* cases, so the reconcile clamps only
+when a coordinate genuinely left the screen. (`$80` is `BRA` in native mode, not
+`STA`: the byte dump `$FF:$9D55 = $80 $03 $8A` looked like `STA $038A` but a
+trace of executed PCs showed the branch skips `$9D57/$9D58`. See section 42 for
+that trap.)
+
+**Verification** (worker 1041/1042 pass, the only failure is the pre-existing
+`vera.test.ts` CMDR-DOS failure that also fails on a clean tree; `tsc --noEmit`
+clean):
+
+- `src/worker/gs_adc_flags.test.ts` — 19-case V/C truth table. Asserts
+  `expect(gotV).toBe(wantV)` and the old code failed it (e.g. `$FF + $01`
+  expected V=0, received V=1); all pass now.
+- `src/worker/gs_mouse_neg.test.ts` — the accumulator's own result at
+  `$FF:$9D92/$9D7A` and the exact report bytes (`384 -> 321 -> 288` instead
+  of `321 -> 606`).
+- `src/worker/gs_cursor_draw.test.ts` — end-to-end: the cursor position is now
+  an **exact affine function** of the pointer with a constant offset (-102)
+  across eight interleaved left/right moves; before the fix, leftward moves
+  clamped to the screen maximum instead.
+
+#### Result
+
+The Apple IIgs cursor follows the pointer in both directions again. Combined
+with section 42 (ADB report encoding) and section 27.39's note where applicable
+(SHR linearisation), this is another of the faults that together made the
+desktop "move nothing".
+
+Supporting artifacts: `src/worker/gs_adc_flags.test.ts`,
+`src/worker/gs_mouse_neg.test.ts`, `src/worker/gs_cursor_draw.test.ts`.

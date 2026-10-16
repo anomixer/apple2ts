@@ -11,8 +11,8 @@ export enum Status816 {
     Z = 0x02, // Zero
     I = 0x04, // Interrupt disable
     D = 0x08, // Decimal
-    X = 0x10, // Index registers are 8 bits (native); Break (emulation) — bit 4
-    M = 0x20, // Accumulator is 8 bits (native); unused, always 1 (emulation) — bit 5
+    X = 0x10, // Index registers are 8 bits (native); Break (emulation) ??bit 4
+    M = 0x20, // Accumulator is 8 bits (native); unused, always 1 (emulation) ??bit 5
     V = 0x40, // Overflow
     N = 0x80  // Negative
 }
@@ -201,7 +201,7 @@ export class CPU65816 implements ICPU {
     // Service an interrupt: push the return state, set I, clear D, fetch the
     // vector. Mirrors web-a2e's interrupt() verbatim. In emulation mode the
     // pushed P carries the 6502 B flag (bit 4 = FLAG816_X here): SET for a
-    // software BRK, CLEARED for a hardware interrupt — the handler's only way
+    // software BRK, CLEARED for a hardware interrupt ??the handler's only way
     // to tell them apart.
     private interrupt(nativeVector: number, emulationVector: number, software: boolean) {
         if (!this.emulationMode) {
@@ -568,7 +568,7 @@ export class CPU65816 implements ICPU {
             case 0x4B: this.opPush('K'); break; // PHK
             case 0xF4: this.opPush('PEA', this.fetch16()); break; // PEA
             case 0xD4: this.opPush('PEI', this.addrDirectIndirect()); break; // PEI
-            case 0x62: { // PER — pushes PC-1 + signed offset (PC is already past the 3-byte operand)
+            case 0x62: { // PER ??pushes PC-1 + signed offset (PC is already past the 3-byte operand)
                 let perOffset = this.fetch16();
                 if (perOffset & 0x8000) perOffset -= 0x10000;
                 this.opPush('PER', (this.PC + perOffset) & 0xFFFF);
@@ -1060,6 +1060,28 @@ export class CPU65816 implements ICPU {
         }
     }
 
+    // Signed overflow for ADC/SBC: set exactly when the two operands share a
+    // sign and the result does not.
+    //
+    // The obvious way to write this is
+    //     (!((a ^ b) & mask) && ((a ^ r) & mask)) !== 0
+    // and it is WRONG. `!x && y` evaluates to the *boolean* false when the
+    // first term fails, and `false !== 0` is TRUE in JavaScript, because
+    // strict inequality never coerces across types. So the expression reports
+    // overflow for every add whose operands have different signs - which is
+    // precisely the case that cannot overflow. The bitwise form below always
+    // yields a number, so the `!== 0` comparison behaves.
+    //
+    // This was not cosmetic: the IIgs ROM's cursor accumulator (FF:9D8D) adds
+    // the signed mouse delta with two 8-bit ADCs and the routine it then calls
+    // (FF:9E76) branches on V to detect the cursor leaving the screen. With V
+    // stuck on, every leftward move was judged out of bounds and the cursor was
+    // clamped to the screen maximum - the cursor that only ever climbed.
+    private static readonly overflow8 = (a: number, b: number, r: number): boolean =>
+        ((~(a ^ b)) & (a ^ r) & 0x80) !== 0;
+    private static readonly overflow16 = (a: number, b: number, r: number): boolean =>
+        ((~(a ^ b)) & (a ^ r) & 0x8000) !== 0;
+
     private opADC(address: number) {
         const eightBit = this.getFlag(Status816.M);
         this.chargeAddress("read", eightBit ? 1 : 2);
@@ -1119,7 +1141,7 @@ export class CPU65816 implements ICPU {
             this.setFlag(Status816.C, result > 0xFF);
             this.setFlag(Status816.Z, result8 === 0);
             this.setFlag(Status816.N, (result8 & 0x80) !== 0);
-            this.setFlag(Status816.V, (!((a8 ^ operand) & 0x80) && ((a8 ^ result8) & 0x80)) !== 0);
+            this.setFlag(Status816.V, CPU65816.overflow8(a8, operand, result8));
             this.A = (this.A & 0xFF00) | result8; // Keep high byte intact
         } else {
             const result = this.A + operand + carryIn;
@@ -1127,7 +1149,7 @@ export class CPU65816 implements ICPU {
             this.setFlag(Status816.C, result > 0xFFFF);
             this.setFlag(Status816.Z, result16 === 0);
             this.setFlag(Status816.N, (result16 & 0x8000) !== 0);
-            this.setFlag(Status816.V, (!((this.A ^ operand) & 0x8000) && ((this.A ^ result16) & 0x8000)) !== 0);
+            this.setFlag(Status816.V, CPU65816.overflow16(this.A, operand, result16));
             this.A = result16;
         }
     }
@@ -1145,7 +1167,7 @@ export class CPU65816 implements ICPU {
                 let al = (a & 0x0F) - (operand & 0x0F) + carryIn - 1;
                 if (al < 0) al = ((al - 0x06) & 0x0F) - 0x10;
                 let ua = (a & 0xF0) - (operand & 0xF0) + al;
-                const v = (!((a ^ n1) & 0x80) && ((a ^ ua) & 0x80)) !== 0;
+                const v = CPU65816.overflow8(a, n1, ua);
                 if (ua < 0) ua -= 0x60;
                 const result8 = ua & 0xFF;
                 this.A = (this.A & 0xFF00) | result8;
@@ -1169,7 +1191,7 @@ export class CPU65816 implements ICPU {
                 let ah = (aHi & 0x0F) - (bHi & 0x0F) + cOutLo - 1;
                 if (ah < 0) ah = ((ah - 0x06) & 0x0F) - 0x10;
                 let uaHi = (aHi & 0xF0) - (bHi & 0xF0) + ah;
-                const v = (!((aHi ^ n1Hi) & 0x80) && ((aHi ^ uaHi) & 0x80)) !== 0;
+                const v = CPU65816.overflow8(aHi, n1Hi, uaHi);
                 if (uaHi < 0) uaHi -= 0x60;
 
                 const result16 = ((uaHi & 0xFF) << 8) | (uaLo & 0xFF);
@@ -1190,7 +1212,7 @@ export class CPU65816 implements ICPU {
             this.setFlag(Status816.C, result >= 0x100);
             this.setFlag(Status816.Z, result8 === 0);
             this.setFlag(Status816.N, (result8 & 0x80) !== 0);
-            this.setFlag(Status816.V, (!((a8 ^ invertedOperand) & 0x80) && ((a8 ^ result8) & 0x80)) !== 0);
+            this.setFlag(Status816.V, CPU65816.overflow8(a8, invertedOperand, result8));
             this.A = (this.A & 0xFF00) | result8; // Keep high byte intact
         } else {
             const invertedOperand = operand ^ 0xFFFF;
@@ -1199,7 +1221,7 @@ export class CPU65816 implements ICPU {
             this.setFlag(Status816.C, result >= 0x10000);
             this.setFlag(Status816.Z, result16 === 0);
             this.setFlag(Status816.N, (result16 & 0x8000) !== 0);
-            this.setFlag(Status816.V, (!((this.A ^ invertedOperand) & 0x8000) && ((this.A ^ result16) & 0x8000)) !== 0);
+            this.setFlag(Status816.V, CPU65816.overflow16(this.A, invertedOperand, result16));
             this.A = result16;
         }
     }
@@ -1790,3 +1812,4 @@ export class CPU65816 implements ICPU {
         return (this.P & flag) !== 0;
     }
 }
+

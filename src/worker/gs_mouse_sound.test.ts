@@ -20,12 +20,17 @@ test("IIgs UI mouse events reach the ADB bus", () => {
     const adb = iigsADB as unknown as {
       mouseButton: boolean, hasMouseData: () => boolean, readMouseData: () => number
     }
-    // Consume one full report: the X byte then the Y byte.
+    // Consume one full report: the X byte then the Y byte. Bits 6-0 are a
+    // seven-bit two's complement displacement, so decode rather than mask.
     const readReport = () => {
       const x = adb.readMouseData()
       const y = adb.readMouseData()
+      const disp = (b: number) => {
+        const v = b & 0x7f
+        return v >= 0x40 ? v - 0x80 : v
+      }
       return {
-        x: x & 0x3f, y: y & 0x3f,
+        x: disp(x), y: disp(y),
         xNeg: (x & 0x40) !== 0, yNeg: (y & 0x40) !== 0,
         buttonUp: (x & 0x80) !== 0,
       }
@@ -47,11 +52,15 @@ test("IIgs UI mouse events reach the ADB bus", () => {
     expect(fwd.yNeg).toBe(false)
     expect(fwd.buttonUp).toBe(true)
 
-    // Moving back must set the direction bits and report the same magnitude.
+    // Moving back must produce the same displacement with the opposite sign.
+    // The raw low six bits are the *complement* of a negative displacement,
+    // not its magnitude: this is what the IIgs ROM's accumulator expects
+    // (FF:9D44-FF:9D9E), and encoding |delta| there made the cursor climb
+    // instead of going back.
     MouseCardEvent({ x: 0.5, y: 0.5, buttons: -1 })
     const back = readReport()
-    expect(back.x).toBe(fwd.x)
-    expect(back.y).toBe(fwd.y)
+    expect(back.x).toBe(-fwd.x)
+    expect(back.y).toBe(-fwd.y)
     expect(back.xNeg).toBe(true)
     expect(back.yNeg).toBe(true)
 
@@ -124,7 +133,8 @@ test("the ADB mouse goes silent when the mode byte says mouse off", () => {
     const readReport = () => {
       const x = adb.readMouseData()
       const y = adb.readMouseData()
-      return { x: x & 0x3f, y: y & 0x7f }
+      const v = x & 0x7f
+      return { x: v >= 0x40 ? v - 0x80 : v, y: y & 0x7f }
     }
 
     // Straight ahead: a movement produces a report.
