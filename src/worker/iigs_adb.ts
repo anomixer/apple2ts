@@ -304,9 +304,13 @@ export class IIGSADB {
     let hi = 0;
     if (addr === this.mouseAddr) {
       if (this.mouseHasData) {
+        // Same read-time button snapshot as $C024: register 0 carries the live
+        // button state when the guest polls it. Only for register 0 - registers
+        // 1-2 are other mouse registers, not the motion/button report.
+        if (reg === 0 && !this.reportInProgress) this.patchReportButton();
         lo = this.mouseRegs[reg * 2] ?? 0;
         hi = this.mouseRegs[reg * 2 + 1] ?? 0;
-        if (reg === 0) this.consumeReport();
+        if (reg === 0 && !this.reportInProgress) this.consumeReport();
       }
     } else if (addr === this.keyboardAddr) {
       lo = this.keyboardRegs[reg * 2] ?? 0;
@@ -390,13 +394,34 @@ export class IIGSADB {
     // setMouseButton; reading $C024 just hands it out one byte at a time.
     if (this.reportInProgress) {
       // Grab the Y byte before queueing up the next report, which overwrites
-      // the register.
+      // the register. The button bits were snapshotted (into both bytes) when
+      // the X byte was handed out, so Y matches X.
       const y = this.mouseRegs[1];
       this.consumeReport();
       return y;
     }
+    // First byte of a fresh report: snapshot the live button state now, so the
+    // report the guest is about to read reflects any press that happened after
+    // this motion was latched but before it was polled.
+    this.patchReportButton();
     this.reportInProgress = true;
     return this.mouseRegs[0];
+  }
+
+  // The button state travels in bit 7 of *both* report bytes, and a report is
+  // an atomic snapshot: the Y byte the guest reads after the X byte must show
+  // the same button state as the X byte did. KEGS composes that snapshot at
+  // $C024 read time from the live button state (g_emulated_buttons) instead of
+  // at event time, and gssquared's ADB_Mouse::update_button_down patches the
+  // waiting register's button bits on every event. Doing the same here means a
+  // press that arrives while a motion report sits unread is still visible in
+  // that report - previously it was deferred behind the leftover-motion chain
+  // a long move leaves in pendingX/pendingY, so after "move then click" the
+  // guest kept reading stale button-up reports and the click was lost.
+  private patchReportButton() {
+    const buttonBit = this.mouseButton ? 0x00 : 0x80;
+    this.mouseRegs[0] = (this.mouseRegs[0] & 0x7f) | buttonBit;
+    this.mouseRegs[1] = (this.mouseRegs[1] & 0x7f) | buttonBit;
   }
 
   queueMouse(dx: number, dy: number) {
@@ -408,8 +433,29 @@ export class IIGSADB {
   }
 
   setMouseButton(pressed: boolean) {
-    if (pressed !== this.mouseButton) this.buttonChanged = true;
+    if (pressed === this.mouseButton) return;
     this.mouseButton = pressed;
+    if (this.mouseHasData && !this.reportInProgress) {
+      // A motion report is sitting unread in the register. gssquared lets the
+      // latest event win: ADB_Mouse::process_event updates register 0 on every
+      // button transition (update_button_down patches the button bits), so
+      // patch the waiting report instead of queueing a second one behind it.
+      // Deferring used to leave the press stuck behind the leftover-motion
+      // reports of a long move, and a press that arrives after a motion but
+      // before any poll must still be seen by the guest.
+      this.patchReportButton();
+      return;
+    }
+    if (this.reportInProgress) {
+      // The guest is partway through $C024 (X byte out, Y byte to come) and the
+      // report is frozen with its own button snapshot; this report may be
+      // committed to the guest. consumeReport() latches the next one, so make
+      // sure it happens even with no motion pending.
+      this.buttonChanged = true;
+      return;
+    }
+    // Nothing unread: make the change visible immediately as its own report.
+    this.buttonChanged = true;
     this.latchMouseReport();
   }
 
