@@ -1,6 +1,6 @@
 import { COLOR_MODE, MONITOR_MODE, RUN_MODE, UI_THEMES } from "../common/utility"
 import { useGlobalContext } from "./globalcontext"
-import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging, passSetSlotConfig, passSetIwmStatsEnabled, passSetRomTraceEnabled, passResetRomTrace, passSetRomTracePeek, passSetAdbTraceEnabled, clearAdbTrace, setMouseEventLog } from "./main2worker"
+import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging, passSetSlotConfig, passSetIwmStatsEnabled, passSetRomTraceEnabled, passResetRomTrace, passSetRomTracePeek, passSetAdbTraceEnabled, clearAdbTrace, setMouseEventLog, passSetEnsoniqDebugEnabled } from "./main2worker"
 import { setDefaultBinaryAddress, handleSetDiskFromURL } from "./devices/disk/driveprops"
 import { loadOneDriveScript } from "./devices/disk/cloudscriptloader"
 import { isOneDriveMsalAuthCallback } from "./devices/disk/onedrive_authredirect"
@@ -75,6 +75,10 @@ export const handleInputParams = (paramString = "") => {
       (window as unknown as { __adbLogClear?: () => void }).__adbLogClear =
         () => clearAdbTrace()
     }
+  }
+
+  if (params.get("ensoniqdbg")) {
+    passSetEnsoniqDebugEnabled(true)
   }
 
   const mode = params.get("appmode") as string

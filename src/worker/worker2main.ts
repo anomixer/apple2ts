@@ -45,6 +45,7 @@ import { setSiriusJoyport } from "./devices/sirius_joyport"
 import { getCurrentMemory, memGet24, getCurrentMachineName } from "./memory"
 import { getIwmReadStats } from "./devices/diskdata"
 import { getAdbLog, setAdbLogEnabled, clearAdbLog } from "./iigs_adb"
+import { iigsEnsoniq, docAccess } from "./devices/iigs_ensoniq"
 import { getRomTrace, setRomTraceEnabled, clearRomTrace } from "./romtrace"
 
 // This file must have worker types, but not DOM types.
@@ -135,6 +136,12 @@ export const passIwmReadStats = (stats: MessagePayload) => {
 // iigs_adb.ts. Poll pattern for the same worker-reload reason as IwmReadStats.
 export const passAdbTrace = (entries: MessagePayload) => {
   doPostMessage(MSG_WORKER.ADB_TRACE, entries)
+}
+
+// Debug-only Ensoniq DOC access stats (?ensoniqdbg=1). Same request/response
+// pattern as IwmReadStats, for the same worker-reload reason.
+export const passEnsoniqDocStats = (stats: MessagePayload) => {
+  doPostMessage(MSG_WORKER.ENSONIQ_DOC_STATS, stats)
 }
 
 // Debug-only 65816 PC trace (?romtrace=1). See src/worker/romtrace.ts.
@@ -536,7 +543,26 @@ if (typeof self !== "undefined") {
         // current boot attempt.
         passIwmReadStats(getIwmReadStats() as MessagePayload)
         break
+      case MSG_MAIN.ENSONIQ_DOC_REQUEST:
+        // ?ensoniqdbg=1: answer with how much the program has touched the
+        // DOC and whether any oscillator is running, so "the game is silent"
+        // can be split into "no chip access", "programmed but silent", and
+        // "producing samples but the transport dropped them".
+        passEnsoniqDocStats({
+          docAccess: { ...docAccess },
+          osce: iigsEnsoniq.osce,
+          active: iigsEnsoniq.hasActiveOscillators(),
+          soundadrl: iigsEnsoniq.soundadrl,
+          soundadrh: iigsEnsoniq.soundadrh,
+          systemVolume: iigsEnsoniq.systemVolume,
+          osc: iigsEnsoniq.oscillators.slice(0, 4).map(o => ({
+            ctrl: o.control, vol: o.vol, freq: o.freq,
+            wt: o.wavetblpointer, acc: o.accumulator, irq: o.irqpend,
+          })),
+        } as unknown as MessagePayload)
+        break
       case MSG_MAIN.ADB_TRACE_REQUEST: {
+
         // ?adbtrace=1: answer with the ADB UI/report/read ring so a browser
         // run can see the whole event chain (see iigs_adb.ts noteAdbLog).
         // The machine name and event count help a dead-calm log say which

@@ -433,6 +433,23 @@ export const passSetAdbTraceEnabled = (enabled: boolean, clear = false) => {
 // One-shot ring reset (window.__adbLogClear), without touching the poll timer.
 export const clearAdbTrace = () => doPostMessage(MSG_MAIN.ADB_TRACE_REQUEST, { enabled: true, clear: true })
 
+// ?ensoniqdbg=1 only: poll the worker for the Ensoniq DOC access stats. The
+// state lives in the worker (docAccess counters plus the live oscillator
+// picture), so a browser run can see whether a silent game is "never touched
+// the chip", "programmed it but everything is halted", or "producing samples
+// that never reached the AudioContext" (that last one is window.__ensoniqDebug).
+let ensoniqDbgTimer = 0
+export const passSetEnsoniqDebugEnabled = (enabled: boolean) => {
+  if (!enabled) {
+    if (ensoniqDbgTimer) { clearInterval(ensoniqDbgTimer); ensoniqDbgTimer = 0 }
+    return
+  }
+  if (ensoniqDbgTimer) return
+  const poll = () => doPostMessage(MSG_MAIN.ENSONIQ_DOC_REQUEST, true)
+  poll()
+  ensoniqDbgTimer = window.setInterval(poll, 1000)
+}
+
 // ?romtrace=1 only: poll the worker for the debug 65816 PC trace. The trace
 // window has to be cleared at a known point, so the caller passes
 // window.__romTraceReset() to mark a fresh boot attempt.
@@ -592,6 +609,8 @@ export let lastIwmReadStats: unknown = null
 export const getLastIwmReadStats = () => lastIwmReadStats
 export let lastRomTrace: unknown = null
 export const getLastRomTrace = () => lastRomTrace
+export let lastEnsoniqDocStats: unknown = null
+export const getLastEnsoniqDocStats = () => lastEnsoniqDocStats
 
 export const doOnMessage = (e: MessageEvent): {speed: number, helptext: string} | null => {
   switch (e.data.msg as MSG_WORKER) {
@@ -643,6 +662,13 @@ export const doOnMessage = (e: MessageEvent): {speed: number, helptext: string} 
       doPlayDriveSound(sound)
       break
     }
+    case MSG_WORKER.ENSONIQ_DOC_STATS:
+      // ?ensoniqdbg=1: DOC access picture for the current boot attempt. A
+      // request/response poll (see passSetEnsoniqDebugEnabled), never a sticky
+      // worker flag, because worker modules reload under a live page.
+      lastEnsoniqDocStats = e.data.payload
+      ;(window as unknown as { __ensoniqDocStats?: unknown }).__ensoniqDocStats = lastEnsoniqDocStats
+      break
     case MSG_WORKER.IWM_READ_STATS: {
       // Apple IIgs IWM read-cadence instrumentation (?iwmgaps=1 only). Kept on
       // a plain module variable plus a window handle so a headless-browser run

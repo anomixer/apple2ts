@@ -113,12 +113,17 @@ export class IigsEnsoniq {
     } else {
       switch (offset) {
         case 0xe0: {
-          const retval = this.rege0
+          let retval = this.rege0
           if (this.irqCallback) this.irqCallback(false)
-          // Ack one pending oscillator
+          // Ack one pending oscillator. gssquared es5503.cpp: when a pend is
+          // found, retval becomes (i << 1) — bit 7 clear ("interrupt present"),
+          // voice number in bits 5-1 — and rege0 stages retval | 0x80 for the
+          // next read. The ROM's IRQ dispatcher (FF:B91F) trusts that bit to
+          // decide whether to JSL $E1:002C.
           for (let i = 0; i < (this.osce < 1 ? 1 : this.osce); i++) {
             if (this.oscillators[i].irqpend) {
-              this.rege0 = (i << 1) | 0x80
+              retval = i << 1
+              this.rege0 = retval | 0x80
               this.oscillators[i].irqpend = 0
               break
             }
@@ -271,15 +276,78 @@ export class IigsEnsoniq {
     this.soundadrh = data & 0xff
   }
 
-  // Whether any oscillator is currently active (heard sound likely)
+  // Whether any oscillator is currently running. Volume is deliberately NOT
+  // required: a zero-volume oscillator with a frequency and the halt bit clear
+  // is the standard IIgs timer-oscillator tick (Apple TN #23) — the chip must
+  // keep advancing it so its end-of-wave IRQ fires and drivers wake from WAI.
   hasActiveOscillators(): boolean {
     for (let i = 0; i < Math.max(1, this.osce); i++) {
       const o = this.oscillators[i]
-      if (!(o.control & 1) && o.vol > 0 && o.freq > 0) {
+      if (!(o.control & 1) && o.freq > 0) {
         return true
       }
     }
     return false
+  }
+
+  // halt_osc() ported verbatim from gssquared ensoniq.cpp (MAME-derived).
+  // type 0 = wave-table end reached (wrap), type 1 = zero byte in sample data.
+  // Sync/AM groups loop rather than halt (retriggering the odd partner), swap
+  // mode starts its partner, free-run preserves fractional phase, and the voice
+  // IRQ fires in every case when control bit 3 is set — which is how zero-volume
+  // timer oscillators tick IIgs sound drivers (Apple TN #23) and wake WAI.
+  private haltOsc(onum: number, type: 0 | 1, accHolder: { v: number }, resshift: number, newCtrl: number) {
+    const o = this.oscillators[onum]
+    const partner = this.oscillators[onum ^ 1]
+    let mode = (o.control >> 1) & 3
+    const partnerMode = (partner.control >> 1) & 3
+
+    // Check for sync mode
+    if (mode === 2) {
+      if ((onum & 1) === 0 && onum > 0) {
+        // We're even, so if the odd oscillator 1 below us is playing, restart it
+        if (!(this.oscillators[onum - 1].control & 1)) {
+          this.oscillators[onum - 1].accumulator = 0
+        }
+      }
+      // Loop this oscillator for both sync and AM
+      mode = 0
+    }
+
+    // If 0 found in sample data or mode is not free-run, halt this oscillator
+    if ((mode !== 0) || (type !== 0)) {
+      o.control |= 1
+    } else {
+      // Preserve fractional phase when looping (MAME / Peter Ferrie): subtract
+      // (wtsize - 1) << resshift, not the full table, not "zero the index".
+      const wtsizeM1 = o.wtsize - 1
+      accHolder.v -= (wtsizeM1 << resshift)
+    }
+
+    // If we're in swap mode, start the partner
+    if (mode === 3) {
+      partner.control &= ~1    // Clear the halt bit
+      partner.accumulator = 0
+    } else {
+      // If we're the even oscillator and partner is swap, we retrigger
+      if (partnerMode === 3 && (onum & 1) === 0) {
+        o.control &= ~1
+        const wtsize = o.wtsize - 1
+        accHolder.v -= (wtsize << resshift)
+      }
+    }
+    o.control &= 0xff
+
+    // IRQ enabled for this voice?
+    if (o.control & 0x08) {
+      // MAME: when the halt comes from a CPU write (type 0), only fire if the
+      // newly written control value also has IRQ enabled (NTPstop / Bard's Tale).
+      if (type === 0 && !(newCtrl & 0x08)) {
+        return
+      }
+      o.irqpend = 1
+      this.updateIrqStatus()
+    }
   }
 
   // Produce a short PCM (Int16 samples) block at DOC output rate
@@ -311,19 +379,17 @@ export class IigsEnsoniq {
         let acc = o.accumulator
         let ctrl = o.control
         for (let s = 0; s < numFrames; s++) {
-          const altram = acc >> (resshift < 1 ? 1 : resshift)
+          const shift = resshift < 1 ? 1 : resshift
+          const altram = acc >> shift
           let ramptr = altram & sizemask
           acc += freq
-          let data = ensoniqDocRam[(ramptr + wtptr) & 0xffff] ^ 0x80
-          // loop
-          if (ensoniqDocRam[(ramptr + wtptr) & 0xffff] === 0) {
-            ctrl |= 1
-            if (o.control & 0x08) {
-              o.irqpend = 1
-              this.updateIrqStatus()
-            }
-          }
-          if (!(ctrl & 1)) {
+          const waveByte = ensoniqDocRam[(ramptr + wtptr) & 0xffff]
+          const data = waveByte ^ 0x80
+          const accHolder = { v: acc }
+          if (waveByte === 0) {
+            this.haltOsc(osc, 1, accHolder, shift, o.control)
+            ctrl = o.control
+          } else {
             if (mode !== 2) {
               mix[(s*chan)+ch] += data * vol
               if (osc === ossecs - 1) {
@@ -345,18 +411,17 @@ export class IigsEnsoniq {
                 }
               }
             }
-          }
-          if (altram >= wtsizeMinus) {
-            // Free-run wraps by phase (gssquared halt_osc type 0) instead of
-            // stopping.
-            if (mode !== 0) {
-              ctrl |= 1
-            } else {
-              acc -= (wtsizeMinus << (resshift < 1 ? 1 : resshift))
+            acc = accHolder.v
+            // MAME: wrap/halt when pre-increment position reaches end
+            // (wtsizeMinus here is already o.wtsize - 1).
+            if (altram >= wtsizeMinus) {
+              this.haltOsc(osc, 0, accHolder, shift, o.control)
+              ctrl = o.control
             }
+            acc = accHolder.v
           }
           if (ctrl & 1) break
-          // datastore
+          o.data = data ^ 0x80
         }
         o.accumulator = acc
         o.control = ctrl & 0xff

@@ -2440,3 +2440,111 @@ instructed in section 26b — never sticky worker flags):
 posts-per-press (count `C674` occurrences per dispatch vs `$C52B` record
 writes), identify the `$2006`/`$1F03`/`$0323` toolset semantics, and decode the
 mask table bytes at `$FEBAA6`/`$FEBACA` from `gssystem.bin`.
+
+### 46. Tass Times In Tonetown silence: the DOC timer-oscillator IRQ chain — FIXED
+
+**Reported symptom**: "Tass Times in Tonetown" (`.2mg`, slot 7) is completely
+silent on the Apple IIgs. The 16-voice game runs its own ProDOS-resident 65816
+sound driver, which was initializing the Ensoniq DOC and then going idle
+(`docAccess c19 d102154 al16 ah8 r36`, every oscillator halted, `osce=32`).
+
+The root cause was a chain of four independent faults at the *wake-up* end of
+the sound system, all in `src/worker/devices/iigs_ensoniq.ts` /
+`iigs_ensoniq.ts`. The game's main loop is `SEP / WAI / SEI / JSR $1203 / CLI`;
+with no DOC IRQ the `WAI` sleeps forever, which is why the driver never got
+serviced and the title screen music never started.
+
+#### The chain, link by link
+
+1. **`hasActiveOscillators()` demanded `vol > 0`.** The game's timer is the
+   classic Apple TN #23 trick: a *zero-volume* oscillator with a frequency and
+   the halt bit clear. Our gate (`motherboard.ts` calls it each frame to decide
+   whether to run `generateSamples()` at all) required `vol > 0`, so the timer
+   never advanced. Condition dropped to `!(control & 1) && freq > 0`.
+2. **End-of-wave wrap never fired the voice IRQ.** `generateSamples()` only
+   set `irqpend` on the zero-byte path. gssquared's `halt_osc()`
+   (`src/devices/es5503/ensoniq.cpp`) fires it on *both* conditions, so it was
+   ported verbatim as `haltOsc(onum, type, accHolder, resshift, newCtrl)`,
+   handling: sync/AM → loop + retrigger the odd partner below, swap → start the
+   partner (`partner.control &= ~1; acc = 0`), free-run wrap → subtract
+   `(wtsize - 1) << resshift` to preserve fractional phase, and
+   `if (control & 0x08) { irqpend = 1; updateIrqStatus() }` in every case.
+   The MAME `newCtrl` gate (CPU-written halt with bit 3 clear does not IRQ)
+   applies to `type === 0` calls with a freshly written control byte.
+3. **IRQ line wiring**: `iigsInterruptPending()` already included
+   `iigsEnsoniq.irqPending()`, and `updateIrqStatus()` → `irqCallback` → the
+   motherboard's per-instruction level-triggered re-evaluation — so once pends
+   fire, WAI wakes and `$FF:C074` → `JML $E1:0010` reaches the ROM's full
+   interrupt manager (`$FF:B7CC`). No further wiring needed.
+4. **THE REAL BUG — the E0 read never reported the oscillator.** With the
+   timer firing every frame and the manager entering 35 times, the dispatch at
+   `FF:B91F` never happened, so `$E1:002C` (the game's handler `JML $001338`)
+   ran zero times. instrumentation (a `readData()` wrapper keyed by the
+   caller's `PB:PC` + state) showed the manager's two reads:
+   `ffb918= $3e (txn=0)` then `ffb91b= $ff (txn=1)` — the second read, the one
+   the manager stores into `$E1:00CC` and tests `BMI` on, was always
+   "interrupt not present".
+
+   gssquared's E0 handler overwrites `retval` when it acks a pend:
+
+   ```cpp
+   retval = m_rege0;                    // previous latch
+   ...
+   for (i...) if (irqpend) { retval = (i << 1); m_rege0 = retval | 0x80; irqpend = 0; break }
+   ...
+   return retval | 0x41;
+   ```
+
+   Our version wrote `this.rege0 = (i << 1) | 0x80` but never overwrote the
+   *return* value, so `retval | 0x41` was always the *previous* `rege0`
+   (`0xFF` → bit 7 set → "no interrupt"), independent of what it just acked.
+   One-line fix: `retval = i << 1; this.rege0 = retval | 0x80`. After the fix
+   the manager's second read is `$7F` (`31 << 1 | 0x41`) and the dispatch runs.
+
+#### Verification (`src/worker/gs_tass.test.ts`, now a regression test)
+
+- Entering the run: game frozen at `$0E0A` (`WAI`), `E1:002C slot=0`,
+  game handler `$1338=0`, manager DOC section ~1 pass.
+- After the fix:
+  - timer oscillator `osc31: c$0b/v$0/f$500/irq-active` (halt clear, IRQ en);
+  - `E1:002C game vector slot=444` and climbing every phase;
+  - `game IRQ handler $1338=14020`, `game DOC driver $1390-$1500=51769`;
+  - `docAccess c2238 d106190` (the driver is being serviced every tick);
+  - PC left the `$0E0A` pattern after a keypress (`$32B6`/`$3006`).
+- The test now asserts the whole chain: a running timer osc, `irqSeen`,
+  `E1:002C` dispatches > 150, game handler > 1000 executions, and that the
+  hottest PC of the final phase is not the `$0E0A` stall.
+- Full suite 1135/1136 (the only failure is the pre-existing `vera.test.ts`
+  CMDR-DOS failure that also fails on a clean tree); `tsc --noEmit` clean.
+
+#### Debug instrumentation added (zero cost when off; all request/response)
+
+- `?ensoniqdbg=1` (`src/ui/inputparams.ts` → `main2worker.passSetEnsoniqDebugEnabled`)
+  polls the worker (1 Hz) for a DOC picture; `worker2main.ts` answers
+  `MSG_WORKER.ENSONIQ_DOC_STATS` with `docAccess`, `osce`,
+  `hasActiveOscillators()`, the sound address regs, system volume and the first
+  4 oscillators' control/vol/freq/wtptr/acc/irqpend. It lands on
+  `window.__ensoniqDocStats`.
+- `gs_tass.test.ts` wraps `iigsEnsoniq.readData()` with a caller-stamped log
+  (`PB:PC=ret (adrl txn latch)`), an irqpend window timeline (instruction
+  ranges in which any pend was held), and bank-aware PC ranges for the
+  manager/DOC-section/game-handler dispatch chain.
+
+#### Measurement traps met on the way (worth remembering)
+
+- The RANGES histogram in `gs_tass.test.ts` matched banked ranges in the bank-0
+  loop (no `bank` check), silently corrupting FF/FE counts. First loop must
+  skip `r.bank !== undefined`; second loop must require `cpu.PB === r.bank`.
+- 65816 PC recorded per instruction is the *start* PC, but my wrapper saw the
+  PC *after* operand fetch for `LDA $C03D` (`b915` logged as `b918`) — offsets
+  of +3 for an absolute operand. Anything correlating a PC log with a
+  disassembly has to allow for that.
+- `dis5.cjs` prints long-operand instructions with the wrong data-bank
+  rendering (`LDA $E1:C03D` instead of the long-absolute `$C03D`); both are the
+  same SoftSwitch on the IIgs because I/O is decoded in every bank.
+- The ROM routine at `FF:3F6E/3F75` (`LDA #$E0 -> STA $C03E`, then
+  `LDX #$22; LDA $C03D; DEX; BNE`) reads E0 35 times back-to-back - NOT the
+  bug; each pipeline transaction acks at most one pend and the loop drains
+  whatever the staged latch holds.
+- Zero-volume oscillators are *supposed* to keep the chip running. Any gate
+  that treats "silent" as "no work" starves exactly the TN #23 timer pattern.
