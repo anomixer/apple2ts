@@ -19,6 +19,26 @@ let blocksPlayed = 0
 
 export const getEnsoniqBlocksPlayed = (): number => blocksPlayed
 
+// Debug counters for browser diagnosis (?ensoniqdbg=1 exposes them as
+// window.__ensoniqDebug). A silent machine and a suspended AudioContext look
+// identical from the block counter alone, and resume() rejections are otherwise
+// swallowed by void.
+const ensoniqDebug = {
+  contextState: "none",
+  resumeAttempts: 0,
+  resumeFailures: 0,
+  lastResumeError: "",
+  playCalls: 0,
+}
+export const getEnsoniqDebug = () => ensoniqDebug
+const noteEnsoniqDebug = () => {
+  if (typeof window === "undefined") return
+  ;(window as unknown as { __ensoniqDebug?: unknown }).__ensoniqDebug = {
+    ...ensoniqDebug,
+    contextState: audioContext ? audioContext.state : "none",
+  }
+}
+
 const ensureContext = (): AudioContext | null => {
   if (audioContext) return audioContext
   try {
@@ -47,7 +67,12 @@ const ensureContext = (): AudioContext | null => {
 }
 
 export const playEnsoniqSamples = (samples: Int16Array, sampleRate: number) => {
-  if (!isAudioEnabled()) return
+  ensoniqDebug.playCalls++
+  noteEnsoniqDebug()
+  if (!isAudioEnabled()) {
+    ensoniqDebug.contextState = "disabled"
+    return
+  }
   if (samples.length === 0) return
   blocksPlayed++
   // Exposed on the page so a headless run can distinguish "the DOC produced
@@ -56,11 +81,20 @@ export const playEnsoniqSamples = (samples: Int16Array, sampleRate: number) => {
     ;(window as unknown as { __ensoniqBlocks?: number }).__ensoniqBlocks = blocksPlayed
   }
   const ctx = ensureContext()
-  if (!ctx) return
+  if (!ctx) {
+    ensoniqDebug.contextState = "unavailable"
+    return
+  }
   // Browsers start a fresh context suspended until the user interacts with the
-  // page. Asking for a resume on every block covers that without spamming.
+  // page. Asking for a resume on every block covers that without spamming -
+  // and every rejected resume is now counted instead of swallowed, so a
+  // never-unblocked transport is diagnosable (window.__ensoniqDebug).
   if (ctx.state === "suspended") {
-    void ctx.resume()
+    ensoniqDebug.resumeAttempts++
+    ctx.resume().catch((error) => {
+      ensoniqDebug.resumeFailures++
+      ensoniqDebug.lastResumeError = String(error)
+    })
   }
   const frameCount = Math.floor(samples.length / 2)
   if (frameCount <= 0) return
@@ -92,6 +126,7 @@ export const playEnsoniqSamples = (samples: Int16Array, sampleRate: number) => {
   if (nextTime > now + 0.5) nextTime = now
   source.start(nextTime)
   nextTime += frameCount / sampleRate
+  noteEnsoniqDebug()
 }
 
 export const resetEnsoniqAudio = () => {
@@ -103,7 +138,13 @@ export const resetEnsoniqAudio = () => {
   audioContext = null
   outputNode = null
   blocksPlayed = 0
+  ensoniqDebug.contextState = "none"
+  ensoniqDebug.resumeAttempts = 0
+  ensoniqDebug.resumeFailures = 0
+  ensoniqDebug.lastResumeError = ""
+  ensoniqDebug.playCalls = 0
   if (typeof window !== "undefined") {
     ;(window as unknown as { __ensoniqBlocks?: number }).__ensoniqBlocks = 0
   }
+  noteEnsoniqDebug()
 }

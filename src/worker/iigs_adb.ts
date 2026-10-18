@@ -22,6 +22,7 @@
  * Device model follows gssquared's src/devices/adb/{ADB_Micro,ADB_Mouse,
  * ADB_Keyboard}.hpp, which is the reference implementation.
  */
+import { getCpuPc } from "./cpu_pc"
 
 // $C027 status bits
 const STATUS_MOUSE_DATA = 0x80;          // bit 7: a mouse report is waiting
@@ -50,6 +51,42 @@ export const ADB_MODE_KBD_AUTOPOLL_OFF = 0x01;
 export const ADB_MODE_MOUSE_OFF = 0x02;
 
 const ADB_VERSION = 0x06;               // GS/OS 6 reports version 6
+
+// Debug event ring for ?adbtrace=1 (browser: window.__adbLog, jest: getAdbLog()).
+// Records the UI events that reach the ADB, every report latch, and every byte
+// the guest reads, so "the cursor froze / the click was lost" can be answered
+// layer by layer without guessing which side dropped an event.
+export interface AdbLogEntry {
+  t: number
+  kind: string    // "ui" (buttons event), "queue", "button", "latch", "byte", "poll", "consume"
+  a?: number
+  b?: number
+  c?: number
+  pc?: number
+}
+const adbLog: AdbLogEntry[] = []
+let adbLogEnabled = false
+export { adbLogEnabled }
+export const setAdbLogEnabled = (enabled: boolean) => {
+  // Idempotent: the ?adbtrace=1 poll re-asserts the flag every 500 ms and must
+  // not wipe the ring it is about to read.
+  if (adbLogEnabled === enabled) return
+  adbLogEnabled = enabled
+  adbLog.length = 0
+}
+export const getAdbLog = (): AdbLogEntry[] => adbLog.slice()
+export const clearAdbLog = () => { adbLog.length = 0 }
+const noteAdbLog = (kind: string, a?: number, b?: number, c?: number) => {
+  if (!adbLogEnabled) return
+  const pc = getCpuPc()
+  // The GS/OS idle loop spins on $E100FF (pcs below) and would otherwise
+  // flood the ring, evicting click-relevant entries.
+  if (pc === 0xffbff3 || pc === 0xffc063 || pc === 0xffc068 || pc === 0x46e37 || pc === 0x46e3c) return
+  if (adbLog.length >= 20000) adbLog.shift()
+  adbLog.push({ t: Date.now(), kind, a, b, c, ...(pc >= 0 ? { pc } : {}) })
+}
+export { noteAdbLog }
+
 
 // How many argument bytes follow a command byte in $C026. Mirrors
 // ADB_Micro::write_cmd_register.
@@ -135,15 +172,19 @@ export class IIGSADB {
     if (this.reportInProgress) status |= STATUS_MOUSE_Y_NEXT;
     if (this.commandFull()) status |= STATUS_COMMAND_FULL;
     status |= this.interruptEnables;
+    noteAdbLog("stat", status);
     return status;
   }
 
   writeStatus(v: number) {
+    noteAdbLog("wstat", v);
     this.interruptEnables = v & STATUS_INTERRUPT_ENABLES;
   }
 
   readData(): number {
-    return this.response.length > 0 ? (this.response.shift() as number) : 0x00;
+    const v = this.response.length > 0 ? (this.response.shift() as number) : 0x00;
+    noteAdbLog("data", v);
+    return v;
   }
 
   // Queue a reply for the CPU to read out of $C026. Two different framings are
@@ -307,10 +348,15 @@ export class IIGSADB {
         // Same read-time button snapshot as $C024: register 0 carries the live
         // button state when the guest polls it. Only for register 0 - registers
         // 1-2 are other mouse registers, not the motion/button report.
-        if (reg === 0 && !this.reportInProgress) this.patchReportButton();
+        if (reg === 0 && !this.reportInProgress) {
+          this.patchReportButton();
+          noteAdbLog("poll", this.mouseRegs[0], this.mouseRegs[1], value);
+        }
         lo = this.mouseRegs[reg * 2] ?? 0;
         hi = this.mouseRegs[reg * 2 + 1] ?? 0;
         if (reg === 0 && !this.reportInProgress) this.consumeReport();
+      } else if (reg === 0) {
+        noteAdbLog("poll", -1, -1, value);
       }
     } else if (addr === this.keyboardAddr) {
       lo = this.keyboardRegs[reg * 2] ?? 0;
@@ -351,8 +397,7 @@ export class IIGSADB {
     if (dx === 0 && dy === 0 && !this.buttonChanged) return;
     const buttonBit = this.mouseButton ? 0x00 : 0x80;
     this.pendingX -= dx;
-    this.pendingY -= dy;
-    // Bits 6-0 are a *seven-bit two's complement* displacement, not a direction
+    this.pendingY -= dy;    // Bits 6-0 are a *seven-bit two's complement* displacement, not a direction
     // bit plus a magnitude. gssquared encodes it as (delta & 0x3F) with bit 6
     // set for a negative delta (ADB_Mouse::encode_relative_motion), so -63 goes
     // out as $41 and -1 as $7F. The IIgs ROM's accumulator (FF:9D49-FF:9D9E)
@@ -366,6 +411,7 @@ export class IIGSADB {
     this.mouseRegs[1] = (dy & 0x3f) | (dy < 0 ? 0x40 : 0x00) | buttonBit;
     this.mouseHasData = true;
     this.buttonChanged = false;
+    noteAdbLog("latch", dx, dy, buttonBit);
   }
 
   // The OS has just finished a report (both $C024 bytes, or a poll of device
@@ -389,8 +435,10 @@ export class IIGSADB {
   readMouseData(): number {
     // KEGs's adb_read_c024() returns 0 when the mouse is off, rather than
     // whatever happens to be latched.
-    if (!this.hasMouseData()) return 0
-    // The report is already latched into the device register by queueMouse /
+    if (!this.hasMouseData()) {
+      noteAdbLog("byte", -1);
+      return 0
+    }    // The report is already latched into the device register by queueMouse /
     // setMouseButton; reading $C024 just hands it out one byte at a time.
     if (this.reportInProgress) {
       // Grab the Y byte before queueing up the next report, which overwrites
@@ -398,6 +446,7 @@ export class IIGSADB {
       // the X byte was handed out, so Y matches X.
       const y = this.mouseRegs[1];
       this.consumeReport();
+      noteAdbLog("byte", 1, y, this.pendingX);
       return y;
     }
     // First byte of a fresh report: snapshot the live button state now, so the
@@ -405,6 +454,7 @@ export class IIGSADB {
     // this motion was latched but before it was polled.
     this.patchReportButton();
     this.reportInProgress = true;
+    noteAdbLog("byte", 0, this.mouseRegs[0], this.pendingX);
     return this.mouseRegs[0];
   }
 
@@ -425,6 +475,7 @@ export class IIGSADB {
   }
 
   queueMouse(dx: number, dy: number) {
+    noteAdbLog("queue", dx, dy);
     this.pendingX += dx;
     this.pendingY += dy;
     // Make the report visible to a poll of the device register straight away,
@@ -433,6 +484,7 @@ export class IIGSADB {
   }
 
   setMouseButton(pressed: boolean) {
+    noteAdbLog("button", pressed ? 1 : 0);
     if (pressed === this.mouseButton) return;
     this.mouseButton = pressed;
     if (this.mouseHasData && !this.reportInProgress) {

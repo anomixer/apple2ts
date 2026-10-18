@@ -260,7 +260,26 @@ export const passSingleKeyPress = (key: number) => {
 }
 
 export const passMouseEvent = (event: MouseEventSimple) => {
+  // Debug event log (?adbtrace=1): the UI-side half of the mouse event chain,
+  // so a headless run can tell "the UI never saw the event" apart from "the
+  // worker dropped it". Capped and cheap.
+  if (mouseEventLogActive) {
+    uiMouseLog.push({ t: Date.now(), x: event.x, y: event.y, buttons: event.buttons })
+    const w = window as unknown as { __uiEvents?: unknown[] }
+    if (uiMouseLog.length > 600) uiMouseLog.shift()
+    w.__uiEvents = uiMouseLog
+  }
   doPostMessage(MSG_MAIN.MOUSEEVENT, event)
+}
+
+const uiMouseLog: Array<{ t: number, x: number, y: number, buttons: number }> = []
+let mouseEventLogActive = false
+export const setMouseEventLog = (enabled: boolean) => {
+  mouseEventLogActive = enabled
+  uiMouseLog.length = 0
+  if (typeof window !== "undefined") {
+    (window as unknown as { __uiEvents?: unknown[] }).__uiEvents = uiMouseLog
+  }
 }
 
 export const passPasteText = (text: string) => {
@@ -390,6 +409,29 @@ export const passSetIwmStatsEnabled = (enabled: boolean) => {
   poll()
   iwmStatsTimer = window.setInterval(poll, 500)
 }
+
+// ?adbtrace=1 only: poll the worker for the ADB UI/report/read event ring.
+// The enable flag travels with the request (worker-reload reason, same as the
+// IWM stats sampler), and clearing resets the ring for a fresh attempt.
+let adbTraceTimer = 0
+export const passSetAdbTraceEnabled = (enabled: boolean, clear = false) => {
+  if (!enabled) {
+    if (adbTraceTimer) { clearInterval(adbTraceTimer); adbTraceTimer = 0 }
+    doPostMessage(MSG_MAIN.ADB_TRACE_REQUEST, { enabled: false })
+    return
+  }
+  if (adbTraceTimer && !clear) return
+  // The clear flag applies only to the immediate request: it must not ride
+  // along on the interval poll, or every poll would wipe the ring a moment
+  // before reading it and the log would always come back empty.
+  const poll = (c?: boolean) => doPostMessage(MSG_MAIN.ADB_TRACE_REQUEST, { enabled: true, clear: c ?? false })
+  poll(clear)
+  if (adbTraceTimer) { clearInterval(adbTraceTimer) }
+  adbTraceTimer = window.setInterval(() => poll(), 500)
+}
+
+// One-shot ring reset (window.__adbLogClear), without touching the poll timer.
+export const clearAdbTrace = () => doPostMessage(MSG_MAIN.ADB_TRACE_REQUEST, { enabled: true, clear: true })
 
 // ?romtrace=1 only: poll the worker for the debug 65816 PC trace. The trace
 // window has to be cleared at a known point, so the caller passes
@@ -615,6 +657,12 @@ export const doOnMessage = (e: MessageEvent): {speed: number, helptext: string} 
       lastRomTrace = e.data.payload
       if (typeof window !== "undefined") {
         ;(window as unknown as { __romTrace?: unknown }).__romTrace = lastRomTrace
+      }
+      break
+    }
+    case MSG_WORKER.ADB_TRACE: {
+      if (typeof window !== "undefined") {
+        ;(window as unknown as { __adbLog?: unknown }).__adbLog = e.data.payload
       }
       break
     }

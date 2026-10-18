@@ -77,111 +77,111 @@ Gate trace (ff:8510-8575, 66):
 8530 op=8d A=3f00 X=1d4b Y=0 D=0 DB=e1 P=26 S=1e4 INTEN=0
 8533 op=a9 A=3f00 X=1d4b Y=0 D=0 DB=e1 P=26 S=1e4 INTEN=0
 8535 op=20 A=3fff X=1d4b Y=0 D=0 DB=e1 P=a4 S=1e4 INTEN=0
-8538 op=ad A=8000 X=1d4b Y=0 D=0 DB=e1 P=67 S=1e4 INTEN=0
-853b op=8d A=8007 X=1d4b Y=0 D=0 DB=e1 P=65 S=1e4 INTEN=0
-853e op=2a A=8007 X=1d4b Y=0 D=0 DB=e1 P=65 S=1e4 INTEN=0
-853f op=ad A=800f X=1d4b Y=0 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8542 op=8d A=8044 X=1d4b Y=0 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8545 op=10 A=8044 X=1d4b Y=0 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8552 op=ad A=8044 X=1d4b Y=0 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8555 op=30 A=8008 X=1d4b Y=0 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8557 op=ad A=8008 X=1d4b Y=0 D=0 DB=e1 P=64 S=1e4 INTEN=0
-855a op=d A=8007 X=1d4b Y=0 D=0 DB=e1 P=64 S=1e4 INTEN=0
-855d op=10 A=8047 X=1d4b Y=0 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8569 op=a9 A=8047 X=1d4b Y=0 D=0 DB=e1 P=64 S=1e4 INTEN=0
-856b op=20 A=8073 X=1d4b Y=0 D=0 DB=e1 P=64 S=1e4 INTEN=0
-856e op=c2 A=8000 X=1d4b Y=0 D=0 DB=e1 P=66 S=1e4 INTEN=0
-8570 op=a9 A=8000 X=1d4b Y=0 D=0 DB=e1 P=46 S=1e4 INTEN=0
-8573 op=8f A=ffb5 X=1d4b Y=0 D=0 DB=e1 P=c4 S=1e4 INTEN=0
-8510 op=a9 A=0 X=1d4c Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8512 op=8d A=7 X=1d4c Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8515 op=ca A=7 X=1d4c Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8516 op=f0 A=7 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8518 op=ad A=7 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-851b op=ad A=0 X=1d4b Y=1 D=0 DB=e1 P=66 S=1e4 INTEN=0
-851e op=6a A=10 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-851f op=b0 A=8 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8521 op=20 A=8 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8524 op=b0 A=8 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8526 op=20 A=8 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8529 op=b0 A=0 X=1d4b Y=1 D=0 DB=e1 P=66 S=1e4 INTEN=0
-852b op=a9 A=0 X=1d4b Y=1 D=0 DB=e1 P=66 S=1e4 INTEN=0
-852d op=8d A=0 X=1d4b Y=1 D=0 DB=e1 P=66 S=1e4 INTEN=0
-8530 op=8d A=0 X=1d4b Y=1 D=0 DB=e1 P=66 S=1e4 INTEN=0
-8533 op=a9 A=0 X=1d4b Y=1 D=0 DB=e1 P=66 S=1e4 INTEN=0
-8535 op=20 A=ff X=1d4b Y=1 D=0 DB=e1 P=e4 S=1e4 INTEN=0
-8538 op=ad A=8000 X=1d4b Y=1 D=0 DB=e1 P=67 S=1e4 INTEN=0
-853b op=8d A=8027 X=1d4b Y=1 D=0 DB=e1 P=65 S=1e4 INTEN=0
-853e op=2a A=8027 X=1d4b Y=1 D=0 DB=e1 P=65 S=1e4 INTEN=0
-853f op=ad A=804f X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8542 op=8d A=8061 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8545 op=10 A=8061 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8552 op=ad A=8061 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8555 op=30 A=8008 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8557 op=ad A=8008 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-855a op=d A=8027 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-855d op=10 A=8067 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-8569 op=a9 A=8067 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-856b op=20 A=8073 X=1d4b Y=1 D=0 DB=e1 P=64 S=1e4 INTEN=0
-856e op=c2 A=8000 X=1d4b Y=1 D=0 DB=e1 P=66 S=1e4 INTEN=0
-8570 op=a9 A=8000 X=1d4b Y=1 D=0 DB=e1 P=46 S=1e4 INTEN=0
-8573 op=8f A=ffb5 X=1d4b Y=1 D=0 DB=e1 P=c4 S=1e4 INTEN=0
+8538 op=ad A=8000 X=1d4b Y=0 D=0 DB=e1 P=27 S=1e4 INTEN=0
+853b op=8d A=8044 X=1d4b Y=0 D=0 DB=e1 P=25 S=1e4 INTEN=0
+853e op=2a A=8044 X=1d4b Y=0 D=0 DB=e1 P=25 S=1e4 INTEN=0
+853f op=ad A=8089 X=1d4b Y=0 D=0 DB=e1 P=a4 S=1e4 INTEN=0
+8542 op=8d A=806c X=1d4b Y=0 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8545 op=10 A=806c X=1d4b Y=0 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8552 op=ad A=806c X=1d4b Y=0 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8555 op=30 A=8008 X=1d4b Y=0 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8557 op=ad A=8008 X=1d4b Y=0 D=0 DB=e1 P=24 S=1e4 INTEN=0
+855a op=d A=8044 X=1d4b Y=0 D=0 DB=e1 P=24 S=1e4 INTEN=0
+855d op=10 A=806c X=1d4b Y=0 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8569 op=a9 A=806c X=1d4b Y=0 D=0 DB=e1 P=24 S=1e4 INTEN=0
+856b op=20 A=8073 X=1d4b Y=0 D=0 DB=e1 P=24 S=1e4 INTEN=0
+856e op=c2 A=8000 X=1d4b Y=0 D=0 DB=e1 P=26 S=1e4 INTEN=0
+8570 op=a9 A=8000 X=1d4b Y=0 D=0 DB=e1 P=6 S=1e4 INTEN=0
+8573 op=8f A=ffb5 X=1d4b Y=0 D=0 DB=e1 P=84 S=1e4 INTEN=0
+8510 op=a9 A=0 X=1d4c Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8512 op=8d A=7 X=1d4c Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8515 op=ca A=7 X=1d4c Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8516 op=f0 A=7 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8518 op=ad A=7 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+851b op=ad A=0 X=1d4b Y=1 D=0 DB=e1 P=26 S=1e4 INTEN=0
+851e op=6a A=10 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+851f op=b0 A=8 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8521 op=20 A=8 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8524 op=b0 A=8 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8526 op=20 A=8 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8529 op=b0 A=0 X=1d4b Y=1 D=0 DB=e1 P=26 S=1e4 INTEN=0
+852b op=a9 A=0 X=1d4b Y=1 D=0 DB=e1 P=26 S=1e4 INTEN=0
+852d op=8d A=0 X=1d4b Y=1 D=0 DB=e1 P=26 S=1e4 INTEN=0
+8530 op=8d A=0 X=1d4b Y=1 D=0 DB=e1 P=26 S=1e4 INTEN=0
+8533 op=a9 A=0 X=1d4b Y=1 D=0 DB=e1 P=26 S=1e4 INTEN=0
+8535 op=20 A=ff X=1d4b Y=1 D=0 DB=e1 P=a4 S=1e4 INTEN=0
+8538 op=ad A=8000 X=1d4b Y=1 D=0 DB=e1 P=27 S=1e4 INTEN=0
+853b op=8d A=8013 X=1d4b Y=1 D=0 DB=e1 P=25 S=1e4 INTEN=0
+853e op=2a A=8013 X=1d4b Y=1 D=0 DB=e1 P=25 S=1e4 INTEN=0
+853f op=ad A=8027 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8542 op=8d A=8012 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8545 op=10 A=8012 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8552 op=ad A=8012 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8555 op=30 A=8008 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8557 op=ad A=8008 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+855a op=d A=8013 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+855d op=10 A=8013 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+8569 op=a9 A=8013 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+856b op=20 A=8073 X=1d4b Y=1 D=0 DB=e1 P=24 S=1e4 INTEN=0
+856e op=c2 A=8000 X=1d4b Y=1 D=0 DB=e1 P=26 S=1e4 INTEN=0
+8570 op=a9 A=8000 X=1d4b Y=1 D=0 DB=e1 P=6 S=1e4 INTEN=0
+8573 op=8f A=ffb5 X=1d4b Y=1 D=0 DB=e1 P=84 S=1e4 INTEN=0
 Tail:
-ff:1bd op=da A=19c X=17e1 Y=ff0a S=195 P=45
-ff:1be op=22 A=19c X=17e1 Y=ff0a S=192 P=45
-e1:64 op=5c A=19c X=17e1 Y=ff0a S=192 P=45
-ff:b5de op=38 A=19c X=17e1 Y=ff0a S=192 P=45
-ff:b5df op=6b A=19c X=17e1 Y=ff0a S=195 P=45
-ff:1c2 op=ab A=19c X=17e1 Y=ff0a S=196 P=c5
-ff:1c3 op=6b A=19c X=17e1 Y=ff0a S=199 P=c5
-ff:a18 op=a5 A=1fc X=17e1 Y=ff0a S=199 P=45
-ff:a1a op=85 A=1fc X=17e1 Y=ff0a S=199 P=45
-ff:a1c op=a5 A=0 X=17e1 Y=ff0a S=199 P=47
-ff:a1e op=85 A=0 X=17e1 Y=ff0a S=199 P=47
-ff:a20 op=a5 A=1e00 X=17e1 Y=ff0a S=199 P=45
-ff:a22 op=85 A=1e00 X=17e1 Y=ff0a S=199 P=45
-ff:a24 op=a5 A=e0 X=17e1 Y=ff0a S=199 P=45
-ff:a26 op=85 A=e0 X=17e1 Y=ff0a S=199 P=45
-ff:a28 op=a5 A=efd X=17e1 Y=ff0a S=199 P=45
-ff:a2a op=85 A=efd X=17e1 Y=ff0a S=199 P=45
-ff:a2c op=a5 A=fe X=17e1 Y=ff0a S=199 P=45
-ff:a2e op=85 A=fe X=17e1 Y=ff0a S=199 P=45
-ff:a30 op=22 A=fe X=17e1 Y=ff0a S=196 P=45
-e1:16a4 op=5c A=fe X=17e1 Y=ff0a S=196 P=45
-ff:eea op=a5 A=1fc X=17e1 Y=ff0a S=196 P=45
-ff:eec op=d0 A=1fc X=17e1 Y=ff0a S=196 P=45
-ff:ef3 op=c6 A=1fc X=17e1 Y=ff0a S=196 P=45
-ff:ef5 op=a6 A=1fc X=efd Y=ff0a S=196 P=45
-ff:ef7 op=e4 A=1fc X=efd Y=ff0a S=196 P=c4
-ff:ef9 op=a5 A=fe X=efd Y=ff0a S=196 P=44
-ff:efb op=e5 A=1d X=efd Y=ff0a S=196 P=45
-ff:efd op=b0 A=1d X=efd Y=ff0a S=196 P=45
-ff:f69 op=a4 A=1d X=efd Y=1e00 S=196 P=45
-ff:f6b op=a5 A=fe X=efd Y=1e00 S=196 P=45
-ff:f6d op=29 A=fe X=efd Y=1e00 S=196 P=45
-ff:f70 op=9 A=6bfe X=efd Y=1e00 S=196 P=45
-ff:f73 op=48 A=6bfe X=efd Y=1e00 S=194 P=45
-ff:f74 op=a5 A=e0 X=efd Y=1e00 S=194 P=45
-ff:f76 op=eb A=e000 X=efd Y=1e00 S=194 P=47
-ff:f77 op=9 A=e054 X=efd Y=1e00 S=194 P=c5
-ff:f7a op=48 A=e054 X=efd Y=1e00 S=192 P=c5
-ff:f7b op=a5 A=1fb X=efd Y=1e00 S=192 P=45
-ff:f7d op=85 A=1fb X=efd Y=1e00 S=192 P=45
-ff:f7f op=80 A=1fb X=efd Y=1e00 S=192 P=45
-ff:f95 op=8a A=efd X=efd Y=1e00 S=192 P=45
-ff:f96 op=49 A=f102 X=efd Y=1e00 S=192 P=c5
-ff:f99 op=c5 A=f102 X=efd Y=1e00 S=192 P=c5
-ff:f9b op=b0 A=f102 X=efd Y=1e00 S=192 P=c5
-ff:f9f op=98 A=1e00 X=efd Y=1e00 S=192 P=45
-ff:fa0 op=49 A=e1ff X=efd Y=1e00 S=192 P=c5
-ff:fa3 op=c5 A=e1ff X=efd Y=1e00 S=192 P=c5
-ff:fa5 op=b0 A=e1ff X=efd Y=1e00 S=192 P=c5
-ff:fa9 op=a9 A=ff0f X=efd Y=1e00 S=192 P=c5
-ff:fac op=48 A=ff0f X=efd Y=1e00 S=190 P=c5
-ff:fad op=a9 A=b900 X=efd Y=1e00 S=190 P=c5
-ff:fb0 op=48 A=b900 X=efd Y=1e00 S=18e P=c5
-ff:fb1 op=3b A=18e X=efd Y=1e00 S=18e P=45
-ff:fb2 op=18 A=18e X=efd Y=1e00 S=18e P=44
+ff:1bd op=da A=19c X=17e1 Y=ff0a S=195 P=5
+ff:1be op=22 A=19c X=17e1 Y=ff0a S=192 P=5
+e1:64 op=5c A=19c X=17e1 Y=ff0a S=192 P=5
+ff:b5de op=38 A=19c X=17e1 Y=ff0a S=192 P=5
+ff:b5df op=6b A=19c X=17e1 Y=ff0a S=195 P=5
+ff:1c2 op=ab A=19c X=17e1 Y=ff0a S=196 P=85
+ff:1c3 op=6b A=19c X=17e1 Y=ff0a S=199 P=85
+ff:a18 op=a5 A=1fc X=17e1 Y=ff0a S=199 P=5
+ff:a1a op=85 A=1fc X=17e1 Y=ff0a S=199 P=5
+ff:a1c op=a5 A=0 X=17e1 Y=ff0a S=199 P=7
+ff:a1e op=85 A=0 X=17e1 Y=ff0a S=199 P=7
+ff:a20 op=a5 A=1e00 X=17e1 Y=ff0a S=199 P=5
+ff:a22 op=85 A=1e00 X=17e1 Y=ff0a S=199 P=5
+ff:a24 op=a5 A=e0 X=17e1 Y=ff0a S=199 P=5
+ff:a26 op=85 A=e0 X=17e1 Y=ff0a S=199 P=5
+ff:a28 op=a5 A=efd X=17e1 Y=ff0a S=199 P=5
+ff:a2a op=85 A=efd X=17e1 Y=ff0a S=199 P=5
+ff:a2c op=a5 A=fe X=17e1 Y=ff0a S=199 P=5
+ff:a2e op=85 A=fe X=17e1 Y=ff0a S=199 P=5
+ff:a30 op=22 A=fe X=17e1 Y=ff0a S=196 P=5
+e1:16a4 op=5c A=fe X=17e1 Y=ff0a S=196 P=5
+ff:eea op=a5 A=1fc X=17e1 Y=ff0a S=196 P=5
+ff:eec op=d0 A=1fc X=17e1 Y=ff0a S=196 P=5
+ff:ef3 op=c6 A=1fc X=17e1 Y=ff0a S=196 P=5
+ff:ef5 op=a6 A=1fc X=efd Y=ff0a S=196 P=5
+ff:ef7 op=e4 A=1fc X=efd Y=ff0a S=196 P=84
+ff:ef9 op=a5 A=fe X=efd Y=ff0a S=196 P=4
+ff:efb op=e5 A=1d X=efd Y=ff0a S=196 P=5
+ff:efd op=b0 A=1d X=efd Y=ff0a S=196 P=5
+ff:f69 op=a4 A=1d X=efd Y=1e00 S=196 P=5
+ff:f6b op=a5 A=fe X=efd Y=1e00 S=196 P=5
+ff:f6d op=29 A=fe X=efd Y=1e00 S=196 P=5
+ff:f70 op=9 A=6bfe X=efd Y=1e00 S=196 P=5
+ff:f73 op=48 A=6bfe X=efd Y=1e00 S=194 P=5
+ff:f74 op=a5 A=e0 X=efd Y=1e00 S=194 P=5
+ff:f76 op=eb A=e000 X=efd Y=1e00 S=194 P=7
+ff:f77 op=9 A=e054 X=efd Y=1e00 S=194 P=85
+ff:f7a op=48 A=e054 X=efd Y=1e00 S=192 P=85
+ff:f7b op=a5 A=1fb X=efd Y=1e00 S=192 P=5
+ff:f7d op=85 A=1fb X=efd Y=1e00 S=192 P=5
+ff:f7f op=80 A=1fb X=efd Y=1e00 S=192 P=5
+ff:f95 op=8a A=efd X=efd Y=1e00 S=192 P=5
+ff:f96 op=49 A=f102 X=efd Y=1e00 S=192 P=85
+ff:f99 op=c5 A=f102 X=efd Y=1e00 S=192 P=85
+ff:f9b op=b0 A=f102 X=efd Y=1e00 S=192 P=85
+ff:f9f op=98 A=1e00 X=efd Y=1e00 S=192 P=5
+ff:fa0 op=49 A=e1ff X=efd Y=1e00 S=192 P=85
+ff:fa3 op=c5 A=e1ff X=efd Y=1e00 S=192 P=85
+ff:fa5 op=b0 A=e1ff X=efd Y=1e00 S=192 P=85
+ff:fa9 op=a9 A=ff0f X=efd Y=1e00 S=192 P=85
+ff:fac op=48 A=ff0f X=efd Y=1e00 S=190 P=85
+ff:fad op=a9 A=b900 X=efd Y=1e00 S=190 P=85
+ff:fb0 op=48 A=b900 X=efd Y=1e00 S=18e P=85
+ff:fb1 op=3b A=18e X=efd Y=1e00 S=18e P=5
+ff:fb2 op=18 A=18e X=efd Y=1e00 S=18e P=4
 ff:fb3 op=69 A=192 X=efd Y=1e00 S=18e P=4
 ff:fb6 op=48 A=192 X=efd Y=1e00 S=18c P=4
 ff:fb7 op=a5 A=1fb X=efd Y=1e00 S=18c P=4

@@ -2,7 +2,7 @@
 // Now combined Mouse/Clock driver
 
 import { setSlotDriver, setSlotIOCallback, memGet, memSet, memSetC000, memGetC000, getCurrentMachineName } from "../memory"
-import { iigsADB } from "../iigs_adb"
+import { iigsADB, noteAdbLog } from "../iigs_adb"
 import { registerSlotCardState } from "./slot_card_state"
 import { MouseEventSimple } from "../../common/utility"
 import { interruptRequest } from "../cpu6502"
@@ -497,7 +497,10 @@ export const onMouseVBL = () => {
 // The Apple IIgs has no mouse *card*: its mouse hangs off the ADB bus
 // ($C024 mouse data, $C025 modifiers, $C026/$C027 command/status), so on that
 // machine the events feed iigsADB instead of the 6522 card state.
+let mouseUiEventCount = 0
+export const getMouseUiEventCount = () => mouseUiEventCount
 export const MouseCardEvent = (event: MouseEventSimple) => {
+  mouseUiEventCount++
   if (getCurrentMachineName() === "APPLE2GS") {
     return iigsADBEvent(event)
   }
@@ -559,6 +562,8 @@ const ADB_COUNTS_Y = 200
 // deltas, so the UI's normalized 0..1 position is converted back into deltas
 // against the last position we delivered.
 const iigsADBEvent = (event: MouseEventSimple) => {
+  // Debug: every event the UI hands to the IIgs path (?adbtrace=1).
+  noteAdbLog("ui", event.buttons, event.x, event.y)
   if (event.buttons >= 0) {
     // See comments in the firmware code for the bit values for
     // the interrupt status byte and mode byte.

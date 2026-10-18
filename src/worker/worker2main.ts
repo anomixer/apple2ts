@@ -36,14 +36,15 @@ import { pressAppleCommandKey, setGamepads, setReverseYAxis } from "./devices/jo
 import { AUTO_SNAPSHOT, DRIVE, HEATMAP_STATE, MEMORY_DUMP_STATE, MSG_MAIN, MSG_WORKER, RUN_MODE, VeraSdStatus } from "../common/utility"
 import { sdcard_attach_image, sdcard_detach_image, sdcard_get_status, set_sdcard_status_listener, sdcard_get_image, sdcard_set_write_protected, sdcard_clear_changes, sdcard_get_write_seq } from "./devices/vera/sdcard"
 import { doSetBasicStep, doSetBreakpoints } from "./cpu6502"
-import { MouseCardEvent } from "./devices/mouse"
+import { MouseCardEvent, getMouseUiEventCount } from "./devices/mouse"
 import { receiveMidiData } from "./devices/passport/passport"
 import { receiveCommData } from "./devices/superserial/serial"
 import { setTraceSettings } from "./tracelog"
 import { doGotoTimeTravelIndex, doSetThumbnailImage, doGetSaveStateWithSnapshots, doGetSaveState, doGoBackInTime, doGoForwardInTime, doRestoreSaveState } from "./save_restore"
 import { setSiriusJoyport } from "./devices/sirius_joyport"
-import { getCurrentMemory, memGet24 } from "./memory"
+import { getCurrentMemory, memGet24, getCurrentMachineName } from "./memory"
 import { getIwmReadStats } from "./devices/diskdata"
+import { getAdbLog, setAdbLogEnabled, clearAdbLog } from "./iigs_adb"
 import { getRomTrace, setRomTraceEnabled, clearRomTrace } from "./romtrace"
 
 // This file must have worker types, but not DOM types.
@@ -128,6 +129,12 @@ export const passDriveSound = (sound: DRIVE) => {
 // comment in devices/diskdata.ts for what the counters mean.
 export const passIwmReadStats = (stats: MessagePayload) => {
   doPostMessage(MSG_WORKER.IWM_READ_STATS, stats)
+}
+
+// Debug-only ADB event ring (?adbtrace=1). See the noteAdbLog comment in
+// iigs_adb.ts. Poll pattern for the same worker-reload reason as IwmReadStats.
+export const passAdbTrace = (entries: MessagePayload) => {
+  doPostMessage(MSG_WORKER.ADB_TRACE, entries)
 }
 
 // Debug-only 65816 PC trace (?romtrace=1). See src/worker/romtrace.ts.
@@ -529,6 +536,22 @@ if (typeof self !== "undefined") {
         // current boot attempt.
         passIwmReadStats(getIwmReadStats() as MessagePayload)
         break
+      case MSG_MAIN.ADB_TRACE_REQUEST: {
+        // ?adbtrace=1: answer with the ADB UI/report/read ring so a browser
+        // run can see the whole event chain (see iigs_adb.ts noteAdbLog).
+        // The machine name and event count help a dead-calm log say which
+        // layer dropped the chain: routing (machine name), delivery (count),
+        // or gating (enabled).
+        const req = (e.data.payload ?? {}) as { enabled?: boolean, clear?: boolean }
+        setAdbLogEnabled(req.enabled === true)
+        if (req.clear) clearAdbLog()
+        passAdbTrace({
+          entries: getAdbLog(),
+          machine: getCurrentMachineName(),
+          eventCount: getMouseUiEventCount(),
+        } as unknown as MessagePayload)
+        break
+      }
       case MSG_MAIN.ROM_TRACE_REQUEST: {
         // Payload: {enable?: boolean, clear?: boolean, peek?: number[]}.
         // Enabling and clearing travel with the request rather than living in a

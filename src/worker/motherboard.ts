@@ -1,5 +1,6 @@
 ﻿// Chris Torrence, 2022
 import { passMachineState, passSoftSwitchDescriptions, passWorkerOperationResult } from "./worker2main"
+import { setCpuPcGetter } from "./cpu_pc"
 import { s6502, setState6502, setCycleCount, setPC, getStackString, get6502Instructions } from "./instructions"
 import { hiresAddressToLine, RUN_MODE, TEST_DEBUG, DEFAULT_SLOT_CONFIG, DEFAULT_SLOT_CONFIG_GS, HEATMAP_STATE, MEMORY_DUMP_STATE, AUTO_SNAPSHOT } from "../common/utility"
 import { resetFloppyDrives, doPauseDrive, getHardDriveState } from "./devices/drivestate"
@@ -748,6 +749,12 @@ export const doSetMachineName = (name: MACHINE_NAME, reset = true, publishState 
   } else {
     cpu = new CPU6502Wrapper()
   }
+  // Let debugging instrumentation (iigs_adb etc., which cannot import this
+  // module without a cycle) see where in the guest a softswitch read happened.
+  setCpuPcGetter(() => {
+    const c = cpu as unknown as { PB?: number; PC?: number }
+    return c.PB !== undefined && c.PC !== undefined ? (c.PB << 16) | c.PC : -1
+  })
 
   if (name === "APPLE2GS") {
     currentSlotConfig = { ...DEFAULT_SLOT_CONFIG_GS }

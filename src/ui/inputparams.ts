@@ -1,6 +1,6 @@
 import { COLOR_MODE, MONITOR_MODE, RUN_MODE, UI_THEMES } from "../common/utility"
 import { useGlobalContext } from "./globalcontext"
-import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging, passSetSlotConfig, passSetIwmStatsEnabled, passSetRomTraceEnabled, passResetRomTrace, passSetRomTracePeek } from "./main2worker"
+import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging, passSetSlotConfig, passSetIwmStatsEnabled, passSetRomTraceEnabled, passResetRomTrace, passSetRomTracePeek, passSetAdbTraceEnabled, clearAdbTrace, setMouseEventLog } from "./main2worker"
 import { setDefaultBinaryAddress, handleSetDiskFromURL } from "./devices/disk/driveprops"
 import { loadOneDriveScript } from "./devices/disk/cloudscriptloader"
 import { isOneDriveMsalAuthCallback } from "./devices/disk/onedrive_authredirect"
@@ -63,6 +63,17 @@ export const handleInputParams = (paramString = "") => {
       // The answer lands in window.__romTrace.peekValues, which is the only way to
       // read emulator memory from the browser without a dedicated request.
       w.__romTracePeek = (addrs: number[]) => passSetRomTracePeek(addrs)
+    }
+  }
+
+  // ?adbtrace=1+clear turns on the ADB event ring and clears it, marking a
+  // fresh attempt; ?adbtrace=1 alone polls without touching the ring.
+  if (params.get("adbtrace")) {
+    passSetAdbTraceEnabled(true, params.get("adbtrace") === "1+clear")
+    setMouseEventLog(true)
+    if (typeof window !== "undefined") {
+      (window as unknown as { __adbLogClear?: () => void }).__adbLogClear =
+        () => clearAdbTrace()
     }
   }
 

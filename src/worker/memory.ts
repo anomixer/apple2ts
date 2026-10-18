@@ -11,6 +11,7 @@ import { Buffer } from "buffer"
 import { RamWorksMemoryStart, RamWorksPage, ROMpage, ROMmemoryStart, hiresLineToAddress } from "../common/utility"
 import { isWatchpoint, observeMemoryWrite, setWatchpointBreak } from "./cpu6502"
 import { noSlotClock } from "./nsc"
+import { adbLogEnabled, noteAdbLog } from "./iigs_adb"
 import { videoTerm } from "./devices/videoterm"
 import { vidhd } from "./devices/vidhd"
 import { isDebugging } from "./motherboard"
@@ -272,10 +273,30 @@ export const doSetRom = (machineName: MACHINE_NAME) => {
 
 export let gsRAM = new Uint8Array(8 * 1024 * 1024);
 
+// Debug-only (?adbtrace=1): record the program counter of every CPU read of
+// the mouse/button hole addresses plus the bank-$E1 mirrors GS/OS can reach
+// with DB=$E1. This answers "which code reads the button state" without
+// opcode decoding (see AGENTS.md §41 traps).
+const probeAddresses = new Set([0x000478, 0x000578, 0x0004f8, 0x0005f8, 0x000678,
+  0x000778, 0x00067c, 0x00077c, 0xe102b8, 0xe102ba, 0xe102bc, 0xe102be,
+  0xe10778, 0xe1077c, 0xe10478, 0xe104f8, 0xe10578, 0xe105f8, 0xe10190,
+  0xe10191, 0xe10192, 0xe10193]);
+const maybeProbe = (address: number, bank: number, offset: number) => {
+  if (bank === 0x00 && offset >= 0x0478 && offset <= 0x077f) {
+    noteAdbLog("probe", address);
+    return;
+  }
+  if (bank === 0xe1 && (probeAddresses.has(address) || (offset >= 0xe0 && offset <= 0xff))) {
+    noteAdbLog("probe", address);
+  }
+};
+
+
 export const memGet24 = (address: number): number => {
     let bank = (address >> 16) & 0xFF;
     const offset = address & 0xFFFF;
-    
+    if (adbLogEnabled) maybeProbe(address, bank, offset);
+
     // Apple IIgs ROM 01 mapping: the 128KB system ROM lives in banks $FE-$FF
     // (FE at image offset 0, FF at 0x10000). The Mega II banks $E0/$E1 and the
     // shadowed banks $00/$01 read the fast ROM in bank FF through their
@@ -382,7 +403,10 @@ export const memGet24 = (address: number): number => {
 export const memSet24 = (address: number, data: number) => {
     let bank = (address >> 16) & 0xFF;
     const offset = address & 0xFFFF;
-    
+    if (adbLogEnabled && ((bank === 0x00 && offset >= 0x0478 && offset <= 0x077f) ||
+        (bank === 0xe1 && (probeAddresses.has(address) || (offset >= 0xe0 && offset <= 0xff))))) {
+        noteAdbLog("uprobe", address, data);
+    }
 
     // Bank E0: Mega II Main
     if (bank === 0xE0) {
@@ -521,11 +545,22 @@ export const iigsInitInterrupts = () => {
     }
 
     // VBL Task Dispatcher at $E10030: JML $FE9874
-    // (VBLStartUp handler in ROM: increments $E100DC, runs queue, and clears $C047)
+    // (ROM VBL dispatcher: increments $E100DC, runs the VBL task queue, clears $C047)
     memSet24(0xE10030, 0x5c);
     memSet24(0xE10031, 0x74);
     memSet24(0xE10032, 0x98);
     memSet24(0xE10033, 0xfe);
+
+    // ADB mouse-data handler at $E10034: JML $FEC5C8
+    // The ROM's interrupt manager dispatches here when $C027 has data available
+    // AND the mouse interrupt is enabled (bit 6). The ROM never installs this
+    // vector itself (no STA $E10034 anywhere in the ROM), so without this the
+    // ADB mouse dispatch (FF:B97F) lands on the unclaimed stub ($FFB5DE) and
+    // the ROM cursor task (FF:9CE2) is never invoked from the IRQ path.
+    memSet24(0xE10034, 0x5c);
+    memSet24(0xE10035, 0xc8);
+    memSet24(0xE10036, 0xc5);
+    memSet24(0xE10037, 0xfe);
 
     // System Task / Event Dispatcher at $E10070: JML $FFB5E2 (CLC; RTL)
     memSet24(0xE10070, 0x5c);
@@ -1045,6 +1080,17 @@ const memGetSoftSwitch = (addr: number): number => {
               if (iigsADB.interruptPending()) val |= 0x80;
               return val;
           }
+
+          case 0xC030:
+              // Speaker toggle. The cone toggles on BOTH reads and writes
+              // ($FBE0 BELL is an LDA, not a STA), and Case 27A fixed only the
+              // write side ($C030 in memSet24). Measured: Applesoft
+              // "PRINT CHR$(7)" executes at the IIgs prompt without reaching
+              // clickSpeaker, because this read branch had no $C030 case.
+              // The generic Apple II path calls checkSoftSwitches on reads
+              // already; the IIgs window must do the same here.
+              checkSoftSwitches(0xC030, false, s6502.cycleCount)
+              return iigsRegisters[0x30]
 
           case 0xC047:
               vblPending = false;

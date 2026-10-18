@@ -56,6 +56,7 @@ export enum MSG_WORKER {
   IWM_READ_STATS,
   ROM_TRACE,
   ENSONIQ_SOUND,
+  ADB_TRACE,
 }
 
 export interface VeraSdStatus {
@@ -136,6 +137,7 @@ export enum MSG_MAIN {
   VERA_SD_GET_IMAGE,
   VERA_SD_WRITE_PROTECT,
   VERA_SD_CLEAR_CHANGES,
+  ADB_TRACE_REQUEST,
 }
 
 export const DEFAULT_SLOT_CONFIG: SlotConfig = {
