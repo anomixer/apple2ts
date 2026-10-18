@@ -14,7 +14,7 @@ import { noSlotClock } from "./nsc"
 import { adbLogEnabled, noteAdbLog } from "./iigs_adb"
 import { videoTerm } from "./devices/videoterm"
 import { vidhd } from "./devices/vidhd"
-import { isDebugging, setIigsSlowMode } from "./motherboard"
+import { isDebugging, setIigsSpeedRegister } from "./motherboard"
 import { iigsClock } from "./iigs_clock"
 import { iigsADB } from "./iigs_adb"
 import { iigsEnsoniq, docAccess } from "./devices/iigs_ensoniq"
@@ -1349,8 +1349,8 @@ const memSetSoftSwitch = (addr: number, value: number) => {
                 iigsRegisters[0x34] = value; // Also store for border color
                 break;
 
-            case 0xC036: // SPEED register: any write selects slow mode (1.02 MHz)
-                setIigsSlowMode(true);
+            case 0xC036: // SPEED register: bit 7 = 1 → fast (2.8 MHz in native mode)
+                setIigsSpeedRegister(value);
                 iigsRegisters[0x36] = value;
                 break;
 

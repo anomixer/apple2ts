@@ -91,8 +91,8 @@ import { findMemory, getMemoryView, resolveMemoryRangeRequest } from "./memory_v
 let speedMode = 0
 let iigsQuarterSecCounter = 0
 let iigsOneSecCounter = 0
-export let iigsSlowMode = false
-export const setIigsSlowMode = (v: boolean) => { iigsSlowMode = v }
+export let iigsSpeedRegister = 0x00
+export const setIigsSpeedRegister = (v: number) => { iigsSpeedRegister = v }
 let cpuSpeed = 0
 export let isDebugging = false
 let appMode = "default"
@@ -1238,11 +1238,7 @@ const doAdvance6502 = () => {
       cycles = cpu.processInstruction(tracing ? updateTrace : null)
       if (machineName === "APPLE2GS") {
         const c65816 = cpu as CPU65816
-        if (c65816.enteredNativeMode) {
-          setIigsSlowMode(false)
-          c65816.enteredNativeMode = false
-        }
-        const nativeFast = (!c65816.emulationMode) && !iigsSlowMode
+        const nativeFast = (!c65816.emulationMode) && (iigsSpeedRegister & 0x80) !== 0
         const speedFactor = nativeFast ? (1.024 / 2.8) : 1.0
         const effectiveCycles = Math.max(1, Math.round(cycles * speedFactor))
         s6502.cycleCount += cycles
