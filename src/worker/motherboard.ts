@@ -1237,7 +1237,8 @@ const doAdvance6502 = () => {
     } else {
       cycles = cpu.processInstruction(tracing ? updateTrace : null)
       if (machineName === "APPLE2GS") {
-        const nativeFast = (iigsSpeedRegister & 0x80) !== 0
+        const c65816 = cpu as CPU65816
+        const nativeFast = (!c65816.emulationMode) && (iigsSpeedRegister & 0x80) !== 0
         const speedFactor = nativeFast ? (1.024 / 2.8) : 1.0
         const effectiveCycles = Math.max(1, Math.round(cycles * speedFactor))
         s6502.cycleCount += cycles
