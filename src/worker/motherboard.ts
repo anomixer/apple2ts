@@ -1239,15 +1239,21 @@ const doAdvance6502 = () => {
       s6502.cycleCount += cycles
       cycleTotal += cycles
     } else {
-      cycles = cpu.processInstruction(tracing ? updateTrace : null)
-      if (machineName === "APPLE2GS") {
-        s6502.cycleCount += cycles
-        cycleTotal += cycles
-        processCycleCountCallbacks()
-      } else {
-        s6502.cycleCount += cycles
-        cycleTotal += cycles
+      // Batch 4 instructions to reduce per-frame check overhead
+      for (let bi = 0; bi < 4; bi++) {
+        cycles = cpu.processInstruction(tracing ? updateTrace : null)
+        if (cycles < 0) break
+        if (machineName === "APPLE2GS") {
+          s6502.cycleCount += cycles
+          cycleTotal += cycles
+          processCycleCountCallbacks()
+        } else {
+          s6502.cycleCount += cycles
+          cycleTotal += cycles
+        }
+        if (cycleTotal >= cpuCyclesPerRefresh) break
       }
+      if (cycles < 0) break
     }
     // Floppy motor-off delay, measured in CPU cycles so it stays locked to the
     // emulated machine's clock rather than to wall time. See stopMotor() in
