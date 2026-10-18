@@ -2312,3 +2312,131 @@ desktop "move nothing".
 
 Supporting artifacts: `src/worker/gs_adc_flags.test.ts`,
 `src/worker/gs_mouse_neg.test.ts`, `src/worker/gs_cursor_draw.test.ts`.
+
+### 44. Apple IIgs Audio: the $C030 READ path was dead, so BELL was silent — FIXED
+
+**Symptom**: the user reported "瀏覽器完全無聲" — no beep, no BASIC tone, nothing,
+in a real browser. Booting GS/OS to the Finder dropped to the Applesoft prompt
+(Ctrl-Reset) and executing `PRINT CHR$(7)` returned to a clean `]` with **zero**
+speaker clicks delivered to the UI.
+
+**Root cause — one line.** Section 27A fixed the `$C030` *write* path only
+(`memSet24` case `0xC030` calls `checkSoftSwitches`). But Applesoft's BELL
+(`$FBE0`) toggles the speaker with **`LDA $C030` — a read**. The IIgs read
+window (`memGet24`, the `addr >= $C020 && addr <= $C04F` branch for APPLE2GS)
+had no `case 0xC030`, so every read fell into the `default:` register echo and
+never reached `checkSoftSwitches` → `passClickSpeaker`. Real hardware toggles
+the cone on both reads and writes; the Apple IIe path already did (the generic
+`memGet` softswitch path). Fix, in `src/worker/memory.ts`:
+
+```ts
+case 0xC030:
+    // The cone toggles on BOTH reads and writes ($FBE0 BELL is an LDA).
+    checkSoftSwitches(0xC030, false, s6502.cycleCount)
+    return iigsRegisters[0x30]
+```
+
+**Verification**: headless Chrome, `?machine=apple2gs&boot=true`, no disk,
+Ctrl-Reset via `#tour-reset-button`, typed `PRINT CHR$(7)` + RETURN by CDP:
+`window.__audioDebug.clickCalls` went `93 → 279` across the bell and the
+speaker AudioContext went `suspended → running` (CDP input counts as user
+activation, same as a real gesture). **The user confirmed the IIgs boot beep is
+now audible in their real browser.**
+
+**Audio debug instrumentation** (kept, costs one counter each):
+
+- `src/ui/devices/audio/speaker.ts` — `window.__audioDebug`:
+  `{clickCalls, workletReady, initStage, initError, audioUnavailable,
+  isAudioButtonEnabled, emulatorSoundEnabled, contextState, speakerWorklet}`.
+  `initStage`/`initError` survive a worklet-load failure (audioUnavailable
+  silences ALL audio, Ensoniq included, because `isAudioEnabled()` folds it in).
+- `src/ui/devices/audio/iigs_ensoniq_audio.ts` — `window.__ensoniqDebug`:
+  `{contextState, resumeAttempts, resumeFailures, lastResumeError, playCalls}`.
+  Rejected `ctx.resume()` promises are now counted instead of swallowed by
+  `void`, and the hook sets on **every** exit path (an early "disabled" return
+  used to leave the handle absent, which read as "never called").
+- `window.__ensoniqBlocks` already existed and still counts blocks that reach
+  `source.start()`.
+
+**What the diagnosis ruled out** (worth recording so nobody re-chases them):
+
+- The speaker worklet (`public/worklet/oscillator.js`) loads fine; on a healthy
+  page `initStage = "ready"`.
+- `emulatorSoundEnable` is driven by `MSG_WORKER.MACHINE_STATE`
+  (`runMode === RUNNING`), so sound is not globally muted by the UI.
+- `?sound=off` is opt-in only; `inputparams.ts` does not disable audio by
+  default.
+- Chrome autoplay lockout is real but self-healing: both contexts start
+  `suspended`, and each `clickSpeaker` / per-block `resume()` succeeds once the
+  user has interacted with the page. CDP-dispatched input counts as a gesture.
+- The earlier "audible in headless Chrome" claims (section 36) ran with
+  `--autoplay-policy=no-user-gesture-required` and therefore never exercised
+  the suspended-context path.
+
+**Known measurement trap that is NOT an emulator bug**: typing a multi-line
+Applesoft program into the IIgs prompt via one CDP `rawKeyDown` per character
+loses characters (section 36 saw `?NEXT WITHOUT FOR`; this round lost the first
+character after every RETURN — `RUN` arrived as `]UN`). The 22ms/character
+cadence of the original `basicsnd.cjs` no longer suffices; slower cadence plus
+a long settle after each RETURN is required. Anything asserting on typed-in
+BROWSER programs needs this caution; the jest harness types reliably (it feeds
+`setKeyboardState` directly).
+
+**Still open**: game/application sound (e.g. Tass Times in Tonetown) was silent
+in the user's browser — under investigation (section 45's click chain is
+separate). The DOC→block→AudioContext transport is proven by
+`gs_basic_sound.test.ts`; what is NOT proven is which real games actually
+start DOC oscillators, and whether the Ensoniq block posting reaches the UI
+for them (`window.__ensoniqDebug.playCalls` answers that directly).
+
+### 45. ADB mouse click chain: $E10034 vector install + the single-click->double-click question — PARTIAL
+
+**What was fixed (committed this section)**: `iigsInitInterrupts()`
+(`src/worker/memory.ts`) now installs `$E1:0034 = JML $FEC5C8`. The ROM never
+writes `$E10034` itself, so before this the ADB mouse dispatch at `FF:B97F`
+landed on the unclaimed stub (`JML $FFB5DE`, `SEC; RTL`) and press dispatches
+were silently dropped. Runtime-verified: a click's press dispatch now reaches
+`FE:C5C8`, which publishes `E7=$9E07 / EB=17 / E9=26` (press) and `E7=$4F07`
+(release) via the STAs at `FE:C5F1/F6/FB`.
+
+**The FE:C5C8 mouse dispatcher, decoded** (128K ROM 01, bank FF = offset
+0x10000; `C:\Users\USER\AppData\Local\Temp\opencode\gssystem.bin`):
+
+- Entry: `PEA 0 / LDX #$031F / JSL $E10000` (tool call), reads `$C025`
+  modifiers, tool `$0323` with 5 param words → pulls 3 result words → publishes
+  `E7` (state word) / `EB` (Y cursor) / `E9` (X cursor).
+- `C60D`: `LDA $03,S / AND #$0004` gates on a tool-call result stack word, then
+  `JSR $C53A` translates `E7` via mask table `$FEBAA6,X` (X=0 → `Y|=$0080`,
+  X=2 → `Y|=$0040`) plus `$FEBACA,X` bit loop.
+- Posts events via `C674 LDX #$2006 / JSL $E10000` with params
+  `[word1][0][Y][A]`, where `A=$0001` (press) / `$0002` (release) and
+  `word1=$0000` / `$0010` distinguishes the two posts per dispatch.
+- The record writer `FE:C52B` (`LDA $E100EB / STA ($1C),Y` … `LDA $E100E9 /
+  STA ($1C),Y`) executes immediately after each post.
+
+**Current measured state**: per physical click the wire is clean — exactly one
+press, one release, `_latch:2`, `byte:4` (2 reports × X+Y); the UI sends one
+`mousePressed` (buttons `0x10`) and one `mouseReleased` (`0x00`). The ROM
+handler posts press+press, release+release (two posts per dispatch). The open
+question is which of the two posts the GS/OS Finder consumes and whether it
+reads the pair as mouseDown+mouseDown (single click acts as double).
+`adbclick.json` holds the raw `?adbtrace=1` capture of two clicks, keyed by the
+uprobe trio (`E7` writes) for post-processing.
+
+**Instrumentation inventory** (all debug-only, gated on `?adbtrace=1` /
+`?romtrace=1`, zero cost otherwise; built on the request/response pattern as
+instructed in section 26b — never sticky worker flags):
+
+- `src/worker/iigs_adb.ts`: `noteAdbLog` ring with pc-stamped entries (uses
+  `src/worker/cpu_pc.ts`, a pc-getter indirection hooked from `motherboard.ts`),
+  plus `readStatus`/`writeStatus`/`readData` log kinds.
+- `src/worker/memory.ts`: `probe`/`uprobe` counts for bank-0 `$0478-$077F`,
+  bank-`$E1` mirrors and `$E100E0-$FF`.
+- `src/ui/main2worker.ts` + `src/ui/inputparams.ts`: the `?adbtrace=1[+clear]`
+  poll, `window.__adbLog` + `__adbLogClear()`.
+- `src/ui/devices/audio/*`: as in section 44.
+
+**Next steps for the click issue**: post-process `adbclick.json` to settle
+posts-per-press (count `C674` occurrences per dispatch vs `$C52B` record
+writes), identify the `$2006`/`$1F03`/`$0323` toolset semantics, and decode the
+mask table bytes at `$FEBAA6`/`$FEBACA` from `gssystem.bin`.
