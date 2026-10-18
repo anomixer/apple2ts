@@ -566,6 +566,16 @@ if (typeof self !== "undefined") {
             ctrl: o.control, vol: o.vol, freq: o.freq,
             wt: o.wavetblpointer, acc: o.accumulator, irq: o.irqpend,
           })),
+          timerOsc: {
+            ctrl: iigsEnsoniq.oscillators[31].control,
+            vol: iigsEnsoniq.oscillators[31].vol,
+            freq: iigsEnsoniq.oscillators[31].freq,
+            wt: iigsEnsoniq.oscillators[31].wavetblpointer,
+            wtsize: iigsEnsoniq.oscillators[31].wavetblsize,
+            resolution: iigsEnsoniq.oscillators[31].resolution,
+            acc: iigsEnsoniq.oscillators[31].accumulator,
+            irq: iigsEnsoniq.oscillators[31].irqpend,
+          },
         } as unknown as MessagePayload)
         break
       case MSG_MAIN.ADB_TRACE_REQUEST: {
