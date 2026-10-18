@@ -285,8 +285,8 @@ export class IIGSADB {
       case 0x0f:                          // layouts available
         this.postResponse([1, 0]);
         break;
-      case 0x11:                          // send an FDB keycode
-        this.queueKeyboardCode(a1);
+      case 0x11:                          // send an FDB keycode: raw event byte
+        this.queueKeyboard(a1);
         break;
     }
   }
@@ -516,14 +516,25 @@ export class IIGSADB {
     return this.keyboardRegs[0] !== 0xff || this.keyboardRegs[1] !== 0xff;
   }
 
-  // Queue an ADB keycode (bit 7 set = key pressed) plus the modifier byte.
-  private queueKeyboardCode(code: number, mods = 0) {
-    this.keyboardRegs[0] = code | 0x80;
+  // Queue a raw ADB keyboard event byte plus the modifier byte into keyboard
+  // register 0. The event byte's bit 7 is the KEY-UP flag per the Apple IIgs
+  // Hardware Reference and gssquared (ADB_Keyboard.hpp:477:
+  // code = (up ? 0x80 : 0x00) | keycode) — the opposite of the Apple IIe
+  // convention where bit 7 marks a key press. $C027's keyboard-data status bit
+  // and the keyboard interrupt enable read hasKeyData(), so a queued byte
+  // becomes visible to the ROM's ADB task and to programs that poll the ADB.
+  private queueKeyboardEventByte(eventByte: number, mods = 0) {
+    this.keyboardRegs[0] = eventByte & 0xff;
     this.keyboardRegs[1] = mods;
   }
 
-  queueKeyboard(keycode: number) {
-    this.queueKeyboardCode(keycode, this.peekModifiers());
+  queueKeyboard(eventByte: number, mods = this.peekModifiers()) {
+    this.queueKeyboardEventByte(eventByte, mods);
+  }
+
+  // Read-back for tests/diagnostics: the last queued ADB keyboard report.
+  getKeyboardEvent(): [number, number] {
+    return [this.keyboardRegs[0], this.keyboardRegs[1]];
   }
 
   readModifiers(): number {

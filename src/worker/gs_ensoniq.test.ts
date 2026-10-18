@@ -112,6 +112,78 @@ test("a keyed-on oscillator with wave RAM produces audible PCM", () => {
   expect(peak).toBeGreaterThan(0)
 })
 
+// gssquared soundglu.cpp ensoniq_mirror_mono_to_stereo: mono software usually
+// parks every voice on one channel (often 0 / right), so only one output side
+// gets energy. The built-in IIgs speaker plays a mix of both channels, so a
+// same-CA0 chorus must be mirrored onto L and R.
+test("mono voices are mirrored onto both L and R", () => {
+  set(0xC03C, 0x40 | 0x20)
+  set(0xC03E, 0x00)
+  set(0xC03F, 0x00)
+  for (let i = 0; i < 256; i++) {
+    set(0xC03D, i + 1)
+  }
+  writeReg(0xc0, 0x00)
+  writeReg(0x80, 0x00)
+  writeReg(0x40, 0xff)
+  writeReg(0x00, 0x40)
+  writeReg(0x20, 0x00)
+  // CA0=0 -> assigned 0 but flipped to right(1) by the odd/even mapping.
+  writeReg(0xa0, 0x00)
+  expect(iigsEnsoniq.hasActiveOscillators()).toBe(true)
+
+  const pcm = iigsEnsoniq.generateSamples(512)
+  let leftNonzero = false
+  let rightNonzero = false
+  for (let s = 0; s < 512; s++) {
+    expect(pcm[s * 2]).toBe(pcm[s * 2 + 1])
+    if (pcm[s * 2] !== 0) leftNonzero = true
+    if (pcm[s * 2 + 1] !== 0) rightNonzero = true
+  }
+  expect(leftNonzero).toBe(true)
+  expect(rightNonzero).toBe(true)
+})
+
+// Once voices genuinely sit on different channels the DOC is delivering real
+// stereo and L/R must be left alone.
+test("true stereo is left untouched by the mono mirror", () => {
+  set(0xC03C, 0x40 | 0x20)
+  set(0xC03E, 0x00)
+  set(0xC03F, 0x00)
+  for (let i = 0; i < 256; i++) {
+    set(0xC03D, i + 1)
+  }
+  // Two enabled oscillators (register $E1 value 2 -> osce 2), CA0 split across
+  // them, different volumes so the channels are provably different.
+  writeReg(0xe1, 0x02)
+  writeReg(0xc0, 0x00)
+  writeReg(0xc1, 0x00)
+  writeReg(0x80, 0x00)
+  writeReg(0x81, 0x00)
+  writeReg(0x40, 0xff)
+  writeReg(0x41, 0x80)
+  writeReg(0x00, 0x40)
+  writeReg(0x20, 0x00)
+  writeReg(0x01, 0x40)
+  writeReg(0x21, 0x00)
+  writeReg(0xa0, 0x10)   // CA0=1 -> left(0)
+  writeReg(0xa1, 0x00)   // CA0=0 -> right(1)
+  expect(iigsEnsoniq.hasActiveOscillators()).toBe(true)
+
+  const pcm = iigsEnsoniq.generateSamples(512)
+  let leftNonzero = false
+  let rightNonzero = false
+  let differs = false
+  for (let s = 0; s < 512; s++) {
+    if (pcm[s * 2] !== 0) leftNonzero = true
+    if (pcm[s * 2 + 1] !== 0) rightNonzero = true
+    if (pcm[s * 2] !== pcm[s * 2 + 1]) differs = true
+  }
+  expect(leftNonzero).toBe(true)
+  expect(rightNonzero).toBe(true)
+  expect(differs).toBe(true)
+})
+
 test("a halted oscillator produces silence", () => {
   set(0xC03C, 0x40 | 0x20)
   set(0xC03E, 0x00)

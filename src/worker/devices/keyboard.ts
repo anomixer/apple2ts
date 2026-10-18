@@ -1,6 +1,7 @@
 import { handleKeyMapping } from "../games/game_mappings"
-import { memGetC000, memSetC000 } from "../memory"
+import { getCurrentMachineName, memGetC000, memSetC000 } from "../memory"
 import { requestSnapshot } from "../motherboard"
+import { iigsADB } from "../iigs_adb"
 
 const setKeyStrobe = (key: number) => {
   // Sather, Understanding the Apple IIe p2-16, all addresses from $C000-$C01F
@@ -122,8 +123,60 @@ export const advanceKeySequence = () => {
   setKeyStrobe(sequence.keys[sequence.currentIndex])
 }
 
+// Map DOM KeyboardEvent.code onto Apple IIgs ADB keycodes. Table transcribed
+// from gssquared's ADB_Keyboard.hpp (the gold standard), standard subsets
+// first: letters, digits, punctuation, navigation and modifiers. Modifier
+// codes sit in the $36-$3A block; ADB marks modifier events in the event byte.
+const DOM_TO_ADB: Record<string, number> = {
+  KeyA: 0x00, KeyS: 0x01, KeyD: 0x02, KeyF: 0x03, KeyH: 0x04, KeyG: 0x05,
+  KeyZ: 0x06, KeyX: 0x07, KeyC: 0x08, KeyV: 0x09, KeyB: 0x0B,
+  KeyQ: 0x0C, KeyW: 0x0D, KeyE: 0x0E, KeyR: 0x0F, KeyY: 0x10, KeyT: 0x11,
+  Digit1: 0x12, Digit2: 0x13, Digit3: 0x14, Digit4: 0x15, Digit6: 0x16,
+  Digit5: 0x17, Equal: 0x18, Digit9: 0x19, Digit7: 0x1A, Minus: 0x1B,
+  Digit8: 0x1C, Digit0: 0x1D, BracketRight: 0x1E, KeyO: 0x1F, KeyU: 0x20,
+  BracketLeft: 0x21, KeyI: 0x22, KeyP: 0x23, Enter: 0x24, NumpadEnter: 0x24,
+  KeyL: 0x25, KeyJ: 0x26, Quote: 0x27, KeyK: 0x28, Semicolon: 0x29,
+  Backslash: 0x2A, Comma: 0x2B, Slash: 0x2C, KeyN: 0x2D, KeyM: 0x2E,
+  Period: 0x2F, Tab: 0x30, Space: 0x31, Backquote: 0x32, Backspace: 0x33,
+  Escape: 0x35, ControlLeft: 0x36, ControlRight: 0x36, MetaLeft: 0x37,
+  MetaRight: 0x37, ShiftLeft: 0x38, ShiftRight: 0x38, CapsLock: 0x39,
+  AltLeft: 0x3A, AltRight: 0x3A, ArrowLeft: 0x3B, ArrowRight: 0x3C,
+  ArrowDown: 0x3D, ArrowUp: 0x3E,
+}
+
+let adbKeyDownCode = -1
+
 export const setKeyboardState = (state: KeyboardState) => {
   interruptKeySequence()
+  if (getCurrentMachineName() === "APPLE2GS" && state.domCode) {
+    // The IIgs's physical keyboard is ADB device address 2. Programs that do
+    // not poll the legacy $C000 softswitch (GS/OS applications, IIgs games -
+    // e.g. Tass Times once it is in the game proper) only ever see keys
+    // through ADB keyboard register 0, so hardware keys must be delivered
+    // there as well. Event bytes follow the ADB convention: the keycode for a
+    // key down, keycode | 0x80 for a key up (see iigs_adb.ts). Keyboard
+    // auto-repeat is the guest OS's job, so host repeats are not re-queued.
+    const code = DOM_TO_ADB[state.domCode]
+    if (code !== undefined) {
+      if (state.isDown) {
+        if (!state.repeat) {
+          iigsADB.queueKeyboard(code)
+          adbKeyDownCode = code
+        }
+      } else if (adbKeyDownCode >= 0) {
+        iigsADB.queueKeyboard(adbKeyDownCode | 0x80)
+        adbKeyDownCode = -1
+      } else {
+        // Up for a key whose down was missed (focus loss): still deliver it,
+        // so a stuck key does not survive a window switch.
+        iigsADB.queueKeyboard(code | 0x80)
+      }
+    }
+    if (state.saveSnapShot) {
+      requestSnapshot()
+    }
+    return
+  }
   if (!state.isDown || state.key < 0) {
     keyboardIsDown = false
     keyboardRepeatKey = 0

@@ -2548,3 +2548,88 @@ serviced and the title screen music never started.
   whatever the staged latch holds.
 - Zero-volume oscillators are *supposed* to keep the chip running. Any gate
   that treats "silent" as "no work" starves exactly the TN #23 timer pattern.
+
+---
+
+### 47. IIgs Keyboard via ADB + Sound Cadence Fix + Mono Mirror — IN PROGRESS
+
+**Symptoms (user report, 2026-10-18)**: Tass Times music plays but sounds slow;
+Silpheed plays at the right speed but the pitch is "weird"; in-game keyboard
+and mouse do not respond (title screen works).
+
+#### A. IIgs keyboard was never delivered to the ADB (FIXED)
+
+On the Apple IIgs the physical keyboard is ADB device address 2 and reaches the
+guest only through ADB keyboard register 0. `setKeyboardState()` in
+`src/worker/devices/keyboard.ts` only ever wrote the Apple IIe `$C000` soft
+switch, so programs that poll the legacy strobe (Applesoft) worked, but
+IIgs-native programs (Tass Times in its game loop) never saw a key.
+
+Fix:
+- `iigs_adb.ts`: `queueKeyboard()` now queues a raw ADB event byte. The
+  event byte's bit 7 is the KEY-UP flag (`code | 0x80` on release), per
+  gssquared `ADB_Keyboard.hpp:477` — the opposite of the Apple IIe convention
+  where bit 7 marks a key press. The `$11` "send FDB keycode" command passes
+  its byte through unchanged.
+- `keyboard.ts`: `setKeyboardState()` branches on
+  `getCurrentMachineName() === "APPLE2GS" && state.domCode` and routes to
+  `iigsADB.queueKeyboard()` using a DOM-`code` → ADB-keycode table transcribed
+  from gssquared (`DOM_TO_ADB`). A new `domCode` field on `KeyboardState`
+  (`src/common/custom.d.ts`) carries the physical key; `canvas.tsx` now passes
+  `domCode: code` on both key-down and key-up.
+- Host auto-repeat is not re-queued (keyboard repeat is the guest OS's job).
+- New regression test `src/worker/gs_keyboard_adb.test.ts` (5 cases) and an
+  updated `devices/keyboard.test.ts` mock (`getCurrentMachineName`).
+
+#### B. DOC block cadence was anchored to the 2.8 MHz frame (FIXED)
+
+`motherboard.ts` posted one Ensoniq PCM block per `46727` CPU cycles
+regardless of the active speed mode. At Normal (1.02 MHz) that is one block
+every 2.74 emulated frames, starving the audio queue to ~37% fill and making
+the music sound slow. The frame timing (`frameCycles`) had the same
+hard-coded 46727, so VBL and the quarter/one-second counters also ran
+2.74x slow at Normal.
+
+Fix: anchor `frameCycles` and the Ensoniq bucket key to the active refresh
+budget (`cpuCyclesPerRefresh`) instead of the 2.8 MHz constant; scale the VBL
+window and the per-scanline divisor proportionally. One refresh is 1/60 s of
+emulated machine time at every speed mode, so the DOC emits `outRate/60`
+samples per refresh. Verified in headless Chrome: `blocks` grows ~60.5/s and
+`irqTicks` (the game's tempo quantum) sits at ~4.7/s, matching the game's
+own authored tick rate.
+
+#### C. Mono voices were silent on the left speaker (FIXED)
+
+gssquared's `ensoniq_mirror_mono_to_stereo` ports verbatim into
+`iigs_ensoniq.ts`: when every non-halted enabled oscillator shares the same
+CA0, the live channel is copied onto both L and R. Mono software (Tass Times
+parks all voices on CA0) therefore now sounds on both speakers, matching the
+built-in IIgs speaker, which sums both channels. Two new cases in
+`gs_ensoniq.test.ts`.
+
+#### Diagnostic instrumentation (?ensoniqdbg=1)
+
+The payload (`worker2main.ts` `ENSONIQ_DOC_STATS`) now carries `rege1`,
+`outRate`, `monoMirrorCount`, `irqTicks`, `speedMode`, `cyclesPerRefresh`,
+a short ring of recent blocks `{cyc, osce, rate, frames, mirrored}` and an
+oscillator dump sized to `max(4, osce)`. `iigs_ensoniq.ts` gained
+`outputRate()`, the counters and the ring; `motherboard.ts` stamps the
+machine context at each post.
+
+#### Still open
+
+- Silpheed (in `MYCRATE.2MG`) pitch: needs a measured osc dump from a live
+  run; candidate is a rate discontinuity from oscillator-count changes
+  between blocks, or the game's own authored timing.
+- Tass Times in-game keyboard/mouse: the ADB keyboard path is now wired
+  (§47A) and the mouse press dispatch vector was installed (§45); the
+  remaining piece is the GS/OS/ROM side that turns the ADB report into a
+  visible cursor and a delivered click (section 29a / 38), which is still
+  unresolved.
+- `?adbtrace=1` captures in `adbclick.json` remain to be post-processed
+  (posts-per-press, `$2006/$1F03/$0323` semantics, mask table at
+  `$FEBAA6/$FEBACA`).
+
+Full worker suite: 783/784 (only the pre-existing `vera.test.ts` CMDR-DOS
+failure, which also fails on a clean tree). `tsc --noEmit` clean. UI suite
+272/272 pass.

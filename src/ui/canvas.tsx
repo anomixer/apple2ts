@@ -121,6 +121,7 @@ const Apple2Canvas = (props: DisplayProps) => {
       passKeyboardState({
         key: hardwareKeyboardKey.current.key,
         isDown: false,
+        domCode: hardwareKeyboardKey.current?.code,
         repeat: false,
       })
     }
@@ -135,6 +136,7 @@ const Apple2Canvas = (props: DisplayProps) => {
     passKeyboardState({
       key,
       isDown: true,
+      domCode: code,
       repeat: hardwareKeyboardRepeats(),
       saveSnapShot: getUIStateBoolean("snapshotOnKeyPress"),
     })

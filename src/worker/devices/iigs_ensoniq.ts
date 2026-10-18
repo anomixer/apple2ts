@@ -68,6 +68,26 @@ export class IigsEnsoniq {
   systemVolume = 1
   smoothedVolume = 1
 
+  // ---- Diagnostics (?ensoniqdbg=1) ----
+  // Counts, not guesses: mirrorMonoCount = mono-chorus mirror applications,
+  // irqTicks = oscillator IRQ pend assertions (the game's tempo quantum),
+  // blocks = a short ring of the last generated blocks (rate/frames/mirrored),
+  // and lastSpeedMode/lastCyclesPerRefresh/lastCyc stamped by the run loop so a
+  // page can see the block cadence against the active speed mode.
+  monoMirrorCount = 0
+  mirrorCountAtGenStart = 0
+  irqTicks = 0
+  lastSpeedMode = -1
+  lastCyclesPerRefresh = 0
+  lastCyc = 0
+  blocks: Array<{ cyc: number, osce: number, rate: number, frames: number, mirrored: boolean }> = []
+
+  // The DOC output sample rate: clock / 8 / (oscillators enabled + 2).
+  // Single source of truth for both the run loop's post budget and the ring.
+  outputRate(): number {
+    return Math.max(1, Math.floor(7159090 / 8 / (Math.max(1, this.osce) + 2)))
+  }
+
   reset() {
     this.soundctl = 0x00
     this.soundadrl = 0x00
@@ -79,6 +99,10 @@ export class IigsEnsoniq {
     this.e0FetchedThisTxn = false
     this.systemVolume = 1
     this.smoothedVolume = 1
+    this.monoMirrorCount = 0
+    this.mirrorCountAtGenStart = 0
+    this.irqTicks = 0
+    this.blocks = []
     for (let i = 0; i < 32; i++) {
       const o = this.oscillators[i]
       o.freq = 0; o.wtsize = 256; o.control = 0; o.vol = 0; o.data = 0x80
@@ -346,6 +370,9 @@ export class IigsEnsoniq {
         return
       }
       o.irqpend = 1
+      // Diagnostic tick counter: every pend assertion is the game's tempo
+      // quantum (timer oscillator wraps), measurable per wall second.
+      this.irqTicks++
       this.updateIrqStatus()
     }
   }
@@ -438,7 +465,52 @@ export class IigsEnsoniq {
     // Slew towards the target over roughly 20ms of samples.
     const alpha = Math.min(1, numFrames / (0.020 * Math.max(1, 28000)))
     this.smoothedVolume += (this.systemVolume - this.smoothedVolume) * alpha
+    this.mirrorMonoToStereo(buffer, numFrames, chan)
+    const mirrorBefore = this.mirrorCountAtGenStart
+    this.mirrorCountAtGenStart = this.monoMirrorCount
+    this.blocks.unshift({
+      cyc: this.lastCyc, osce: this.osce, rate: this.outputRate(),
+      frames: numFrames, mirrored: this.monoMirrorCount > mirrorBefore,
+    })
+    if (this.blocks.length > 12) this.blocks.pop()
     return buffer
+  }
+
+  // Ported from gssquared soundglu.cpp ensoniq_mirror_mono_to_stereo, logic
+  // intact: Mono software usually parks every voice on one channel (often
+  // 0 / right), so only one SDL side gets energy. If all non-halted enabled
+  // oscillators share the same CA0, mirror that side onto both L and R.
+  private mirrorMonoToStereo(buffer: Int16Array, numFrames: number, chan: number) {
+    if (chan !== 2 || numFrames === 0) {
+      return
+    }
+    const ossecs = Math.max(1, this.osce)
+    let seen = 0
+    let ca0 = 0
+    for (let o = 0; o < ossecs; o++) {
+      const osc = this.oscillators[o]
+      if (osc.control & 1) {
+        continue // halted
+      }
+      const oscCa0 = (osc.control >> 4) & 1
+      if (seen === 0) {
+        ca0 = oscCa0
+        seen = 1
+      } else if (oscCa0 !== ca0) {
+        return // true stereo — leave L/R alone
+      }
+    }
+    if (seen === 0) {
+      return // silence
+    }
+    // Same flip as generateSamples: odd→L(0), even→R(1).
+    const live = ca0 ^ 1
+    for (let i = 0; i < numFrames; i++) {
+      const s = buffer[i * 2 + live]
+      buffer[i * 2 + 0] = s
+      buffer[i * 2 + 1] = s
+    }
+    this.monoMirrorCount++
   }
 }
 

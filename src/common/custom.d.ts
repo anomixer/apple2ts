@@ -101,6 +101,7 @@ type KeyboardState = {
   isDown: boolean,
   repeat: boolean,
   saveSnapShot?: boolean,
+  domCode?: string,
 }
 
 type KeySequenceRequest = {

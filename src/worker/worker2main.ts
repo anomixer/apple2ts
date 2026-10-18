@@ -551,11 +551,18 @@ if (typeof self !== "undefined") {
         passEnsoniqDocStats({
           docAccess: { ...docAccess },
           osce: iigsEnsoniq.osce,
+          rege1: iigsEnsoniq.rege1,
+          outRate: iigsEnsoniq.outputRate(),
+          monoMirrorCount: iigsEnsoniq.monoMirrorCount,
+          irqTicks: iigsEnsoniq.irqTicks,
+          speedMode: iigsEnsoniq.lastSpeedMode,
+          cyclesPerRefresh: iigsEnsoniq.lastCyclesPerRefresh,
+          blocks: iigsEnsoniq.blocks.slice(0, 6),
           active: iigsEnsoniq.hasActiveOscillators(),
           soundadrl: iigsEnsoniq.soundadrl,
           soundadrh: iigsEnsoniq.soundadrh,
           systemVolume: iigsEnsoniq.systemVolume,
-          osc: iigsEnsoniq.oscillators.slice(0, 4).map(o => ({
+          osc: iigsEnsoniq.oscillators.slice(0, Math.min(12, Math.max(4, iigsEnsoniq.osce))).map(o => ({
             ctrl: o.control, vol: o.vol, freq: o.freq,
             wt: o.wavetblpointer, acc: o.accumulator, irq: o.irqpend,
           })),

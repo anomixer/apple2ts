@@ -1250,8 +1250,16 @@ const doAdvance6502 = () => {
     if (cycles < 0) break
     cycleTotal += cycles
     const isIIgs = (machineName === "APPLE2GS")
-    const frameCycles = isIIgs ? 46727 : 17030
-    const vblCycles = isIIgs ? 12460 : 4550
+    // Frame timing is anchored to the ACTIVE CPU clock, not to the 2.8MHz
+    // native rate. cycleCount advances by cpuCyclesPerRefresh (the current
+    // speed mode) per refresh, and one refresh is 1/60 s of emulated machine
+    // time at every speed, so the video frame in CPU cycles is exactly the
+    // refresh budget. The old hard-coded 46727 (= the 2.8 MHz frame) made VBL
+    // and the quarter/one-second counters run 2.74x slow at Normal (1.02 MHz),
+    // which was the tempo bug behind slow IIgs music (e.g. the Tass Times
+    // timer-driven sequencer).
+    const frameCycles = isIIgs ? cpuCyclesPerRefresh : 17030
+    const vblCycles = Math.round((isIIgs ? 12460 / 46727 : 4550 / 17030) * frameCycles)
     const cycleInFrame = s6502.cycleCount % frameCycles
     if (cycleInFrame < vblCycles) {
       // Return "low" for 70 scan lines out of 262 (70 * 65 cycles = 4550)
@@ -1276,7 +1284,11 @@ const doAdvance6502 = () => {
       }
     } else {
       endVBL()
-      const line = Math.floor((cycleInFrame - vblCycles) / (isIIgs ? 178 : 65))
+      // 192 visible lines fill the frame after the VBL window. The per-line
+      // cycle count scales with the frame budget: at the 2.8 MHz rate this is
+      // (46727-12460)/192 = 178.5; at Normal (1.02 MHz) it is
+      // (17030-4550)/192 = 65, the Mega II's 65-cycle scanline.
+      const line = Math.floor((cycleInFrame - vblCycles) / ((frameCycles - vblCycles) / 192))
       if (line !== currentLine && line < 192) {
         currentLine = line
         exportMemoryToHiresLine(line)
@@ -1313,14 +1325,27 @@ const doAdvance6502 = () => {
   cpuSpeed = (speedInCyclesPerMS < 10000) ? Math.round(speedInCyclesPerMS / 10) / 100 :
     Math.round(speedInCyclesPerMS / 100) / 10
   
-  // Apple IIgs Ensoniq ES5503 audio output, once per emulated frame.
+  // Apple IIgs Ensoniq ES5503 audio output, once per emulated frame. The
+  // bucket key is the active refresh budget (cpuCyclesPerRefresh), not a
+  // hard-coded 46727: one refresh is 1/60 s of machine time at every speed
+  // mode, so the DOC must emit outRate/60 samples per refresh regardless of
+  // the CPU clock. This is the refresh-loop equivalent of gssquared's
+  // ensoniq_catch_up, which ties sample generation to emulated 14M time
+  // (16 * (oscsenabled + 2) c14m per sample). With the old fixed 46727 the
+  // block cadence ran at the 2.8 MHz rate while Normal (1.02 MHz) executed
+  // only 17030 cycles per refresh, starving the audio queue for 63% of the
+  // post interval — the "Tass Times music is slow / choppy" symptom.
   if ((machineName === "APPLE2GS")) {
-    const ensoniqProcessorId = Math.floor(s6502.cycleCount / 46727)
+    const ensoniqProcessorId = Math.floor(s6502.cycleCount / cpuCyclesPerRefresh)
     // simple last-frame tracker attached to global
     if ((globalThis as any).__lastEnsoniqFrame !== ensoniqProcessorId) {
       (globalThis as any).__lastEnsoniqFrame = ensoniqProcessorId
-      const osce = Math.max(1, iigsEnsoniq.osce)
-      const outRate = Math.max(1, Math.floor(7159090 / 8 / (osce + 2)))
+      // Stamp the diagonal context (?ensoniqdbg=1 reads these back): the
+      // active speed mode and the run loop position at generation time.
+      iigsEnsoniq.lastSpeedMode = speedMode
+      iigsEnsoniq.lastCyclesPerRefresh = cpuCyclesPerRefresh
+      iigsEnsoniq.lastCyc = s6502.cycleCount
+      const outRate = iigsEnsoniq.outputRate()
       const numSamples = Math.max(1, Math.round(outRate / 60))
       try {
         if (iigsEnsoniq.hasActiveOscillators()) {
