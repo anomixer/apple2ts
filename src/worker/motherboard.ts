@@ -1226,6 +1226,10 @@ const doAdvance6502 = () => {
   }
   let cycleTotal = 0
   let currentLine = -1
+  let cachedIsIIgs = false
+  let cachedSpeedMode = -999
+  let cachedFrameCycles = 17030
+  let cachedVblCycles = 4550
 
   for (;;) {
     let cycles = 0
@@ -1256,16 +1260,14 @@ const doAdvance6502 = () => {
     }
     if (cycles < 0) break
     const isIIgs = (machineName === "APPLE2GS")
-    // Frame timing is anchored to the ACTIVE CPU clock, not to the 2.8MHz
-    // native rate. cycleCount advances by cpuCyclesPerRefresh (the current
-    // speed mode) per refresh, and one refresh is 1/60 s of emulated machine
-    // time at every speed, so the video frame in CPU cycles is exactly the
-    // refresh budget. The old hard-coded 46727 (= the 2.8 MHz frame) made VBL
-    // and the quarter/one-second counters run 2.74x slow at Normal (1.02 MHz),
-    // which was the tempo bug behind slow IIgs music (e.g. the Tass Times
-    // timer-driven sequencer).
-    const frameCycles = isIIgs ? cpuCyclesPerRefresh : 17030
-    const vblCycles = Math.round((isIIgs ? 12460 / 46727 : 4550 / 17030) * frameCycles)
+    if (cachedIsIIgs !== isIIgs || cachedSpeedMode !== speedMode) {
+      cachedIsIIgs = isIIgs
+      cachedSpeedMode = speedMode
+      cachedFrameCycles = isIIgs ? cpuCyclesPerRefresh : 17030
+      cachedVblCycles = Math.round((isIIgs ? 12460 / 46727 : 4550 / 17030) * cachedFrameCycles)
+    }
+    const frameCycles = cachedFrameCycles
+    const vblCycles = cachedVblCycles
     const cycleInFrame = s6502.cycleCount % frameCycles
     if (cycleInFrame < vblCycles) {
       // Return "low" for 70 scan lines out of 262 (70 * 65 cycles = 4550)
