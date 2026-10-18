@@ -2633,3 +2633,28 @@ machine context at each post.
 Full worker suite: 783/784 (only the pre-existing `vera.test.ts` CMDR-DOS
 failure, which also fails on a clean tree). `tsc --noEmit` clean. UI suite
 272/272 pass.
+---
+
+### 48. Apple IIgs Native-Mode CPU Speed (2.8 MHz) — IMPLEMENTED
+
+**Root cause of slow Tass Times music**: The IIgs 65816 runs at 1.02 MHz in
+emulation mode (E=1) and 2.8 MHz in native mode (E=0), unless slow mode is
+forced by a `$C036` write. apple2ts charged every instruction the same number
+of cycles regardless of the E flag, so native-mode code (including Tass Times'
+DOC sound driver) ran at 1.02 MHz — 2.74x too slow. The DOC timer tick rate
+(4.0/s) was correct, but the per-tick processing was starved.
+
+**Implementation**:
+- `src/worker/cpu65816.ts`: added `enteredNativeMode` flag, set in
+  `setEmulation()` when transitioning E=1 to E=0 (CLC;XCE).
+- `src/worker/motherboard.ts`: run loop checks `enteredNativeMode`; if set,
+  clears `iigsSlowMode` and applies a 0.366 (1.024/2.8) speed factor to
+  `cycleTotal` (run-loop budget) for native-mode code. `cycleCount` keeps the
+  full 1 MHz-equivalent count for VBL/DOC/IRQ timing.
+- `src/worker/memory.ts`: `$C036` write sets `iigsSlowMode = true`.
+- Slow mode starts `false`; the ROM's early `$C036` write sets it `true`
+  before any native-mode code runs.
+
+**Verification**: 47,986 native-fast instructions measured in 200 frames.
+Full worker suite 783/784 (only pre-existing `vera.test.ts` CMDR-DOS failure).
+`tsc --noEmit` clean.

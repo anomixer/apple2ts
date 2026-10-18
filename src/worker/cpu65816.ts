@@ -126,6 +126,7 @@ export class CPU65816 implements ICPU {
     public P: number = 0; // Processor Status
     
     public emulationMode: boolean = true;
+    public enteredNativeMode: boolean = false;
     public stopped: boolean = false;
     public waiting: boolean = false;
     public irqPending: boolean = false;
@@ -1252,6 +1253,10 @@ export class CPU65816 implements ICPU {
     }
 
     private setEmulation(e: boolean) {
+        if (!e && this.emulationMode) {
+            // Transitioning from emulation to native mode: clear slow mode
+            this.enteredNativeMode = true;
+        }
         this.emulationMode = e;
         this.applyWidthConstraints();
     }

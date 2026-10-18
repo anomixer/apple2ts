@@ -91,6 +91,8 @@ import { findMemory, getMemoryView, resolveMemoryRangeRequest } from "./memory_v
 let speedMode = 0
 let iigsQuarterSecCounter = 0
 let iigsOneSecCounter = 0
+export let iigsSlowMode = false
+export const setIigsSlowMode = (v: boolean) => { iigsSlowMode = v }
 let cpuSpeed = 0
 export let isDebugging = false
 let appMode = "default"
@@ -1231,11 +1233,24 @@ const doAdvance6502 = () => {
       const stepT = softCard.stepZ80() || 4
       cycles = Math.max(1, Math.round(stepT / 2))
       s6502.cycleCount += cycles
+      cycleTotal += cycles
     } else {
       cycles = cpu.processInstruction(tracing ? updateTrace : null)
-      s6502.cycleCount += cycles
       if (machineName === "APPLE2GS") {
+        const c65816 = cpu as CPU65816
+        if (c65816.enteredNativeMode) {
+          setIigsSlowMode(false)
+          c65816.enteredNativeMode = false
+        }
+        const nativeFast = (!c65816.emulationMode) && !iigsSlowMode
+        const speedFactor = nativeFast ? (1.024 / 2.8) : 1.0
+        const effectiveCycles = Math.max(1, Math.round(cycles * speedFactor))
+        s6502.cycleCount += cycles
+        cycleTotal += effectiveCycles
         processCycleCountCallbacks()
+      } else {
+        s6502.cycleCount += cycles
+        cycleTotal += cycles
       }
     }
     // Floppy motor-off delay, measured in CPU cycles so it stays locked to the
@@ -1248,7 +1263,6 @@ const doAdvance6502 = () => {
       break
     }
     if (cycles < 0) break
-    cycleTotal += cycles
     const isIIgs = (machineName === "APPLE2GS")
     // Frame timing is anchored to the ACTIVE CPU clock, not to the 2.8MHz
     // native rate. cycleCount advances by cpuCyclesPerRefresh (the current
