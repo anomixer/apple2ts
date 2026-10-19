@@ -796,7 +796,9 @@ export const updateAddressTables = () => {
 }
 
 // Used for jumping to custom TS functions when program counter hits an address.
-export const specialJumpTable = new Map<number, () => void>()
+// Indexed by program counter — lookups happen on EVERY opcode fetch in bank 00
+// (the GS/OS hot path), so an array dereference beats Map hashing.
+export const specialJumpTable: Array<(() => void) | undefined> = new Array(0x10000).fill(undefined)
 
 // Custom callbacks for mem get/set to $C090-$C0FF slot I/O and $C100-$C7FF.
 const slotIOCallbackTable = new Array<AddressCallback | undefined>(8)
@@ -864,7 +866,7 @@ export const setSlotDriver = (slot: number, driver: Uint8Array, jump = 0, fn = (
     slotIOC8Space[slot] = 0xff
   }
   if (jump) {
-    specialJumpTable.set(jump, fn)
+    specialJumpTable[jump] = fn
   }
 }
 

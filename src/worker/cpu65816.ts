@@ -82,13 +82,27 @@ const ADDR_CYCLES_816: {read: number, write: number, rmw: number}[] = [
 // The direct page indexed modes (dp,X / dp,Y) are deliberately absent: their
 // index add is charged in the table above, and in emulation mode the access
 // wraps inside page zero so it costs exactly what the 6502's zp,X costs.
-const INDEXED_ADDR_MODES_816 = new Set<ADDR_MODE_816>([
-    ADDR_MODE_816.ABSOLUTE_X,
-    ADDR_MODE_816.ABSOLUTE_Y,
-    ADDR_MODE_816.DIRECT_INDIRECT_INDEXED,
-    ADDR_MODE_816.DIRECT_INDIRECT_LONG_INDEXED,
-    ADDR_MODE_816.STACK_RELATIVE_INDIRECT_INDEXED,
-])
+// Private-bitset version of the mode set above, used by chargeAddress() — a
+// typed-array dereference beats Set.prototype.has on the per-op hot path.
+const INDEXED_ADDR_BITSET = new Uint8Array(32)
+INDEXED_ADDR_BITSET[ADDR_MODE_816.ABSOLUTE_X] = 1
+INDEXED_ADDR_BITSET[ADDR_MODE_816.ABSOLUTE_Y] = 1
+INDEXED_ADDR_BITSET[ADDR_MODE_816.DIRECT_INDIRECT_INDEXED] = 1
+INDEXED_ADDR_BITSET[ADDR_MODE_816.DIRECT_INDIRECT_LONG_INDEXED] = 1
+INDEXED_ADDR_BITSET[ADDR_MODE_816.STACK_RELATIVE_INDIRECT_INDEXED] = 1
+// Flat Int8Array views over ADDR_CYCLES_816 for chargeAddress(): the per-op
+// hot path dereferences a typed array instead of walking three nested object
+// properties per instruction.
+const ADS = ADDR_MODE_816.ABSOLUTE_INDIRECT_LONG + 2
+const ADR_CYC_READ = new Int8Array(ADS)
+const ADR_CYC_WRITE = new Int8Array(ADS)
+const ADR_CYC_RMW = new Int8Array(ADS)
+for (let m = 0; m < ADDR_CYCLES_816.length; m++) {
+    ADR_CYC_READ[m] = ADDR_CYCLES_816[m].read
+    ADR_CYC_WRITE[m] = ADDR_CYCLES_816[m].write
+    ADR_CYC_RMW[m] = ADDR_CYCLES_816[m].rmw
+}
+
 export const VEC_E_NMI = 0xFFFA;
 export const VEC_E_RESET = 0xFFFC;
 export const VEC_E_IRQ = 0xFFFE;
@@ -258,7 +272,7 @@ export class CPU65816 implements ICPU {
 
         // Peripheral card hooks (e.g. SmartPort / Hard Drive block access)
         if (pb === 0) {
-            const fn = specialJumpTable.get(pc);
+            const fn = specialJumpTable[pc];
             if (fn && (!SWITCHES.INTCXROM.isSet || (pc & 0xF000) !== 0xC000)) {
                 s6502.Accum = this.A & 0xFF;
                 s6502.XReg = this.X & 0xFF;
@@ -1304,12 +1318,14 @@ export class CPU65816 implements ICPU {
     // current instruction used. `addrMode`/`addrCrossed` are set by the addr*()
     // method, which the switch always evaluates before the op*() method.
     private chargeAddress(access: "read" | "write" | "rmw", width = 1) {
-        this.addCycles(ADDR_CYCLES_816[this.addrMode][access])
+        const mode = this.addrMode
+        this.addCycles(access === "read" ? ADR_CYC_READ[mode]
+            : access === "write" ? ADR_CYC_WRITE[mode] : ADR_CYC_RMW[mode])
         if (access === "read") {
             if (this.addrCrossed) this.addCycles(1)
             return
         }
-        if (!INDEXED_ADDR_MODES_816.has(this.addrMode)) return
+        if (INDEXED_ADDR_BITSET[mode] === 0) return
         // An indexed store or read-modify-write always pays the extra cycle,
         // even when it does not cross a page boundary.
         this.addCycles(1)
