@@ -2738,3 +2738,76 @@ melody-voice pitch reconstruction. The prototype monkey-patches (`haltOsc`,
 `generateSamples`, `writeData`) are restored implicitly by the fresh worker
 each jest module load but the test does not restore them itself - do not copy
 that pattern into production code.
+
+---
+
+### 50. Tass Times Title Music - the OUTPUT ITSELF is objectively musical and wall-timed; USER says it is still "slow"
+
+User persisted after section 49: the title theme (not gameplay) still sounds
+like slow motion, unchanged across every machine-time fix. To settle it, the
+ACTUAL played audio was captured from a real browser worker run and analyzed -
+the first direct observation of what the emulator SOUNDS like rather than what
+the DOC state machine does.
+
+**How the capture was done (zero repo changes)**: headless Chrome via CDP,
+patch installed ON the game page itself (patching on about:blank and then
+navigating wipes it - a page-level monkeypatch of
+`AudioBufferSourceNode.prototype.start` recording
+`buffer.getChannelData(0/1)` every 4th sample into a ring, armed by
+`window.__ensoniqDocStats.active`). Two traps worth remembering:
+- Arm on `stats.active`, NOT on wall elapsed: patching right after navigate
+  (t=+5s) captured 60 s of which only the first ~8 s had sound, because the
+  IIgs cold boot + game load takes ~60 s wall at 2.8 MHz before the theme
+  starts.
+- Channel data floats are -1..1, not int16 - analysis thresholds must be
+  float scale (0.01 / 0.02), not 300 / 32768.
+
+**What an 80 s capture of the title theme at `?speed=2.8` shows**
+(44100 Hz WAV exported to `c:\dev\emu\ap2\tass_title_apple2ts.wav` for direct
+listening):
+
+| measurement | result |
+|---|---|
+| block gap (wall) | median 16.70 ms (p10 15.5 / p90 17.9) = 60.0/s |
+| audio span | 4,794 blocks x 439 frames / 26320 = 79.96 s inside 80.01 s wall |
+| `irqTicks` (game's own tick counter) | 60.0/s across four separate 8 s windows |
+| note onsets | 471 in 80 s = 5.88/s; strongest inter-onset **0.07 s x 313** (fast riff runs), plus 0.33 / 0.5 / 0.72 s group starts |
+| dominant pitches (DFT) | 541 - 510 - 482 Hz (a real chromatic descent), 643 / 765 / 811 / 964 / 1082 / 1288 Hz, bass 43-72 Hz |
+
+The pitch set is a coherent musical sequence; a DOC sample-rate or march-math
+factor error would shift the WHOLE scale by that factor. The rhythm is an
+integer-multiple structure of the 60 Hz tick (0.07 s ~ 4 ticks, 0.33 s ~ 20
+ticks). **The performance is musically sane and wall-accurate.**
+
+**Re-verified at the user's own speed mode** (earlier 60/s checks predate
+section 48's native-mode run-loop factor, so this was the remaining doubt):
+`?speed=2.8` shows `speedMode=1`, `cyclesPerRefresh=46727`, block ring cadence
+46,737 cycles apart (= one refresh), `frames=439` per block at declared
+`rate=26320`, `irqTicks` +479 per 8 s, block deltas 480 per 8 s. Machine time,
+DOC cadence and the transport all agree at 2.8 MHz.
+
+**gssquared differential not buildable here**: no cmake, no cl, and even the
+tiny `apps/doc` harness links `SDL3::SDL3-shared`.
+
+**Where this leaves the bug**: every measurable layer is hardware-faithful -
+march math (49), tick rate (60/s), cadence (60/s at speed 0 AND 2.8), wall
+pacing (16.7 ms block gaps), music content (above). The remaining candidates
+are (a) the user's reference is not the IIgs version's true tempo (the Apple
+IIe Mockingboard theme is a different, likely faster arrangement; or memory of
+real hardware), or (b) something in their real browser's audio output path
+that headless Chrome does not exhibit. The WAV lets the user hear EXACTLY what
+apple2ts produces and compare by ear; a recording of their reference side
+would settle it analytically.
+
+**`window.__ensoniqDocStats` returned undefined on the user's machine** while
+the same URL works headless (stats appear ~3 s after load). Likely the
+fragment was pasted with literal spaces (truncate at the first space - always
+`encodeURIComponent` the disk name), or the page was already open and param
+processing was skipped (params apply on page load / boot only). Hand the user
+the fully-encoded URL.
+
+**Tooling note**: `?speed=2.8` already routes to mode 1 (`speedMap`,
+inputparams.ts ~line 119; "two"/"2.8"/"2.8mhz" -> 1), and speed mode 1 sets
+`cyclesPerRefresh = 46727`. Analysis artifacts live in
+`C:\Users\USER\AppData\Local\Temp\opencode\` (`pcmcap2.cjs`, `pcmanalysis3.cjs`,
+`pcm2wav.cjs`, `tass_pcm2.json`).
