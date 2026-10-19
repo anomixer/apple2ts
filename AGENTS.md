@@ -2874,6 +2874,8 @@ tempo while every oscillator kept its exact pitch (march math untouched).
 - beat ACF lags {0.25, 0.50, 1.00, 2.00} match the reference's beat grid.
 - Fixed output for listening: `C:\dev\emu\ap2\tass_title_apple2ts_FIXED.wav`
   (74.7 s, served on port 6503 like the old one).
+- **USER CONFIRMED in their real browser**: the title music now plays at the
+  correct speed in-app (`?speed=2.8`). Closed.
 
 **Regression**: full worker suite **1145/1146** — the only failure is the
 pre-existing `vera.test.ts` CMDR-DOS failure that also fails on a clean tree.
