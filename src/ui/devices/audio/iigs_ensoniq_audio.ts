@@ -123,6 +123,15 @@ export const playEnsoniqSamples = (samples: Int16Array, sampleRate: number) => {
   // building an ever-growing backlog, which would grow without bound.
   const now = ctx.currentTime
   if (nextTime < now) nextTime = now
+  // Keep a small reserve in front of the clock. Blocks arrive per worker
+  // refresh (every ~16.7ms) and only cover their own duration, so the queue
+  // sits at zero depth: any main-thread delay longer than one block (React
+  // render, paint, another message in flight) gaps the stream and forces a
+  // resync — audible as lag/stutter. A ~60ms lead buffers through that jitter
+  // and costs nothing except start latency. The upstream cap still bounds the
+  // backlog if the worker ever sprints ahead.
+  const minLead = 0.06
+  if (nextTime < now + minLead) nextTime = now + minLead
   if (nextTime > now + 0.5) nextTime = now
   source.start(nextTime)
   nextTime += frameCount / sampleRate

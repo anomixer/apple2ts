@@ -824,7 +824,8 @@ const applyCrtDistortion = (ctx: CanvasRenderingContext2D,
 // and every source line is emitted twice vertically.
 const shrRgbaBuffer = new Uint8ClampedArray(SHR_WIDTH * SHR_HEIGHT * 4)
 
-const processSuperHiRes = (hiddenContext: CanvasRenderingContext2D, colorMode: COLOR_MODE): boolean => {
+const processSuperHiRes = (hiddenContext: CanvasRenderingContext2D, colorMode: COLOR_MODE,
+  backgroundCss?: string | null): boolean => {
   const shrData = handleGetShr()
   if (shrData.length < 0x8000) return false
 
@@ -880,6 +881,28 @@ const processSuperHiRes = (hiddenContext: CanvasRenderingContext2D, colorMode: C
       palR[idx] = r
       palG[idx] = g
       palB[idx] = b
+    }
+  }
+
+  // Retro-skin background: the legacy path swaps pure-black pixels for the
+  // skin background via a whole-canvas getImageData/putImageData round trip,
+  // which is expensive for the 640x400 SHR screen. Doing it in the palette
+  // here is free — a palette entry that decodes to exactly (0,0,0) (including
+  // the Green/Amber/monochrome conversion above and SVGA black) maps to the
+  // same pixels replaceBlackPixels would have caught.
+  if (backgroundCss) {
+    const parts = backgroundCss.match(/\d+/g)?.map(Number) ?? []
+    const br = parts[0]
+    const bg = parts[1]
+    const bb = parts[2]
+    if (br !== undefined && bg !== undefined && bb !== undefined) {
+      for (let idx = 0; idx < 256; idx++) {
+        if (palR[idx] === 0 && palG[idx] === 0 && palB[idx] === 0) {
+          palR[idx] = br
+          palG[idx] = bg
+          palB[idx] = bb
+        }
+      }
     }
   }
 
@@ -1063,16 +1086,23 @@ export const ProcessDisplay = (ctx: CanvasRenderingContext2D,
     return
   }
 
-  if (effectBackground) {
+  // Super Hi-Res draws first: the SHR renderer substitutes black palette
+  // entries with the retro-skin background itself (cheap — one palette pass),
+  // so the whole-canvas getImageData/putImageData black-pixel swap below is
+  // skipped whenever SHR drew the full opaque 640x400 canvas. That round trip
+  // (1MB readback + 256K-pixel JS loop over the hidden canvas) was the main
+  // per-frame cost of IIgs rendering and pushed the main-thread paint loop
+  // down to ~30 FPS at the IIgs speed settings.
+  const isVidhdActive = handleGetVidhdActive()
+  let didDraw = false
+  let drewShr = false
+  if (isVidhdActive) {
+    didDraw = drewShr = processSuperHiRes(hiddenContext, colorMode, effectBackground)
+  }
+  if (effectBackground && !drewShr) {
     const hiddenData = hiddenContext.getImageData(0, 0, hiddenWidth, hiddenHeight)
     replaceBlackPixels(hiddenData, effectBackground)
     hiddenContext.putImageData(hiddenData, 0, 0)
-  }
-
-  const isVidhdActive = handleGetVidhdActive()
-  let didDraw = false
-  if (isVidhdActive) {
-    didDraw = processSuperHiRes(hiddenContext, colorMode)
   }
   if (!didDraw) {
     didDraw = processLoRes(hiddenContext, colorMode)

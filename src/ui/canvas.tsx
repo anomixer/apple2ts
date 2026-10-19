@@ -466,7 +466,11 @@ const Apple2Canvas = (props: DisplayProps) => {
     // speed to help reduce CPU usage.
     // Test image from Brendan:
     // https://github.com/badvision/a2-pseudocolor/raw/refs/heads/main/disks/flicker.po
-    const targetFrameRate = (handleGetSpeedMode() <= 0) ? 75 : 45 // Hz
+    // The Apple IIgs is exempt: Super Hi-Res frames carry no beam-race
+    // artifacts, and the 45 Hz paint cap was starving the FPS readout to ~30
+    // and delaying Ensoniq audio block scheduling on the main thread (the
+    // "2.8 MHz shows 30 FPS / Tass Times audio lag" symptom).
+    const targetFrameRate = (handleGetSpeedMode() <= 0 || handleGetMachineName() === "APPLE2GS") ? 75 : 45 // Hz
     const targetInterval = 1000 / targetFrameRate
 
     if (elapsed >= targetInterval) {
