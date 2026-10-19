@@ -1228,6 +1228,57 @@ const doAdvance6502 = () => {
   let currentLine = -1
   let cachedSpeedMode = -999
 
+  // ---- Ensoniq DOC catch-up (interleaved sample generation) ----
+  // gssquared's ensoniq_catch_up ties ES5503 sample generation (and therefore
+  // oscillator halt IRQ delivery) to emulated machine time and runs it on every
+  // register access and periodic handler, so the driver's re-key happens
+  // between halts. Our old per-video-frame single block ran the march once per
+  // refresh; a halt past sample 0 stayed halted until the next refresh's
+  // generateSamples ran, so the timer-oscillator tick (Apple TN #23) was
+  // capped at 60/s and every sequencer running off it played at half tempo —
+  // Tass Times title music measured exactly 2.0x slower than real hardware
+  // (bassline motif cycle 4.0s vs 2.0s) while every pitch stayed correct.
+  let ensoniqRefreshId = -1
+  let ensoniqOutCursor = 0
+  let ensoniqSamplesPerRefresh = 0
+  let ensoniqScratch = new Int16Array(2048 * 2)
+  // Write one chunk of DOC output owed by elapsed cycles; force=true completes
+  // the current refresh boundary (used at refresh rollover and after the loop).
+  const ensoniqCatchUp = (force: boolean) => {
+    const genChunk = (endSample: number) => {
+      const n = endSample - ensoniqOutCursor
+      if (n <= 0) return
+      if (iigsEnsoniq.hasActiveOscillators()) {
+        iigsEnsoniq.lastCyc = s6502.cycleCount
+        iigsEnsoniq.lastCyclesPerRefresh = frameCycles
+        iigsEnsoniq.lastSpeedMode = speedMode
+        iigsEnsoniq.generateSamples(n, ensoniqScratch.subarray(ensoniqOutCursor * 2))
+      }
+      ensoniqOutCursor = endSample
+    }
+    const refreshId = Math.floor(s6502.cycleCount / frameCycles)
+    if (refreshId !== ensoniqRefreshId) {
+      // Refresh rollover: complete the elapsed refresh, post its block, then
+      // zero the scratch for the next one.
+      genChunk(ensoniqSamplesPerRefresh)
+      if (ensoniqRefreshId >= 0 && ensoniqOutCursor > 0) {
+        passEnsoniqSound(ensoniqScratch.subarray(0, ensoniqOutCursor * 2), iigsEnsoniq.outputRate())
+      }
+      ensoniqRefreshId = refreshId
+      ensoniqOutCursor = 0
+      ensoniqSamplesPerRefresh = Math.max(1, Math.round(iigsEnsoniq.outputRate() / 60))
+      if (ensoniqSamplesPerRefresh * 2 > ensoniqScratch.length) {
+        ensoniqScratch = new Int16Array(ensoniqSamplesPerRefresh * 2)
+      }
+      ensoniqScratch.fill(0, 0, ensoniqSamplesPerRefresh * 2)
+    }
+    if (ensoniqOutCursor >= ensoniqSamplesPerRefresh) return
+    const due = Math.min(ensoniqSamplesPerRefresh,
+      Math.floor((s6502.cycleCount % frameCycles) * ensoniqSamplesPerRefresh / frameCycles))
+    genChunk(force ? ensoniqSamplesPerRefresh : due)
+  }
+
+
   // Hoisted invariants: machineName, speedMode and tracing do not change while
   // this loop runs (mode changes arrive as worker messages, which can only be
   // delivered between invocations of doAdvance6502). Everything below used to
@@ -1324,6 +1375,10 @@ const doAdvance6502 = () => {
         cpu.clearIrq?.()
       }
     }
+    // Ensoniq: catch the DOC march up to the elapsed emulated time so halt
+    // IRQs fire mid-refresh and the driver can re-key the timer oscillator
+    // before the next catch-up (see the block comment at ensoniqCatchUp).
+    if (isIIgs) ensoniqCatchUp(false)
     if (cyclesToRun > 0 && (s6502.cycleCount - cycleToRunStart) >= cyclesToRun) {
       cyclesToRun = 0
       doSetRunMode(RUN_MODE.PAUSED, true, undefined, {reason: "cycle-limit"})
@@ -1342,36 +1397,17 @@ const doAdvance6502 = () => {
   cpuSpeed = (speedInCyclesPerMS < 10000) ? Math.round(speedInCyclesPerMS / 10) / 100 :
     Math.round(speedInCyclesPerMS / 100) / 10
   
-  // Apple IIgs Ensoniq ES5503 audio output, once per emulated frame. The
-  // bucket key is the active refresh budget (cpuCyclesPerRefresh), not a
-  // hard-coded 46727: one refresh is 1/60 s of machine time at every speed
-  // mode, so the DOC must emit outRate/60 samples per refresh regardless of
-  // the CPU clock. This is the refresh-loop equivalent of gssquared's
-  // ensoniq_catch_up, which ties sample generation to emulated 14M time
-  // (16 * (oscsenabled + 2) c14m per sample). With the old fixed 46727 the
-  // block cadence ran at the 2.8 MHz rate while Normal (1.02 MHz) executed
-  // only 17030 cycles per refresh, starving the audio queue for 63% of the
-  // post interval — the "Tass Times music is slow / choppy" symptom.
-  if ((machineName === "APPLE2GS")) {
-    const ensoniqProcessorId = Math.floor(s6502.cycleCount / cpuCyclesPerRefresh)
-    // simple last-frame tracker attached to global
-    if ((globalThis as any).__lastEnsoniqFrame !== ensoniqProcessorId) {
-      (globalThis as any).__lastEnsoniqFrame = ensoniqProcessorId
-      // Stamp the diagonal context (?ensoniqdbg=1 reads these back): the
-      // active speed mode and the run loop position at generation time.
-      iigsEnsoniq.lastSpeedMode = speedMode
-      iigsEnsoniq.lastCyclesPerRefresh = cpuCyclesPerRefresh
-      iigsEnsoniq.lastCyc = s6502.cycleCount
-      const outRate = iigsEnsoniq.outputRate()
-      const numSamples = Math.max(1, Math.round(outRate / 60))
-      try {
-        if (iigsEnsoniq.hasActiveOscillators()) {
-          const pcm = iigsEnsoniq.generateSamples(numSamples)
-          passEnsoniqSound(pcm, outRate)
-        }
-      } catch (e) {
-        console.error("ensoniq frame gen error", e)
-      }
+  // Apple IIgs Ensoniq ES5503: the run loop now generates the DOC output in
+  // cycle-anchored chunks (see ensoniqCatchUp above). Block delivery stays
+  // gated on refresh rollover — the next catch-up call completes the elapsed
+  // refresh, fills the tail into the scratch buffer and posts the whole
+  // outRate/60 block, so the UI transport still sees 439-frame per-refresh
+  // posts while halts can re-key mid-refresh.
+  if (isIIgs) {
+    try {
+      ensoniqCatchUp(true)
+    } catch (e) {
+      console.error("ensoniq frame gen error", e)
     }
   }
 

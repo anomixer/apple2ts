@@ -2811,3 +2811,89 @@ inputparams.ts ~line 119; "two"/"2.8"/"2.8mhz" -> 1), and speed mode 1 sets
 `cyclesPerRefresh = 46727`. Analysis artifacts live in
 `C:\Users\USER\AppData\Local\Temp\opencode\` (`pcmcap2.cjs`, `pcmanalysis3.cjs`,
 `pcm2wav.cjs`, `tass_pcm2.json`).
+
+---
+
+### 51. Tass Times Title Music Tempo — FIXED (interleaved DOC catch-up)
+
+**Why**: the user supplied a ground-truth reference — real-hardware title
+music, `C:\dev\emu\ap2\01 Tass Times in Tonetown Title Music.mp3` (76.7 s,
+decoded with Chrome's own `decodeAudioData`; CDP `Runtime.evaluate` needs
+`awaitPromise: true` and large dumps must be chunked, ~120k floats per call).
+
+**Section 50's "musically sane" CONCLUSION WAS WRONG — the user was right.**
+
+Objective A/B (mp3 decoder + onset/bass-band/beat-ACF analysis on both):
+
+| metric | reference (real HW) | apple2ts before fix |
+|---|---|---|
+| pitch set | 543/483/768/813/967 Hz | 541/482/765/811/964 Hz (**within 0.4%**) |
+| bassline sustained band | 155-161 Hz | 155-189 Hz (**same band**) |
+| beat ACF lags | 0.99 / 0.50 / 0.31 / 0.25 s | 1.003 / 0.502 / 0.752 / 0.251 s |
+| bass motif cycle | **2.0 s** | **4.0 s** |
+| onset-set match vs ref | — | best at k=1.97, **83%** of 123 onsets land ±50 ms |
+
+So pitches were EXACT and every note-event ran at **exactly half tempo** —
+precisely what the user heard as "很慢". A DFT/beat check that only compares
+pitches cannot see this; section 50's analysis compared the wrong things.
+
+**Mechanism.** The title tempo comes from the timer-oscillator halt IRQ
+(Apple TN #23): the driver's handler wakes (`WAI`), runs its tick handler and
+re-keys the timer. The real chip marches the wave and the CPU runs
+concurrently — gssquared ties sample generation to 14M time
+(`ensoniq_catch_up` called on every register/RAM access and the periodic
+handler), so a halt IRQ is serviced and the timer re-keyed within
+microseconds. apple2ts ran `generateSamples(439)` once per video refresh;
+`haltOsc` sets the halt bit and the march loop **breaks** (`ctrl & 1`), so the
+timer stayed halted until the *next* refresh's block, capping halt rate at
+**60/s** — one halt refresh. With the title timer's real march segment ~103
+DOC samples (4 strolls per refresh in the game's data), the cap halved the
+tempo while every oscillator kept its exact pitch (march math untouched).
+
+**Fix** (`motherboard.ts` `ensoniqCatchUp` + `iigs_ensoniq.ts`
+`generateSamples(numFrames, out?)`):
+- run loop interleaves **cycle-anchored DOC sampling**: every iteration,
+  `due = floor(cycleInFrame * samplesPerRefresh / frameCycles) - cursor`
+  samples are generated into a per-refresh scratch buffer (voice state
+  persists in the oscillators between chunks, exactly like gssquared's
+  incremental catch-up). The halt IRQ therefore fires mid-refresh, and the
+  driver's re-key lands before the next chunk.
+- block cadence to the UI transport is unchanged: the scratch buffer is
+  posted once per refresh rollover (outRate/60 frames), so `?ensoniqdbg=1`
+  still shows ~60 blocks/s of 439 frames.
+- `generateSamples` gained an optional output buffer (the chunk path, with a
+  reusable internal `mixBuf` so a 1-3 sample call does not allocate) and kept
+  the old allocation path for tests that take ownership of a block.
+
+**Measured after the fix** (`?speed=2.8`):
+- halt events: 60/s → **244/s**, march segments `[103, 103, 103, ~480]` — the
+  timer wave's own four-marches-per-refresh figure, properly re-keyed
+  mid-refresh.
+- **bass motif cycle 4.0 s → 2.0 s — identical to the reference**; bass band
+  167-188 Hz sustained, low slots 40-77, same row pattern every 2.0 s.
+- beat ACF lags {0.25, 0.50, 1.00, 2.00} match the reference's beat grid.
+- Fixed output for listening: `C:\dev\emu\ap2\tass_title_apple2ts_FIXED.wav`
+  (74.7 s, served on port 6503 like the old one).
+
+**Regression**: full worker suite **1145/1146** — the only failure is the
+pre-existing `vera.test.ts` CMDR-DOS failure that also fails on a clean tree.
+UI suite 272/272. `tsc --noEmit` shows no new errors in the modified files
+(the pre-existing ones are all in `gs_tass_timer_probe.test.ts`).
+
+**Instrumentation kept** (cheap, always on): `iigsEnsoniq.samplesGenerated`,
+`haltCount`, `haltSegments[]` ring (last 64 halt segments in DOC samples, the
+per-oscillator key-on → halt distance), and `keyOnSample`/`lastHaltSegment`
+per oscillator. `src/worker/gs_tass_title_tempo.test.ts` boots Tass, measures
+halt events per emulated second and can dump the posted PCM via
+`GS_TEMPO_PCM_OUT` for the bass-band scan.
+
+**Measurement traps met on the way** (worth remembering):
+- The old `gs_tass_timer_probe.test.ts` monkey-patch pattern broke
+  `generateSamples`' signature in the tsc sense; its errors are pre-existing.
+- `passEnsoniqSound` is called dynamically from the motherboard, so a test can
+  intercept it by replacing the `worker2main` export property (CommonJS
+  interop) — instance method patching is not needed.
+- A mono downsampler feeding a *step* divisor into the bass scan runs the
+  whole frequency axis at half; re-run with the true sample rate before
+  believing a "bass an octave low" result — the first fixed-capture scan read
+  40-95 Hz exactly because of that.

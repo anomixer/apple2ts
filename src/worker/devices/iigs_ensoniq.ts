@@ -16,6 +16,13 @@ interface Oscillator {
   resolution: number
   accumulator: number
   irqpend: number
+  // Diagnostics: DOC sample counter value at the last key-on (halt-bit clear)
+  // and the march length in DOC samples of the most recent halt. These measure
+  // the timer-oscillator tick period directly (Apple TN #23): the game's tempo
+  // is halt-rate implied by the march segment, so a segment longer than one
+  // video refresh means the tick cannot re-key mid-refresh.
+  keyOnSample: number
+  lastHaltSegment: number
 }
 
 export class IigsEnsoniq {
@@ -23,7 +30,7 @@ export class IigsEnsoniq {
   isReady = false
   constructor() {
     for (let i = 0; i < 32; i++) {
-      this.oscillators[i] = { freq: 0, wtsize: 256, control: 0, vol: 0, data: 0x80, wavetblpointer: 0, wavetblsize: 0, resolution: 0, accumulator: 0, irqpend: 0 }
+      this.oscillators[i] = { freq: 0, wtsize: 256, control: 0, vol: 0, data: 0x80, wavetblpointer: 0, wavetblsize: 0, resolution: 0, accumulator: 0, irqpend: 0, keyOnSample: 0, lastHaltSegment: 0 }
     }
     this.setIrqCallback((state) => {
       if (state) {
@@ -81,6 +88,19 @@ export class IigsEnsoniq {
   lastCyclesPerRefresh = 0
   lastCyc = 0
   blocks: Array<{ cyc: number, osce: number, rate: number, frames: number, mirrored: boolean }> = []
+  // March-segment diagnostics: monotonic DOC sample counter since reset, a
+  // ring of the last halt segments (samples from key-on to halt per oscillator
+  // halt), and the halt count. The run loop generates the DOC output in
+  // sub-refresh chunks so a halt IRQ can be serviced and the driver can re-key
+  // the timer mid-refresh — with a segment that exceeds one refresh the tick
+  // rate was pinned to the refresh cadence, halving sequencer tempo (Tass
+  // Times title music played at half speed with correct pitches).
+  samplesGenerated = 0
+  haltCount = 0
+  haltSegments: number[] = []
+  // Reusable mix accumulator (Int32) so the sub-refresh catch-up path does not
+  // allocate its mix buffer on every 1-3 sample call. Cleared per call.
+  private mixBuf?: Int32Array
 
   // The DOC output sample rate: clock / 8 / (oscillators enabled + 2).
   // Single source of truth for both the run loop's post budget and the ring.
@@ -103,14 +123,24 @@ export class IigsEnsoniq {
     this.mirrorCountAtGenStart = 0
     this.irqTicks = 0
     this.blocks = []
+    this.resetDocDiag()
     for (let i = 0; i < 32; i++) {
       const o = this.oscillators[i]
       o.freq = 0; o.wtsize = 256; o.control = 0; o.vol = 0; o.data = 0x80
       o.wavetblpointer = 0; o.wavetblsize = 0; o.resolution = 0
       o.accumulator = 0; o.irqpend = 0
+      o.keyOnSample = 0; o.lastHaltSegment = 0
     }
     // clear doc ram
     ensoniqDocRam.fill(0)
+  }
+
+  // Zero the march-segment diagnostics without touching chip state; used at
+  // the start of a measurement window.
+  resetDocDiag() {
+    this.samplesGenerated = 0
+    this.haltCount = 0
+    this.haltSegments = []
   }
 
   // Read a DOC register at offset (ES5503 protocol, offset 0..0xfe); register = offset&0x1f at top digit
@@ -188,6 +218,10 @@ export class IigsEnsoniq {
           // key on
           if ((o.control & 1) && !(data & 1)) {
             o.accumulator = 0
+            // Stamp the key-on position in DOC samples so haltOsc() can report
+            // the march segment (key-on -> halt) in samples.
+            o.keyOnSample = this.samplesGenerated
+            o.lastHaltSegment = 0
           }
           // handle cpu halt
           o.control = data & 0xff
@@ -373,22 +407,36 @@ export class IigsEnsoniq {
       // Diagnostic tick counter: every pend assertion is the game's tempo
       // quantum (timer oscillator wraps), measurable per wall second.
       this.irqTicks++
+      // March segment: DOC samples advanced between key-on and this halt.
+      o.lastHaltSegment = Math.max(0, this.samplesGenerated - o.keyOnSample)
+      this.haltCount++
+      this.haltSegments.push(o.lastHaltSegment)
+      if (this.haltSegments.length > 64) this.haltSegments.shift()
       this.updateIrqStatus()
     }
   }
 
-  // Produce a short PCM (Int16 samples) block at DOC output rate
-  generateSamples(numFrames: number): Int16Array {
+  // Produce DOC PCM (Int16 samples) at the chip's output rate. When an output
+  // buffer is supplied (the run loop's sub-refresh catch-up path) the samples
+  // are written there and it is returned; otherwise a fresh buffer is
+  // allocated (the old per-video-frame path, kept for tests and callers that
+  // take ownership of the block).
+  generateSamples(numFrames: number, out?: Int16Array): Int16Array {
     const wavemasks = [0x1ff00,0x1fe00,0x1fc00,0x1f800,0x1f000,0x1e000,0x1c000,0x18000]
     const accmasks = [0xff,0x1ff,0x3ff,0x7ff,0xfff,0x1fff,0x3fff,0x7fff]
     const resshifts = [9,10,11,12,13,14,15,16]
     const ossecs = Math.max(1, this.osce)
     const chan = 2
-    const buffer = new Int16Array(numFrames * chan)
-    // clean buffer
-    buffer.fill(0)
-    const mix = new Int32Array(numFrames * chan)
-    mix.fill(0)
+    const buffer = out ?? new Int16Array(numFrames * chan)
+    // Reusable mix accumulator. Cleared for the exact span below: the march
+    // loop only accumulates into mix[i], so stale bytes from a previous
+    // (larger) call must not leak into a shorter one.
+    if (this.mixBuf === undefined || this.mixBuf.length < numFrames * chan) {
+      this.mixBuf = new Int32Array(numFrames * chan)
+    }
+    const mix = this.mixBuf
+    mix.fill(0, 0, numFrames * chan)
+    this.samplesGenerated += numFrames
     for (let ch = 0; ch < chan; ch++) {
       for (let osc = 0; osc < ossecs; osc++) {
         const o = this.oscillators[osc]
@@ -466,6 +514,11 @@ export class IigsEnsoniq {
     const alpha = Math.min(1, numFrames / (0.020 * Math.max(1, 28000)))
     this.smoothedVolume += (this.systemVolume - this.smoothedVolume) * alpha
     this.mirrorMonoToStereo(buffer, numFrames, chan)
+    if (buffer === out) {
+      // The caller assembles per-refresh blocks from short chunks; recording
+      // every 1-3 sample chunk in the block ring would push out real blocks.
+      return buffer
+    }
     const mirrorBefore = this.mirrorCountAtGenStart
     this.mirrorCountAtGenStart = this.monoMirrorCount
     this.blocks.unshift({
