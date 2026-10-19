@@ -2658,3 +2658,83 @@ DOC sound driver) ran at 1.02 MHz — 2.74x too slow. The DOC timer tick rate
 **Verification**: 47,986 native-fast instructions measured in 200 frames.
 Full worker suite 783/784 (only pre-existing `vera.test.ts` CMDR-DOS failure).
 `tsc --noEmit` clean.
+
+
+### 49. Tass Times Timer Tempo: the DOC chain is verified hardware-faithful; the bug (if any) is NOT in the DOC
+
+**Why**: after the 60 FPS / 2.8 MHz display fix the user still reports Tass Times
+music in slow motion, so the DOC tick chain was audited end to end with a new
+probe test, `src/worker/gs_tass_timer_probe.test.ts` (debug-only, boot-heavy).
+
+**What was measured** (all in the jest harness, speed mode 0 = 1.02 MHz so
+`CPU_CYCLES_PER_SEC` inside the probe must be `17030 * 60`, not 2.8 MHz - the
+first take of this probe printed "79.0 ms" ticks because it divided by the
+2.8 MHz constant; the true machine figure is `221,549 cycles / 17,030 = 13.0
+refreshes = 216.5 ms = 4.62 ticks/s`):
+
+1. **March rate is exact.** `generateSamples` probed per block: osc31
+   `dAcc/nf = 32.00` - the accumulator advances by exactly the frequency
+   register per DOC sample, identical to MAME `es5503.cpp generate_samples`
+   (`acc += freq`, `resshift = resshifts[resolution] - wavetblsize`).
+2. **Tick period is deterministic and wave-exact.** Every halt event of the
+   timer is `type=1 acc=178720 pos=2792 byteAtHalt=$0` - the halt lands on the
+   timer wave's first zero-run (8 zero bytes at DOC RAM `$0AE8`), march from
+   key-on (acc=0) to there = 2792 positions x 2 samples = **5584 DOC samples =
+   212.2 ms**; measured inter-halt 216.5 ms = march + ~4.3 ms of handler
+   latency. Interval jitter across 47 ticks: <100 cycles (0.1 ms).
+3. **Key-on semantics match MAME.** Writing control with the halt bit clearing
+   (`$03` then `$0A`) resets the accumulator to 0 - confirmed by key-on write
+   logging pre/post (`acc=178720 -> 0`).
+4. **DOC RAM is clean.** Across the whole 64 KB there are exactly **49 zero
+   bytes**: six 8-byte end markers (`$3630`, `$6710`, `$7ba8`, `$90b4`,
+   `$b388`, `$fef8`) spread over the four 16 KB instrument-sample banks
+   (field-6 wavetables at `$0000/$4000/$8000/$C000`). No upload corruption, no
+   stray zero runs - the "$C03D auto-increment corrupts waves" hypothesis is
+   dead.
+5. **Title-screen stage**: the timer is re-keyed once per refresh (halt events
+   exactly one block apart) and melody pads run continuously (osc9/10 f=490,
+   osc11 f=245, one-shot instrument set osc12-18 with semitone-spaced freqs
+   4155/2077/2332/1166/1469/734/654 - ratios of 2^(n/12)).
+6. **Probe-stage census**: in the halt-tick window the game writes ONLY
+   `$BF=$0A` re-keys; **no melody voice is ever keyed in that stage**, so that
+   harness state is not the musical one the user's ear judges. Note-onset data
+   for the actual song therefore still has to come from a gameplay state.
+7. **Transport re-audit**: the enqueue path is faithful - per block
+   `createBuffer(2, frameCount, docRate)` and `nextTime += frameCount/docRate`
+   (`iigs_ensoniq_audio.ts`), worker posts one 439-sample block per machine
+   refresh, and the catch-up loop runs `doAdvance6502` once per frame due
+   before returning, so catch-up sprints do NOT starve the audio queue.
+
+**Arithmetic cross-check** (do not re-litigate): the pitch formula printed in
+the Apple IIgs Hardware Reference and transcribed at buchty.net/ensoniq/5503.html,
+`OF = SR / 2^(17+RES) x FR`, is algebraically identical to the MAME/KEGS/
+apple2ts ray rate `SR x freq / (waveLen x 2^(9+RES-sizeField))` because
+`waveLen = 256 << sizeField` cancels: both give wave-cycles-per-second
+`SR x FR / 2^(17+RES)` (3.21 Hz for the Tass timer wave). The "lowest accu
+bit" table (`9-2`, `10-3`, ...) IS the `resshift = (9+RES) - sizeField` rule.
+
+**Conclusion**: tick = 4.62/s, march rate, halt position, zero handling, key-on
+reset, DOC RAM content and the audio transport have all been verified either
+identical to three independent implementations (MAME, KEGS, gssquared) or
+byte-clean against the game's own data. There is no DOC-model tempo bug left in
+the current code. If the user still hears slow motion, the remaining options
+are (a) the game state they listen to differs from what was measured (most
+likely - the probe never keyed a melody voice), or (b) the song is genuinely
+authored at 4.6 timer steps per second and would sound the same on real
+hardware.
+
+**Where to look next**: browser-side data from the USER's game state - boot
+with `?ensoniqdbg=1`, play the music that sounds slow, then dump
+`window.__ensoniqDocStats` (oscillator rows: freq/vol/wtptr/acc/ctrl, osce,
+irqTicks, blocks ring). From that we can (1) see whether melody voices are
+keyed in their state and at what rate, (2) verify their march params against
+the same 5584-sample model, (3) confirm block cadence ~60.5/s. A single
+screenshot of that object during playback would settle the remaining question.
+
+**Probe test usage**: `node node_modules/jest/bin/jest.js
+src/worker/gs_tass_timer_probe.test.ts` prints the whole census: march probe,
+halt dump with byte-at-halt, zero-run scan of all 64 KB, note-onset log,
+melody-voice pitch reconstruction. The prototype monkey-patches (`haltOsc`,
+`generateSamples`, `writeData`) are restored implicitly by the fresh worker
+each jest module load but the test does not restore them itself - do not copy
+that pattern into production code.
