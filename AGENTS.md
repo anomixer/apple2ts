@@ -2899,3 +2899,80 @@ halt events per emulated second and can dump the posted PCM via
   whole frequency axis at half; re-run with the true sample rate before
   believing a "bass an octave low" result — the first fixed-capture scan read
   40-95 Hz exactly because of that.
+---
+
+### 52. IIgs Video Counter ($C02E/$C02F) —the freeze and the cursor (FIXED)
+
+**User complaint (2026-10-19)**: Tass Times in Tonetown freezes when the mouse
+moves/clicks in-game (the pendulum sound keeps playing), and the in-game
+cursor never moves. Both symptoms share one root cause.
+
+**Root cause**: the Mega II video-counter softswitches at `$C02E`/`$C02F` were
+never implemented. Reads fell through to the `iigsRegisters` stub, which
+always returned `0`. Tass Times' cursor-refresh routine contains
+
+```
+$2F90: LDA $C02E
+       CMP #$E8
+       BNE $2F90          ; spin until mid-VBL (vcount $1D0, scanline 240)
+       JSR $305C
+       JSR $301C
+```
+
+and with `$C02E` permanently `0` the `BNE` spun forever —`0:2F92` took
+~1.58M instructions out of ~3M in a 300-frame run (≈33% of the CPU) and the
+game's main loop never resumed, so the screen froze while the DOC timer
+oscillator kept ticking (hence the "pendulum sound continues"). The cursor
+holes `$047C/$057C/$04FC/$05FC` were written by the ROM's ADB task (§27) but
+the game's draw path never got past the spin, so no cursor was ever painted.
+
+**Fix** (`src/worker/memory.ts`): `readIigsVideoCounter(wantHorz)` models the
+scanner per `gssquared` `Docs/VideoScanner.md` / `display_read_C02EF`:
+- vcounter is 9 bits: visible rows `$100-$1BF`, VBL rows `$1C0-$1FF` plus the
+  six-value wrap `$1FA-$1FF`; `$C02E` returns `(vcounter >> 1) & 0xFF`
+  (`$80-$DF` visible, `$E0-$FF` in VBL —`$E8` is scanline 240), `$C02F`
+  returns `(vcounter & 1) << 7 | hcounter` with the horizontal counter running
+  `$00` then `$40-$7F`.
+- The frame layout mirrors `motherboard.ts`: the first `vblCycles` of every
+  frame are the VBL rows (the same window `$C019`/VBLIRQ key off), then 192
+  visible rows at `cyclesPerLine` CPU cycles each, so the vcount and the VBL
+  IRQ agree. The scanline index is derived from `s6502.cycleCount % frameCycles`
+  via `getCpuCyclesPerRefresh()`, so it tracks the active speed mode.
+
+The existing `vgcIntReg` side-effect (clearing the scanline-interrupt bits on
+access, de-asserting IRQ) is preserved.
+
+**Verification**:
+- `src/worker/gs_tass_click_freeze.test.ts` (new regression test): boots Tass
+  Times, walks the intro to the in-game `:` prompt, then sends 60 continuous
+  mouse moves plus a press/release. Before the fix one PC in `$2F80-$2FA0`
+  took ~1.58M of 300 frames' instructions (hard freeze); after the fix no
+  single PC in that range exceeds 50k and the cursor holes advance
+  (`X=$7f`, `Y=$8`). Full worker suite 1148/1149 (only the pre-existing
+  `vera.test.ts` CMDR-DOS failure, which also fails on a clean tree).
+- Real browser (headless Chrome, `?romtrace=1`): the 6 s window after the
+  click shows `freeze-range hits=0` (top PCs are the ROM's mouse accumulator
+  `ff:9eaf...` and the game's main loop `0:1cd9`), and the CPU is no longer
+  parked at `0:2f82`.
+
+**Complaint (1) —"the pendulum sound entering the game is now too fast"**
+was measured before concluding anything. A per-oscillator key-on census
+(`src/worker/gs_tass_gameplay_tempo.test.ts`) compared the pre-fix and
+post-fix interleaved DOC catch-up builds: OSC31 (the timer voice,
+`ctrl=$a vol=$ff freq=$20`, march ~5585 DOC samples = 212 ms) keys at
+**4.62 ticks/s in both builds**, and the in-game PCM envelope autocorrelation
+is identical (0.217 s tick). The game's tempo did not change; the audible
+difference the user heard was the side-effect of the freeze above —once the
+game stalled on the `$2F90` spin the melody stopped while the zero-volume timer
+kept ticking, making the surviving tick sound faster by contrast. With the
+freeze fixed the full music returns. The user should re-listen after this fix;
+if it still sounds off, the next diagnostic is a capture of the in-game PCM
+via `?ensoniqdbg=1` in their real browser.
+
+**Open follow-ups**: the title screen does not advance on a CDP-dispatched key
+event in headless Chrome (the key does reach the worker, but the title's
+keyboard path is not exercised); the user's actual in-game cursor still needs
+their visual confirmation now that the draw path is unblocked. The ADB report
+encoding (§42) and overflow-flag (§43) fixes already make the cursor track
+the pointer in both directions.
+

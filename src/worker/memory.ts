@@ -14,7 +14,7 @@ import { noSlotClock } from "./nsc"
 import { adbLogEnabled, noteAdbLog } from "./iigs_adb"
 import { videoTerm } from "./devices/videoterm"
 import { vidhd } from "./devices/vidhd"
-import { isDebugging, setIigsSpeedRegister } from "./motherboard"
+import { isDebugging, setIigsSpeedRegister, getCpuCyclesPerRefresh } from "./motherboard"
 import { iigsClock } from "./iigs_clock"
 import { iigsADB } from "./iigs_adb"
 import { iigsEnsoniq, docAccess } from "./devices/iigs_ensoniq"
@@ -172,6 +172,43 @@ export const iigsInterruptPending = (): boolean => {
   // Ensoniq ES5503 sound interrupt pending
   if (iigsEnsoniq.irqPending()) return true;
   return false;
+};
+
+// The Mega II video scanner counters, exposed to the CPU at $C02E/$C02F.
+// Format per the Apple IIgs Hardware Reference / gssquared Docs/VideoScanner.md:
+//   9-bit vertical counter: visible rows count $100-$1BF, VBL rows $1C0-$1FF
+//   and the final six rows wrap to $1FA-$1FF. $C02E returns the top 8 of the
+//   9 bits ($80-$DF visible, $E0-$FF in VBL); $C02F the low bit in bit 7 plus
+//   the 7-bit horizontal counter in bits 0-6.
+// Software polls $C02E inside a tight `LDA $C02E / CMP #$E8 / BNE` to catch a
+// spot in VBL for flicker-free drawing (Tass Times cursor refresh froze forever
+// because this register read a static 0), so it must track the frame clock.
+// The frame layout mirrors motherboard.ts: the first vblCycles of every frame
+// are the VBL rows (that is what $C019/VBLIRQ are keyed to), then 192 visible
+// rows.
+const readIigsVideoCounter = (wantHorz: boolean): number => {
+  const frameCycles = getCpuCyclesPerRefresh();
+  const vblCycles = Math.round((12460 / 46727) * frameCycles);
+  const cyc = s6502.cycleCount % frameCycles;
+  let vert: number;
+  if (cyc < vblCycles) {
+    // VBL rows 192-261: 64 values at $1C0-$1FF then the 6-value wrap $1FA-$1FF.
+    const line = Math.min(70, Math.floor(cyc / (vblCycles / 70)));
+    vert = line < 64 ? 0x1c0 + line : 0x1fa + (line - 64);
+  } else {
+    const cyclesPerLine = ((frameCycles - vblCycles) / 192) || 1;
+    const line = Math.min(191, Math.floor((cyc - vblCycles) / cyclesPerLine));
+    vert = 0x100 + line;
+  }
+  if (wantHorz) {
+    // Horizontal counter: 65 values per row, $00 then $40-$7F (hbl first).
+    const cyclesPerLine = ((frameCycles - vblCycles) / 192) || 1;
+    const h = Math.floor(cyc % cyclesPerLine);
+    const hstep = Math.floor(h * 65 / cyclesPerLine);
+    const horz = hstep === 0 ? 0 : Math.min(0x7f, 0x40 + hstep - 1);
+    return ((vert & 1) << 7) | horz;
+  }
+  return (vert >> 1) & 0xff;
 };
 
 // IWM (Integrated Woz Machine) state for Apple IIgs ($C0E0-$C0EF)
@@ -1001,7 +1038,7 @@ const memGetSoftSwitch = (addr: number): number => {
               if (!iigsInterruptPending()) {
                   (globalThis as any).cpu?.clearIrq?.();
               }
-              return iigsRegisters[addr & 0xFF];
+              return readIigsVideoCounter(addr === 0xC02F);
 
           case 0xC026: // ADB Data
               return iigsADB.readData();
