@@ -1158,6 +1158,8 @@ export const getExternalMachineState = () => {
     s6502: s6502,
     showDebugTab: showDebugTab,
     shr: getShr(),
+    cursorX: (memory[0x047C] | (memory[0x057C] << 8)),
+    cursorY: (memory[0x04FC] | (memory[0x05FC] << 8)),
     slotConfig: currentSlotConfig,
     softSwitches: getSoftSwitches(),
     speedMode: speedMode,

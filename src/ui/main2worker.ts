@@ -896,6 +896,14 @@ export const handleGetVidhdActive = () => {
   return !!machineState.vidhdActive
 }
 
+export const handleGetCursorX = () => {
+  return machineState.cursorX || 0
+}
+
+export const handleGetCursorY = () => {
+  return machineState.cursorY || 0
+}
+
 export const handleGetNoDelayMode = () => {
   return machineState.noDelayMode
 }

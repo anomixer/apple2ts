@@ -294,6 +294,8 @@ type MachineState = {
   s6502: STATE6502,
   showDebugTab: boolean,
   shr?: Uint8Array,
+  cursorX?: number,
+  cursorY?: number,
   slotConfig: SlotConfig,
   softSwitches: import("../worker/softswitches").SoftSwitchStates,
   speedMode: number,

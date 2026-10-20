@@ -2976,3 +2976,74 @@ their visual confirmation now that the draw path is unblocked. The ADB report
 encoding (§42) and overflow-flag (§43) fixes already make the cursor track
 the pointer in both directions.
 
+---
+
+### 53. GS/OS 6.0.1 Finder cursor now renders and tracks the pointer (UI-side sprite)
+
+**User symptom**: in GS/OS 6.0.1 the mouse pointer never moved - no cursor was
+ever on screen, menus did not highlight, clicks did nothing.
+
+**What this round measured first** (headless Chrome + CDP, before writing the
+fix), which sharpened the picture left by sections 38-43:
+
+- The cursor holes track motion end to end: X 26→70→99 and Y 17→28→44 across
+  pointer moves, in a live Finder. So ADB delivery (§42 encoding), the ROM
+  accumulator math (§43 V flag) and the hole commit are all correct at runtime.
+- Sampling `$C046` 50 times over 2 s: **always 0**. `INTEN` ($C041) is 8 (VBL
+  enabled), VBL is signalled (a counter in `startVBL` incremented every frame,
+  ~60/s) — but `INTFLAG` never reports a pending source *at read time*, and
+  neither `$FF:C074` (BRK/IRQ stub), nor the ROM's interrupt manager
+  (`$FFB7CC`), nor the VBL dispatcher target `$04:8316`, nor the ROM ADB task
+  `$FF:C4D2` appear **anywhere** in the post-reset PC histogram (71M
+  instructions, top-400 PCs). Combined with §33/§38: after GS/OS takes over,
+  the ROM interrupt path is simply never exercised, so the Event Manager's
+  cursor redraw (which runs from its VBL handler) can never fire. `cpu.irq()`
+  IS being called (157 times when instrumented) on a level-triggered line with
+  the I flag measured clear — the exact reason the 65816 never dispatches to
+  the vector is still unresolved (see below).
+- The mouse read path used post-boot is *not* the ROM ADB task: `$FF:C4D0`
+  never executes even with media present, so GS/OS's own daemon polls
+  `$C024`/`$C027` directly. Its updates land in the holes, and nothing else
+  downstream.
+
+**The fix (shipped)**: accept that the guest's event manager will not paint the
+sprite in this configuration, and render it where emulation owns the picture —
+`src/ui/graphics.ts` `drawIigsCursor()`, called at the end of
+`processSuperHiRes()` after the SHR `putImageData`:
+
+- Gated on `isSuperHiResScreen()` (APPLE2GS + `$C029` bit 7), so IIe output and
+  the legacy IIgs text/banner screens are untouched.
+- Position comes from the pointer holes via new per-state fields
+  `machineState.cursorX/cursorY` (`$047C|$057C<<8`, `$04FC|$05FC<<8`), exposed
+  through `handleGetCursorX()/handleGetCursorY()` in `main2worker.ts`.
+- The sprite is the classic Finder arrow (15-row bitmap: black outline, white
+  fill, bent tail), drawn into a single `rect` path per colour pass — ~150
+  rects per frame at most, no per-pixel loops. Since the 200 SHR scanlines are
+  emitted doubled, each glyph pixel is a 1x2 rect at `cy*2`.
+- **Guest memory is never touched** — it is pure UI overlay, so the emulator
+  does not corrupt the SHR page the way a real blit would, and it composes
+  exactly like the existing per-frame draw (`ProcessDisplay` clears the hidden
+  canvas at frame start, so the sprite cannot ghost).
+- Skipped when both holes are 0 (no mouse activity yet), so boot screens show
+  no phantom cursor in the corner.
+
+**Verified** (headless Chrome, `?machine=apple2gs&speed=2.8&boot=true&drive=0`,
+images served from the separate static server per §40):
+- `gsos_boot.test.ts` / `gs_cursor_draw.test.ts` /
+  `gs_ctrl_reset.test.ts` pass; UI suite 272/272; worker 788/789 (the only
+  failure is the pre-existing `vera.test.ts` CMDR-DOS failure); `tsc --noEmit`
+  clean in all touched files.
+- Two screenshots across distinct pointer moves show the arrow rendered on the
+  Finder desktop and relocating (upper-left → mid-screen, tracking direction
+  and relative magnitude on both axes).
+
+**Remaining known gap (not this bug)**: the overlay sits at the holes, not
+exactly under the host pointer — the ADB delta counts map host motion over the
+full window rather than the bezel-inset screen rect, so there is a scale/
+offset error between the two. The same mapping nonlinearity is part of why
+clicks cannot be targeted. The deeper blocker is unchanged and still open:
+GS/OS's Event Manager never receives mouse *events* (its VBL poll/queue path
+is dead — see §38 and the measurements above), so menu highlight, icon
+selection and click dispatch need the in-guest event delivery fixed; the
+pointer under-cursor refinement and that work belong together.
+
