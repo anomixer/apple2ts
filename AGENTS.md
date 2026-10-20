@@ -3168,19 +3168,16 @@ producing no visible menu highlight.
 
 #### Fix applied
 
-Changed iigsADBEvent in src/worker/devices/mouse.ts to **directly synchronize
-the guest cursor to the host pointer position** instead of relying on delta
-accumulation. When a motion event arrives:
+Changed `iigsADBEvent` in `src/worker/devices/mouse.ts` to **publish the host
+pointer position to Mega II aux RAM** (`$E1:00E9`/`$E1:00EA` for X,
+`$E1:00EB`/`$E1:00EC` for Y) in addition to the existing ADB report queue.
+The ROM press dispatch (C52B) reads `$E1:00E9`/`$E1:00EB` when filling the
+Event Manager record, so the record now carries the correct cursor location
+instead of the drifted ADB-accumulated value. The ADB report mechanism still
+runs for protocol compatibility and the ROM cursor accumulator.
 
-- If adbLastX < 0 (first report): establish baseline (unchanged).
-- Otherwise: compute the host delta, AND also set the ADB internal pending
-  position to the absolute host position mapped to screen coordinates
-  (round(hostX * 640), round(hostY * 200)). The ADB reports this as a
-  relative delta from the last reported position, so the guest cursor converges
-  to the host pointer within one report cycle.
-
-This eliminates the quantization drift and ensures clicks land where the user
-expects (where the overlay cursor is shown).
+This ensures the event record cursor field matches the host pointer position,
+so TaskMaster finds the correct window/menu under the cursor.
 
 #### Verification
 - tsc --noEmit clean for all production files.
