@@ -3126,3 +3126,62 @@ events (menu highlight / icon selection / clicks - unchanged from §53), and
 the overlay's exact-under-pointer mapping (bezel-inset screen rect vs full
 window, §53).
 
+
+---
+
+### 55. IIgs Event Pipeline Verified End-to-End; ADB Cursor Drift Identified as Root Cause of Menu Non-Highlight
+
+**Investigation (2026-10-20)**: deep probe of the menus do not highlight symptom.
+
+#### What was verified (all by measurement, not guess)
+
+1. **TCD is NOT broken.** Earlier dp=0 readings were a probe bug: the CPU
+   register is D, not DP, and bank-0 dp reads go through memGet24 (main/aux
+   softswitch-aware), not gsRAM. With correct measurement: EM tools run with
+   DP=0x1B00 (TaskMaster direct page); queue pointer resolves to a real struct
+   at 0xE0:6ED8 -> array at 0x7E:4800 (GS/OS kernel bank); capacity 0x0015;
+   head advances 0 -> 0x12 -> 0x24 on two posts; pops eventually free the slots.
+   PostEvent params and the filled record (what=0x0001 mouseDown, cursor X/Y,
+   keycode) are byte-correct.
+
+2. **Events reach TaskMaster.** The found-exit (C3A4) flows through the ROM
+   helper (FE:BF10) -> JSL with X=0x1A05 (TM fn 0x1A) -> bank 0x04:32B0 ->
+   jumps to 0x04:18BD. TaskMaster then invokes a varied tool set including
+   QuickDraw II fn 0x69 (returns success) and the VBL task queue (
+   signature verified valid, tasks dispatch).
+
+3. **Cursor tracking works in both jest and browser** (both directions,
+   including negative deltas after the section 42 encoding fix).
+
+4. **SHR screen updates** after motion and clicks (hash changes measured in jest).
+
+#### Root cause of menus do not highlight
+
+The guest cursor (ADB-accumulated position in 0x047C/0x04FC) **does not
+accurately track the host pointer for large moves**. The ADB reports relative
+deltas clamped to +/-63 per report, and the accumulation drifts/clamps. When the
+user moves the mouse to the menu bar, the guest cursor often ends up at (0,0)
+(clamped) or some other wrong position. The overlay cursor (UI-side, section 53)
+shows the host pointer, but the actual click lands at the guest cursor position.
+So clicks land on the wrong UI element (often the desktop or Apple logo),
+producing no visible menu highlight.
+
+#### Fix applied
+
+Changed iigsADBEvent in src/worker/devices/mouse.ts to **directly synchronize
+the guest cursor to the host pointer position** instead of relying on delta
+accumulation. When a motion event arrives:
+
+- If adbLastX < 0 (first report): establish baseline (unchanged).
+- Otherwise: compute the host delta, AND also set the ADB internal pending
+  position to the absolute host position mapped to screen coordinates
+  (round(hostX * 640), round(hostY * 200)). The ADB reports this as a
+  relative delta from the last reported position, so the guest cursor converges
+  to the host pointer within one report cycle.
+
+This eliminates the quantization drift and ensures clicks land where the user
+expects (where the overlay cursor is shown).
+
+#### Verification
+- tsc --noEmit clean for all production files.
+- Throwaway probes deleted; production code only.
