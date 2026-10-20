@@ -3047,3 +3047,14 @@ is dead — see §38 and the measurements above), so menu highlight, icon
 selection and click dispatch need the in-guest event delivery fixed; the
 pointer under-cursor refinement and that work belong together.
 
+**Build hygiene**: `npm run build` (which runs plain `tsc` over all of `src/`,
+tests included) failed with 16 pre-existing errors in
+`src/worker/gs_tass_timer_probe.test.ts` — the §49 debug probe's prototype
+monkey-patches typed as `(...a: unknown[]) => void`/`Int16Array`, which rejects
+narrower patched signatures, plus unused locals and a record-type mismatch in
+the pitch reconstruction (`osc`/`wtptr`/`f` fields). Fixed by loosening the five
+patch-slot types to `(...a: any[]) => any` and completing the record types;
+removed the dead `shift` placeholder and unused `distinctVol`/`megaIIAux`/
+`getDriveStateByIndex`/`proto` locals. `tsc --noEmit` is now clean tree-wide
+(first time), `npm run build` passes, and the probe test still passes.
+

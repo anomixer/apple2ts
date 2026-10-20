@@ -1,12 +1,10 @@
 import { doSetMachineName, doSetRunMode, getCPU } from "./motherboard"
 import { s6502 } from "./instructions"
-import { megaIIAux } from "./memory"
 import { doSetEmuDriveNewData } from "./devices/drivestate"
 import { MouseCardEvent, resetMouse } from "./devices/mouse"
 import { setKeyboardState } from "./devices/keyboard"
 import { iigsADB } from "./iigs_adb"
 import { iigsEnsoniq, docAccess, resetDocAccess, ensoniqDocRam } from "./devices/iigs_ensoniq"
-import { getDriveStateByIndex } from "./devices/drivestate"
 import { RUN_MODE } from "../common/utility"
 import { setIsTesting } from "./worker2main"
 import * as fs from "fs"
@@ -54,11 +52,10 @@ test("Tass Times: timer oscillator tick period in machine time + wavetable conte
     // --- Instrument haltOsc at the prototype level (called via this.haltOsc). ---
     type HaltEvent = { onum: number, type: 0 | 1, cycles: number }
     const haltEvents: HaltEvent[] = []
-    const proto = (iigsEnsoniq as unknown as Record<string, unknown>)
     const haltKey = "haltOsc"
-    const origHalt = (Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: unknown[]) => void>)[haltKey]
+    const origHalt = (Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: any[]) => any>)[haltKey]
       .bind(iigsEnsoniq)
-    ;(Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: unknown[]) => void>)[haltKey] =
+    ;(Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: any[]) => any>)[haltKey] =
       (onum: number, type: 0 | 1, ...rest: unknown[]) => {
         // accHolder.v is rest[0]; it is the accumulator value at the halt.
         const accHolder = rest[0] as { v: number } | undefined
@@ -195,9 +192,9 @@ test("Tass Times: timer oscillator tick period in machine time + wavetable conte
     // (halt bit clear on a previously halted osc), with machine-time stamps.
     const keyOns: string[] = []
     const genKey = "generateSamples"
-    const origGen = (Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: unknown[]) => Int16Array>)[genKey]
+    const origGen = (Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: any[]) => any>)[genKey]
       .bind(iigsEnsoniq)
-    ;(Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: unknown[]) => Int16Array>)[genKey] =
+    ;(Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: any[]) => any>)[genKey] =
       (nf: number) => {
         const o31 = iigsEnsoniq.oscillators[31]
         const pre = { acc: o31.accumulator, ctrl: o31.control, cyc: s6502.cycleCount }
@@ -214,8 +211,8 @@ test("Tass Times: timer oscillator tick period in machine time + wavetable conte
     // Note-onset logging for the measure window: control register writes
     // ($A0+$n .. $BF) that key-on a voice, stamped with machine time.
     const anyEnW = iigsEnsoniq as unknown as Record<string, number>
-    const origWriteDataW = (Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: unknown[]) => void>)["writeData"]
-    ;(Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: unknown[]) => void>)["writeData"] =
+    const origWriteDataW = (Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: any[]) => any>)["writeData"]
+    ;(Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: any[]) => any>)["writeData"] =
       (data: number) => {
         const addr = (anyEnW.soundadrh << 8) | anyEnW.soundadrl
         const oscN = addr & 0x1f
@@ -331,7 +328,6 @@ test("Tass Times: timer oscillator tick period in machine time + wavetable conte
     // Also show where the OTHER active voices' waves start (are music voices
     // sharing one wave table?) and their intervals if they halt at all.
     for (const [onum, arr] of ranked.slice(1, 4)) {
-      const o = iigsEnsoniq.oscillators[onum]
       console.log(`[TICK] side osc${onum}: ${oscDump(onum)} events=${arr.length}`)
     }
 
@@ -358,7 +354,7 @@ test("Tass Times: timer oscillator tick period in machine time + wavetable conte
     {
       const docRate = 894886 / (Math.max(1, iigsEnsoniq.osce) + 2)
       const resshifts2 = [9, 10, 11, 12, 13, 14, 15, 16]
-      const wavedirs: Array<{ f: number, len: number, res: number, vol: number }> = []
+      const wavedirs: Array<{ f: number, len: number, res: number, vol: number, osc: number, wtptr: number }> = []
       for (let i = 0; i < Math.max(1, iigsEnsoniq.osce); i++) {
         for (const snap of oscSnapshots) {
           const m = snap.match(new RegExp(`o${i}:.H/f(\\d+)/v(\\d+)/w\\$([0-9a-f]+)/z(\\d)/r(\\d)`))
@@ -375,15 +371,14 @@ test("Tass Times: timer oscillator tick period in machine time + wavetable conte
           }
         }
       }
-      const agg = new Map<string, { n: number, osc: number, wtptr: number, vol: number, len: number, res: number }>()
+      const agg = new Map<string, { n: number, osc: number, wtptr: number, vol: number, len: number, res: number, f: number }>()
       const rows: string[] = []
       for (const d of wavedirs) {
         const key = `o${d.osc}/f${d.f}/w$${d.wtptr.toString(16)}`
-        const e = agg.get(key) ?? { n: 0, osc: d.osc, wtptr: d.wtptr, vol: d.vol, len: d.len, res: d.res }
+        const e = agg.get(key) ?? { n: 0, osc: d.osc, wtptr: d.wtptr, vol: d.vol, len: d.len, res: d.res, f: d.f }
         e.n++; agg.set(key, e)
       }
       for (const [key, e] of agg) {
-        const shift = resshifts2[e.res] - (Math.log2(e.len) | 0 | 8 | 0) // placeholder, use field below
         // recompute via wave len -> field: len=256<<field
         const field = Math.round(Math.log2(e.len / 256))
         const res = resshifts2[e.res] - field
@@ -393,7 +388,6 @@ test("Tass Times: timer oscillator tick period in machine time + wavetable conte
           `pitch=${pitch.toFixed(1)}Hz midi=${midi.toFixed(2)}`)
       }
       console.log(`[TICK] melody voices (pitch under wave-zero length, docRate=${docRate.toFixed(0)}):\n  ` + rows.join("\n  "))
-      const distinctVol = new Set(oscSnapshots.map(s => Array.from(s.matchAll(/o(\d+):[^\s]+/g))?.map(x => x[0])).flat())
       console.log(`[TICK] snapshot count=${oscSnapshots.length}`)
       console.log(`[TICK] first snapshot:  ${oscSnapshots[0] ?? "(none)"}`)
       console.log(`[TICK] mid snapshot:    ${oscSnapshots[Math.floor(oscSnapshots.length / 2)] ?? "(none)"}`)
@@ -404,8 +398,8 @@ test("Tass Times: timer oscillator tick period in machine time + wavetable conte
     const anyEn = iigsEnsoniq as unknown as Record<string, number>
     // Patch the register write path: track writes for osc31 by observing
     // soundadrl/soundadrh changes. writeData is the $C03D entry.
-    const origWriteData = (Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: unknown[]) => void>)["writeData"]
-    ;(Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: unknown[]) => void>)["writeData"] =
+    const origWriteData = (Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: any[]) => any>)["writeData"]
+    ;(Object.getPrototypeOf(iigsEnsoniq) as Record<string, (...a: any[]) => any>)["writeData"] =
       (data: number) => {
         const addr = (anyEn.soundadrh << 8) | anyEn.soundadrl
         if (addr === 0x00bf) {
