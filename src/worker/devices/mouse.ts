@@ -1,7 +1,7 @@
 // Mouse Driver for Apple2TS - Copyright 2023 Michael Morrison <codebythepound@gmail.com>
 // Now combined Mouse/Clock driver
 
-import { setSlotDriver, setSlotIOCallback, memGet, memSet, memSetC000, memGetC000, getCurrentMachineName } from "../memory"
+import { setSlotDriver, setSlotIOCallback, memGet, memSet, memSetC000, memGetC000, megaIIAux, getCurrentMachineName } from "../memory"
 import { iigsADB, noteAdbLog } from "../iigs_adb"
 import { registerSlotCardState } from "./slot_card_state"
 import { MouseEventSimple } from "../../common/utility"
@@ -605,6 +605,23 @@ const iigsADBEvent = (event: MouseEventSimple) => {
     }
   }
   if (dx !== 0 || dy !== 0) iigsADB.queueMouse(dx, dy)
+
+  // Publish the host pointer position to the Mega II aux RAM ($E1) so the
+  // ROM's press dispatch (C52B) reads the correct cursor location when it
+  // fills the event record. The ADB report mechanism (above) drives the ROM's
+  // cursor accumulator, but for large moves the +/-63 per-report clamping
+  // plus VBL timing causes the accumulated position to drift. Publishing the
+  // host position directly keeps the event record's cursor field accurate.
+  if (event.x >= 0 && event.x <= 1.0) {
+    const cx = Math.round(event.x * ADB_COUNTS_X)
+    megaIIAux[0x00E9] = cx & 0xFF
+    megaIIAux[0x00EA] = (cx >> 8) & 0xFF
+  }
+  if (event.y >= 0 && event.y <= 1.0) {
+    const cy = Math.round(event.y * ADB_COUNTS_Y)
+    megaIIAux[0x00EB] = cy & 0xFF
+    megaIIAux[0x00EC] = (cy >> 8) & 0xFF
+  }
 }
 
 export const resetADBTracking = () => {
