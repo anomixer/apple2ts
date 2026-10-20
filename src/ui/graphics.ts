@@ -5,6 +5,7 @@ import { handleGetAltCharSet, handleGetTextPage,
   handleGetVidhdActive,
   handleGetCursorX,
   handleGetCursorY,
+  handleGetRomMouseActive,
   handleGetSoftSwitches } from "./main2worker"
 import { convertTextPageValueToASCII, COLOR_MODE, TEST_GRAPHICS, hiresLineToAddress, toHex, MONITOR_MODE } from "../common/utility"
 import { convertColorsToRGBA, getHiresColors, getHiresGreen } from "./graphicshgr"
@@ -989,6 +990,12 @@ const CURSOR_ROWS = [
 
 const drawIigsCursor = (ctx: CanvasRenderingContext2D) => {
   if (!isSuperHiResScreen()) return
+  // When the guest's classic ROM ADB cursor driver runs (ProDOS-8 era
+  // software such as Tass Times) the guest draws and positions its own
+  // pointer; overlaying ours paints a second, wrongly-placed arrow. GS/OS
+  // bypasses that task and never paints a sprite, which is the only case
+  // this overlay covers (AGENTS.md section 54).
+  if (handleGetRomMouseActive()) return
   const cx = handleGetCursorX()
   const cy = handleGetCursorY()
   if (cx === 0 && cy === 0) return // no mouse activity yet

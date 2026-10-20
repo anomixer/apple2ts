@@ -150,12 +150,11 @@ export const setKeyboardState = (state: KeyboardState) => {
   interruptKeySequence()
   if (getCurrentMachineName() === "APPLE2GS" && state.domCode) {
     // The IIgs's physical keyboard is ADB device address 2. Programs that do
-    // not poll the legacy $C000 softswitch (GS/OS applications, IIgs games -
-    // e.g. Tass Times once it is in the game proper) only ever see keys
-    // through ADB keyboard register 0, so hardware keys must be delivered
-    // there as well. Event bytes follow the ADB convention: the keycode for a
-    // key down, keycode | 0x80 for a key up (see iigs_adb.ts). Keyboard
-    // auto-repeat is the guest OS's job, so host repeats are not re-queued.
+    // not poll the legacy $C000 softswitch (GS/OS applications) only ever see
+    // keys through ADB keyboard register 0, so hardware keys must be delivered
+    // there. Event bytes follow the ADB convention: the keycode for a key
+    // down, keycode | 0x80 for a key up (see iigs_adb.ts). Keyboard auto-repeat
+    // is the guest OS's job, so host repeats are not re-queued.
     const code = DOM_TO_ADB[state.domCode]
     if (code !== undefined) {
       if (state.isDown) {
@@ -175,7 +174,13 @@ export const setKeyboardState = (state: KeyboardState) => {
     if (state.saveSnapShot) {
       requestSnapshot()
     }
-    return
+    // DELIBERATELY no early return: on real IIgs hardware the physical
+    // keyboard also drives the Mega II's legacy keyboard register ($C000 /
+    // $C010 AKD/strobe), which is run in parallel with the ADB micro. ProDOS-8
+    // era software like Tass Times reads the legacy register in its game loop
+    // and never touches the ADB, so the early return that shipped with the
+    // ADB delivery left it with no keys at all. Fall through to the legacy
+    // path below instead.
   }
   if (!state.isDown || state.key < 0) {
     keyboardIsDown = false

@@ -904,6 +904,14 @@ export const handleGetCursorY = () => {
   return machineState.cursorY || 0
 }
 
+// True while the guest's classic ROM ADB cursor driver is running (ProDOS-8
+// era software: Tass Times etc. draw and position their own pointer sprite).
+// The IIgs pointer overlay is only for guests with no cursor of their own
+// (GS/OS 6.0.1, whose Event Manager never paints the sprite).
+export const handleGetRomMouseActive = () => {
+  return !!machineState.romMouseActive
+}
+
 export const handleGetNoDelayMode = () => {
   return machineState.noDelayMode
 }

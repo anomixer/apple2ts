@@ -296,6 +296,7 @@ type MachineState = {
   shr?: Uint8Array,
   cursorX?: number,
   cursorY?: number,
+  romMouseActive?: boolean,
   slotConfig: SlotConfig,
   softSwitches: import("../worker/softswitches").SoftSwitchStates,
   speedMode: number,

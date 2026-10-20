@@ -3058,3 +3058,71 @@ removed the dead `shift` placeholder and unused `distinctVol`/`megaIIAux`/
 `getDriveStateByIndex`/`proto` locals. `tsc --noEmit` is now clean tree-wide
 (first time), `npm run build` passes, and the probe test still passes.
 
+---
+
+### 54. IIgs: overlay cursor gated on the guest's own ROM mouse task; keyboard now ALSO drives the legacy $C000 register
+
+**User feedback after §53**: (1) in Tass Times three cursors were visible -
+host + the game's own big arrow (correctly placed) + our small overlay arrow
+(wrongly placed) - "don't draw that one"; in GS/OS 6.0.1 our overlay points
+correctly and the guest's own arrow is a static black sprite stuck in the
+top-left corner. (2) the keyboard does nothing at all.
+
+#### Cursor: the ROM ADB task is the "guest draws its own pointer" signal
+
+A per-program discriminator was needed: the overlay is right for GS/OS and
+wrong for Tass Times. Two candidate signals were probed in a throwaway harness
+test:
+
+- **65816 emulation flag - INVERTED, unusable.** Sampled once per emulated
+  frame: Tass Times title/intro/in-game reads E=0 (native) 82-88% of frames
+  (its 65816 sound driver dominates), while GS/OS 6.0.1's Finder reads E=1
+  (emulation) 200/200 frames at both 3000- and 4000-frame samples. Gating on
+  native mode would hide the overlay exactly where it is needed.
+- **Who reads the ADB - clean.** Instrumenting `iigsADB.readStatus()` /
+  `readMouseData()` with the caller PC (via the existing `getCpuPc`
+  indirection): Tass Times polls `$C027` **continuously** from the classic ROM
+  ADB micro task at `FF:C4D5` (~265 reads/frame; 79707 in one 300-frame
+  window), while GS/OS idles with **zero** ADB reads. §38 already measured
+  that `FF:C4D0` never executes under GS/OS.
+
+**Fix**: `iigs_adb.ts` stamps `s6502.cycleCount` on every `$C027`/`$C024` read
+whose caller PC is inside `FF:C4D0-FF:C560` (the ROM ADB task address range),
+exposed as `iigsADB.romAdbTaskActive()` (fresh stamp within ~2 frames of
+machine time = the task is alive). `machineState.romMouseActive` carries it to
+the UI and `drawIigsCursor()` in `graphics.ts` returns early when set: a
+ProDOS-8-era program manages its own sprite, so our overlay would be a second,
+misplaced arrow. GS/OS bypasses the task, so the overlay still shows there.
+
+**Verified in headless Chrome**: GS/OS Finder still shows the overlay tracking
+the pointer; Tass Times title screen (SHR) renders with **no overlay arrow**
+and no phantom cursor anywhere.
+
+#### Keyboard: the IIgs ADB path swallowed the legacy register
+
+`setKeyboardState()` queued IIgs keys into the ADB and **returned early**
+(§47A), so nothing ever wrote the legacy `$C000`/`$C010` keyboard register.
+Programs that poll it - Tass Times' in-game loop - saw no keys at all. On real
+IIgs hardware the physical keyboard drives the Mega II's legacy keyboard
+register **in parallel with** the ADB micro-controller (both pipelines get
+every key).
+
+**Fix**: the IIgs branch no longer returns early; it feeds the ADB queue
+(IIgs-native programs, GS/OS) *and* falls through to the legacy
+`setKeyStrobe`/auto-repeat path (ProDOS-8-era software).
+
+**Verified in the harness** (Tass Times walked to the in-game `:` prompt):
+after a key-down, `$C000` reads `$E1` ('a' | 0x80) and the game consumed it
+within 8 frames (strobe cleared to `$61`); 100 further frames produced **no
+second key byte**, so the ROM task never re-injects a queued ADB key into
+`$C000` - dual delivery does not double-type. `gs_basic_sound.test.ts`
+(types an Applesoft program on the IIgs), `gs_keyboard_adb.test.ts`,
+`keyboard.test.ts`, all Tass tests, `gsos_boot`/`gs_cursor_draw`/
+`gs_ctrl_reset`: pass. Full worker suite 788/789 (only the pre-existing
+`vera.test.ts` CMDR-DOS failure), UI 272/272, `tsc --noEmit` clean.
+
+**Still open**: the GS/OS Finder's Event Manager never turning reports into
+events (menu highlight / icon selection / clicks - unchanged from §53), and
+the overlay's exact-under-pointer mapping (bezel-inset screen rect vs full
+window, §53).
+

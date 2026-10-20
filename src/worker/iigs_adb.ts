@@ -23,6 +23,18 @@
  * ADB_Keyboard}.hpp, which is the reference implementation.
  */
 import { getCpuPc } from "./cpu_pc"
+import { s6502 } from "./instructions"
+
+// The classic ROM ADB micro-controller task address range (bank $FF). See
+// AGENTS.md section 27: FF:C4D5 reads the status register, FF:C4D9/C4E6 read
+// the mouse bytes. A ProDOS-8-era program such as Tass Times polls it
+// continuously and draws its own cursor; GS/OS replaces the task and never
+// touches it, which is exactly why the IIgs pointer overlay is only wanted
+// there.
+const ROM_ADB_TASK_PC_LO = 0xFFC4D0
+const ROM_ADB_TASK_PC_HI = 0xFFC560
+// ~2 frames of machine time: Tass polls every few cycles while it is running,
+// so any idle gap under this threshold still counts as "the task is alive".
 
 // $C027 status bits
 const STATUS_MOUSE_DATA = 0x80;          // bit 7: a mouse report is waiting
@@ -163,6 +175,16 @@ export class IIGSADB {
   private cmd: number[] = [];
   private argumentsExpected = 0;
 
+  // Cycle stamp of the last $C027/$C024 read made from inside the ROM ADB task
+  // (see ROM_ADB_TASK_PC_*). A near-fresh stamp means the guest's own cursor
+  // driver is running and the UI must not paint a pointer overlay.
+  private romTaskReadCycle = -1e15;
+
+  // True while the guest's classic ROM cursor/mouse machinery is running.
+  romAdbTaskActive(): boolean {
+    return s6502.cycleCount - this.romTaskReadCycle < 100000;
+  }
+
   // --- Status / data registers ---
   readStatus(): number {
     let status = 0;
@@ -173,6 +195,10 @@ export class IIGSADB {
     if (this.commandFull()) status |= STATUS_COMMAND_FULL;
     status |= this.interruptEnables;
     noteAdbLog("stat", status);
+    const pc = getCpuPc();
+    if (pc >= ROM_ADB_TASK_PC_LO && pc < ROM_ADB_TASK_PC_HI) {
+      this.romTaskReadCycle = s6502.cycleCount;
+    }
     return status;
   }
 
@@ -433,6 +459,11 @@ export class IIGSADB {
   // so the displacement decodes as: (byte & 0x7F) with 0x40 subtracted when
   // that bit is set. -63 is $41, -1 is $7F, +63 is $3F.
   readMouseData(): number {
+    // Track ROM-task callers here too: the task reads $C024 at FF:C4D9/C4E6.
+    const romTaskPc = getCpuPc();
+    if (romTaskPc >= ROM_ADB_TASK_PC_LO && romTaskPc < ROM_ADB_TASK_PC_HI) {
+      this.romTaskReadCycle = s6502.cycleCount;
+    }
     // KEGs's adb_read_c024() returns 0 when the mouse is off, rather than
     // whatever happens to be latched.
     if (!this.hasMouseData()) {

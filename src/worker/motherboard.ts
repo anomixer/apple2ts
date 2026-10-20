@@ -6,6 +6,7 @@ import { hiresAddressToLine, RUN_MODE, TEST_DEBUG, DEFAULT_SLOT_CONFIG, DEFAULT_
 import { resetFloppyDrives, doPauseDrive, getHardDriveState } from "./devices/drivestate"
 import { iigsEnsoniq } from "./devices/iigs_ensoniq"
 import { passEnsoniqSound } from "./worker2main"
+import { iigsADB } from "./iigs_adb"
 // import { slot_omni } from "./roms/slot_omni_cx00"
 import { SWITCHES, overrideSoftSwitch, resetSoftSwitches, setVideo7Override,
   restoreSoftSwitches, getSoftSwitchDescriptions, 
@@ -1160,6 +1161,10 @@ export const getExternalMachineState = () => {
     shr: getShr(),
     cursorX: (memory[0x047C] | (memory[0x057C] << 8)),
     cursorY: (memory[0x04FC] | (memory[0x05FC] << 8)),
+    // True while the guest's own ROM ADB cursor driver is running (ProDOS-8
+    // era software draws and positions its own pointer); the UI must then NOT
+    // paint its overlay arrow, or the game shows two guest cursors.
+    romMouseActive: iigsADB.romAdbTaskActive(),
     slotConfig: currentSlotConfig,
     softSwitches: getSoftSwitches(),
     speedMode: speedMode,
