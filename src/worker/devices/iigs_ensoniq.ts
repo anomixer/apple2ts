@@ -459,7 +459,8 @@ export class IigsEnsoniq {
           let ramptr = altram & sizemask
           acc += freq
           const waveByte = ensoniqDocRam[(ramptr + wtptr) & 0xffff]
-          const data = waveByte ^ 0x80
+          let data = waveByte ^ 0x80
+          if (data >= 128) data -= 256
           const accHolder = { v: acc }
           if (waveByte === 0) {
             this.haltOsc(osc, 1, accHolder, shift, o.control)
@@ -481,7 +482,7 @@ export class IigsEnsoniq {
               } else {
                 if (osc < 31) {
                   if (!(this.oscillators[osc+1].control & 1)) {
-                    this.oscillators[osc+1].vol = (data ^ 0x80)
+                    this.oscillators[osc+1].vol = waveByte
                   }
                 }
               }
@@ -496,23 +497,21 @@ export class IigsEnsoniq {
             acc = accHolder.v
           }
           if (ctrl & 1) break
-          o.data = data ^ 0x80
+          o.data = waveByte
         }
         o.accumulator = acc
         o.control = ctrl & 0xff
       }
     }
-    // mix -> buffer, applying the smoothed analog system volume
-    const gain = this.smoothedVolume
+    // mix -> buffer. gssquared divides by 8 and does NOT apply the $C03C
+    // volume nibble per-sample (it is routed to the system volume instead,
+    // and applying it per-sample caused amplitude modulation / distortion).
     for (let i = 0; i < numFrames * chan; i++) {
-      let sample = Math.floor(mix[i] * gain / 8)
+      let sample = Math.trunc(mix[i] / 8)
       if (sample > 32767) sample = 32767
       if (sample < -32768) sample = -32768
       buffer[i] = sample
     }
-    // Slew towards the target over roughly 20ms of samples.
-    const alpha = Math.min(1, numFrames / (0.020 * Math.max(1, 28000)))
-    this.smoothedVolume += (this.systemVolume - this.smoothedVolume) * alpha
     this.mirrorMonoToStereo(buffer, numFrames, chan)
     if (buffer === out) {
       // The caller assembles per-refresh blocks from short chunks; recording
