@@ -3129,6 +3129,43 @@ window, §53).
 
 ---
 
+### 56. IIgs Mouse Single Click Registered as Double Click — FIXED (CPU-level PostEvent dedup)
+
+**Symptom**: in GS/OS 6.0.1 a single physical click on a volume icon opened it
+(as if double-clicked). The user reported "滑鼠點一下, 還是 double click 啊!".
+
+**Root cause**: the ROM's ADB mouse dispatch (`FE:C5C8`) contains a loop that
+calls the PostEvent tool (`$1406`) more than once per dispatch. A single press
+produced two `mouseDown` events (`what=0x0001`) and a single release produced
+two `mouseUp` events (`what=0x0002`). GS/OS's double-click detector then saw
+two mouseDowns within the double-click window and treated one click as a
+double click.
+
+This was confirmed empirically by `src/worker/gs_disp2.test.ts`:
+- with the dedup disabled: press → 2 × `what=0001` (msg 0 and msg 1);
+  release → 2 × `what=0002`.
+- with the dedup enabled: press → 1 × `what=0001`; release → 1 × `what=0002`.
+
+The ROM's loop re-runs because PostEvent returns 0 (success) on the first
+post and the loop condition (`BEQ $c64a`) re-enters. The second post then
+returns nonzero, exiting the loop. There is no ADB-side cause: the ADB log
+shows exactly ONE report latched per press (`latch` count 1, `byte` count 4)
+and one per release, so the duplication is entirely inside the ROM's dispatch.
+
+**Fix**: in `src/worker/cpu65816.ts`, `case 0x22` (JSL) intercepts tool calls
+to `$E10000` with `X === 0x1406` (PostEvent). When the event code on the
+stack is `1` (mouseDown) or `2` (mouseUp) and a post of the same kind
+happened within the last 2000 cycles, the JSL is skipped (the ROM's own
+cleanup at `FE:C67F` still balances the stack). This collapses the duplicate
+into a single PostEvent per button transition.
+
+**Verification**:
+- `src/worker/gs_disp2.test.ts`: 1 post per press / 1 per release.
+- Full worker suite: 800/801 pass (only the pre-existing `vera.test.ts`
+  CMDR-DOS failure, which also fails on a clean tree). `tsc --noEmit` clean.
+- Headless Chrome boot of `GSOS601.po`: desktop renders; a single click now
+  posts one press and one release (ADB log `latch:1, byte:4`).
+
 ### 55. IIgs Event Pipeline Verified End-to-End; ADB Cursor Drift Identified as Root Cause of Menu Non-Highlight
 
 **Investigation (2026-10-20)**: deep probe of the menus do not highlight symptom.
