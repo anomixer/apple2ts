@@ -1000,6 +1000,12 @@ const memGetSoftSwitch = (addr: number): number => {
       }
   }
   
+  // NOTE: The generic path below already implements the $C011-$C01F status
+  // reads correctly (checkSoftSwitches sets/clears bit 7 in the $C000 page
+  // for each switch's isSetAddr). Replacing that with explicit status bits
+  // (as gssquared does) changes the value the guest sees for the *other* bits
+  // of the ROM byte, which measurably altered GS/OS's palette output.
+
   // Apple IIgs hardware registers ($C020-$C04F)
   if (currentMachineName === "APPLE2GS" && addr >= 0xC020 && addr <= 0xC04F) {
       // Handle specific IIgs hardware
@@ -1142,7 +1148,6 @@ const memGetSoftSwitch = (addr: number): number => {
       }
   }
 
-  // Apple IIgs built-in IWM ($C0E0-$C0EF)
   if (currentMachineName === "APPLE2GS" && addr >= 0xC0E0 && addr <= 0xC0EF) {
     const reg = addr & 0x0F;
     switch (reg) {
@@ -1582,6 +1587,27 @@ export const memSetC000 = (addr: number, value: number, repeat = 1) => {
 
 const TEXT_PAGE1 = 0x400
 const TEXT_PAGE2 = 0x800
+
+// Apple IIgs text-page sources for the video scanner.
+//
+// The IIgs's $C035 (STAT) shadow register decides which physical pages the
+// video scanner reads for the text screen:
+//   bit 0 ($01): text page 1  - clear => shadowed into Mega II main RAM
+//   bit 5 ($20): text page 2  - clear => shadowed into Mega II main RAM
+// 16-bit software (ProDOS 16 systems such as the SenseiPlayer disk) writes
+// its screen to $E0:$0400 (Mega II main) and $E1:$0400 (Mega II aux) and
+// expects the scanner to show those pages, so the renderer has to read them
+// from there rather than from the fast RAM the CPU sees in banks 00/01.
+const iigsTextMainSource = (pageOffset: number): Uint8Array => {
+  const shadowBit = (pageOffset === TEXT_PAGE2) ? 0x20 : 0x01;
+  if (!(iigsRegisters[0x35] & shadowBit)) return megaIIMain;
+  return memory;
+}
+
+const iigsTextAuxSource = (_pageOffset: number): Uint8Array => {
+  // The IIgs keeps the second half of the 80-column text screen in aux RAM.
+  return megaIIAux;
+}
 const offset = [
   0, 0x80, 0x100, 0x180, 0x200, 0x280, 0x300, 0x380, 0x28, 0xA8, 0x128, 0x1A8,
   0x228, 0x2A8, 0x328, 0x3A8, 0x50, 0xD0, 0x150, 0x1D0, 0x250, 0x2D0, 0x350,
@@ -1624,12 +1650,22 @@ export const getTextPage = (getLores = false) => {
     // Only select second 80-column text page if STORE80 is also OFF
     const pageOffset = (SWITCHES.PAGE2.isSet && !SWITCHES.STORE80.isSet) ? TEXT_PAGE2 : TEXT_PAGE1
     const textPage = new Uint8Array(80 * (jend - jstart)).fill(0xA0)
+    // Apple IIgs: the text page lives in Mega II main/aux RAM when the
+    // $C035 shadow bits say so, not in the fast RAM the CPU sees in banks
+    // 00/01. 16-bit software (ProDOS 16, the SenseiPlay system) writes its
+    // screen to $E0/$E1:$0400, and the video scanner reads the same physical
+    // pages, so the renderer has to look there too.
+    const iigs = currentMachineName === "APPLE2GS"
+    const mainSrc = iigs ? iigsTextMainSource(pageOffset) : memory
+    const auxSrc = iigs ? iigsTextAuxSource(pageOffset) : null
     for (let j = jstart; j < jend; j++) {
       const joffset = 80 * (j - jstart)
       for (let i = 0; i < 40; i++) {
         // Interleave the characters, aux memory comes first for each pair.
-        textPage[joffset + 2 * i + 1] = memory[pageOffset + offset[j] + i]
-        textPage[joffset + 2 * i] = memory[RamWorksMemoryStart + pageOffset + offset[j] + i]
+        textPage[joffset + 2 * i + 1] = mainSrc[pageOffset + offset[j] + i]
+        textPage[joffset + 2 * i] = auxSrc
+          ? auxSrc[pageOffset + offset[j] + i]
+          : memory[RamWorksMemoryStart + pageOffset + offset[j] + i]
       }
     }
     return textPage
@@ -1655,10 +1691,12 @@ export const getTextPage = (getLores = false) => {
   // Normal 40-column text page
   const pageOffset = (SWITCHES.PAGE2.isSet && !SWITCHES.STORE80.isSet) ? TEXT_PAGE2 : TEXT_PAGE1
   const textPage = new Uint8Array(40 * (jend - jstart))
+  // Apple IIgs: honour the $C035 text-page shadow (see the 80-column path).
+  const mainSrc = currentMachineName === "APPLE2GS" ? iigsTextMainSource(pageOffset) : memory
   for (let j = jstart; j < jend; j++) {
     const joffset = 40 * (j - jstart)
     const start = pageOffset + offset[j]
-    textPage.set(memory.slice(start, start + 40), joffset)
+    textPage.set(mainSrc.slice(start, start + 40), joffset)
   }
   return textPage
 }
