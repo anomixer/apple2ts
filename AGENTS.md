@@ -3327,3 +3327,89 @@ acceptable for correctness.
 lit pixels went from 6,862 (black + ERR 01 text) to 91,463 (MCS title screen).
 GS/OS 6.0.1 boots to a fully rendered Finder. `tsc --noEmit` clean. Worker
 suites `gsos_boot`, `gs_tass_click_freeze`, `gs_basic_sound` pass.
+
+---
+
+### 59. IIgs Text Page Source: the Video Scanner Reads Mega II Main/Aux RAM, Not Fast RAM — FIXED
+
+**Symptom**: `senseiplay800.2mg` (SmartPort, Slot 7) booted into a **black
+screen** on the Apple IIgs. The ProDOS 16 system file ran (it was visibly
+executing, VBL-looping, calling ROM routines through the `$E1:16xx` native
+vector table), but **not a single character ever reached the screen**, and the
+machine looked hung.
+
+**What the disk actually is** (this was the key misdirection): the volume
+directory's system file `SENSEI.SYSTEM` / `PRODOS` is **native 65816 code**,
+not ProDOS 8. The kernel at `0:3D60` contains `REP #$64`, `PHB`, `PLX`, `SEP
+#$30` - i.e. 16-bit ProDOS 16 code, and its character-output routine stores
+the character to **`$E0:05F2` / `$E1:05F2`** (Mega II main / Mega II aux RAM).
+
+**Root cause**: `getTextPage()` in `src/worker/memory.ts` read the text screen
+from `memory[pageOffset + offset[j] + i]` - the **fast RAM** the CPU sees in
+banks 00/01. But the Apple IIgs video scanner reads the text page from
+**Mega II main/aux RAM** whenever the `$C035` (STAT) shadow bits say so:
+
+- `$C035` bit 0 clear => text page 1 is shadowed into Mega II main RAM
+- `$C035` bit 5 clear => text page 2 is shadowed into Mega II main RAM
+- the second half of an 80-column screen lives in Mega II aux RAM
+
+`memSet24` already implemented the *write* side of that shadow
+(`megaIIMain[offset] = data`), and `memGet24`/`memGet` implement the read
+side for the CPU - but the **renderer** bypassed both and read the flat
+`memory[]` array directly. So a ProDOS 16 system drew its screen into
+`megaIIMain[0x400..]` / `megaIIAux[0x400..]` and the scanner never looked
+there: black screen.
+
+Measured before the fix (`src/worker/gs_cmp.test.ts`):
+
+```
+main  @c00: 00 00 03 00 fa 53 45 4e 53 45 49 50 4c 41 59 ...   <- volume dir in RAM
+megaMain text page rows 1-3: V....VVVVVVVV..._ / LLLLLLLLLLLL   <- the real screen
+megaAux  text page rows 1-3: Z_......ZWWWWWWWW...Z
+bank0 $05E1 = a0    megaIIMain $05E1 = 5a     <- NOT the same memory
+```
+
+**Fix** (`src/worker/memory.ts`): add `iigsTextMainSource()` /
+`iigsTextAuxSource()` which honour the `$C035` shadow bits and return
+`megaIIMain` / `megaIIAux` on the IIgs, and use them in both the 80-column
+and the 40-column path of `getTextPage()`.
+
+**Result**: `senseiplay800.2mg` now boots and shows its file browser -
+`PRODOS 17,128 / NTPPLAYER 34,672 / DGR.RADIO.DGR 1,920 / SENSEI.SYSTEM
+17,152 / SONGS`, the ninja graphic and the bottom menu bar - **identical to
+the GSSquared screenshot**. Browser lit pixels went from **0 to 31,090**.
+MCS also improved (91,463 -> 138,404 lit) because it also writes the 80-column
+screen into Mega II aux RAM. GS/OS is unchanged (290,423 lit).
+
+Regression test: `src/worker/gs_textpage.test.ts`.
+
+**Two red herrings worth recording, because both were measured and thrown out**:
+
+1. **The 2mg header of this file is corrupt** (`block_count = 0`,
+   `data_offset = 1600` instead of `64`, `data_length = 64` instead of
+   `819200`). apple2ts is immune because `getHardDriveData()` detects the
+   `"2IMG"` magic and always uses offset 64; **gssquared uses `data_offset`
+   and would read from byte 1600**, i.e. garbage. So gssquared can only boot
+   this disk if it is fed a header-corrected copy.
+2. **The volume directory header is also non-standard** (`version = 0x29`,
+   `access = 0xE0`, `entry_length = 0xFF`, `entries_per_block = 0x30`,
+   `total_blocks = 0x292F`, `next_block = 0x0011`). Zeroing those fields made
+   no difference to the boot, so the ProDOS 16 kernel tolerates them. Do not
+   chase this again.
+
+**Also rejected during this investigation** (measured, then reverted):
+
+- Replacing the generic `$C011-$C01F` status reads with gssquared's explicit
+  status bits (`mmu_iigs.cpp gs_bsr_read_C01x` + `display.cpp
+  display_read_C01AF`) **changed GS/OS's rendered palette** (6 distinct
+  colours instead of >8) and broke six test suites. The generic path in
+  `checkSoftSwitches` already sets/clears bit 7 in the `$C000` page for each
+  switch's `isSetAddr`, which is correct; only the *other* bits of the ROM
+  byte differ, and software depends on them.
+- Returning floating bus (0) for `$C050-$C05F` video soft switch reads.
+- Returning 0 for the empty-bay IWM data register.
+- Returning 0 for `$C000` (breaks the legacy keyboard path).
+
+**Status**: worker suite 788/789 (only the pre-existing `vera.test.ts`
+CMDR-DOS failure), UI suite 265/272 (7 pre-existing failures, identical on a
+clean tree), `tsc --noEmit` clean.
