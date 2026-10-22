@@ -23,7 +23,8 @@ import { doSetRunMode, doSetSpeedMode,
   restoreExternalSessionSnapshot,
   setHeatMapState,
   setMemoryDumpState,
-  doSetAutoSnapshot} from "./motherboard"
+  doSetAutoSnapshot,
+  getIigsVblCount} from "./motherboard"
 import { doSetEmuDriveNewData, doSetEmuDriveProps } from "./devices/drivestate"
 import { apple2KeyRelease, sendKeySequence, setKeyboardState, sendTextToEmulator } from "./devices/keyboard"
 import {
@@ -555,6 +556,7 @@ if (typeof self !== "undefined") {
           outRate: iigsEnsoniq.outputRate(),
           monoMirrorCount: iigsEnsoniq.monoMirrorCount,
           irqTicks: iigsEnsoniq.irqTicks,
+          vblCount: getIigsVblCount(),
           speedMode: iigsEnsoniq.lastSpeedMode,
           cyclesPerRefresh: iigsEnsoniq.lastCyclesPerRefresh,
           blocks: iigsEnsoniq.blocks.slice(0, 6),

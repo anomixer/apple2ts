@@ -92,6 +92,10 @@ import { findMemory, getMemoryView, resolveMemoryRangeRequest } from "./memory_v
 let speedMode = 0
 let iigsQuarterSecCounter = 0
 let iigsOneSecCounter = 0
+// Debug-only: count VBL interrupts so the browser can verify the 60 Hz rate.
+let iigsVblCount = 0
+export const getIigsVblCount = () => iigsVblCount
+export const resetIigsVblCount = () => { iigsVblCount = 0 }
 export let iigsSpeedRegister = 0x00
 export const setIigsSpeedRegister = (v: number) => { iigsSpeedRegister = v }
 let cpuSpeed = 0
@@ -1353,6 +1357,7 @@ const doAdvance6502 = () => {
         // IIgs: VBL is a hardware interrupt — signal it and raise the IRQ line if enabled.
         if (isIIgs) {
           iigsSignalVbl()
+          iigsVblCount++
           iigsQuarterSecCounter++
           if (iigsQuarterSecCounter >= 15) {
             iigsQuarterSecCounter = 0
