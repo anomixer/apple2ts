@@ -1318,7 +1318,7 @@ const doAdvance6502 = () => {
       // Those checks only need sub-scanline resolution, so running them every
       // single instruction was pure overhead — the run loop body showed 11%
       // self time in the V8 profile.
-      for (let bi = 0; bi < 8; bi++) {
+      for (let bi = 0; bi < 1; bi++) {
         cycles = cpu.processInstruction(traceCb)
         if (cycles < 0) break
         s6502.cycleCount += cycles
