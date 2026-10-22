@@ -1604,9 +1604,16 @@ const iigsTextMainSource = (pageOffset: number): Uint8Array => {
   return memory;
 }
 
-const iigsTextAuxSource = (_pageOffset: number): Uint8Array => {
-  // The IIgs keeps the second half of the 80-column text screen in aux RAM.
-  return megaIIAux;
+const iigsTextAuxSource = (): Uint8Array | null => {
+  // The second half of the IIgs 80-column text screen lives in aux RAM.
+  // 16-bit software (ProDOS 16 systems) writes it straight into bank $E1
+  // (Mega II aux RAM = megaIIAux); 8-bit software reaches the same physical
+  // page through the $C003 aux switch, which lands in the fast RAM. Use
+  // whichever one the guest actually populated.
+  for (let i = 0x400; i < 0x800; i++) {
+    if (megaIIAux[i] !== 0x00 && megaIIAux[i] !== 0xA0) return megaIIAux;
+  }
+  return null;
 }
 const offset = [
   0, 0x80, 0x100, 0x180, 0x200, 0x280, 0x300, 0x380, 0x28, 0xA8, 0x128, 0x1A8,
@@ -1657,15 +1664,14 @@ export const getTextPage = (getLores = false) => {
     // pages, so the renderer has to look there too.
     const iigs = currentMachineName === "APPLE2GS"
     const mainSrc = iigs ? iigsTextMainSource(pageOffset) : memory
-    const auxSrc = iigs ? iigsTextAuxSource(pageOffset) : null
+    const auxSrc = iigs ? iigsTextAuxSource() : null
     for (let j = jstart; j < jend; j++) {
       const joffset = 80 * (j - jstart)
       for (let i = 0; i < 40; i++) {
         // Interleave the characters, aux memory comes first for each pair.
-        textPage[joffset + 2 * i + 1] = mainSrc[pageOffset + offset[j] + i]
-        textPage[joffset + 2 * i] = auxSrc
-          ? auxSrc[pageOffset + offset[j] + i]
-          : memory[RamWorksMemoryStart + pageOffset + offset[j] + i]
+        const off = pageOffset + offset[j] + i
+        textPage[joffset + 2 * i + 1] = mainSrc[off]
+        textPage[joffset + 2 * i] = auxSrc ? auxSrc[off] : memory[RamWorksMemoryStart + off]
       }
     }
     return textPage
