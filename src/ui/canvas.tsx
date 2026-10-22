@@ -16,6 +16,8 @@ import {
   handleGetSoftSwitches,
   handleGetSpeedMode,
   handleGetTextPage,
+  handleGetCursorX,
+  handleGetCursorY,
 } from "./main2worker"
 import { ARROW, RUN_MODE, convertAppleKey, MouseEventSimple, UI_THEME } from "../common/utility"
 import { ProcessDisplay, getCanvasSize, handleGetOverrideHires, canvasCoordToNormScreenCoord, xmargin, ymargin, setHostCursorNorm } from "./graphics"
@@ -519,10 +521,27 @@ const Apple2Canvas = (props: DisplayProps) => {
     return { x, y, buttons: -1 }
   }
 
-  const handleMouseDown = (event: ReactMouseEvent<HTMLCanvasElement>) => {
+  // For APPLE2GS, use the guest cursor position (from ADB holes) for clicks
+  // so the click lands where the overlay arrow is drawn, not at the raw host
+  // pointer (which can drift due to ADB delta clamping). Other machines use
+  // the host pointer position via scaleMouseEvent().
+  const getClickEvent = (event: ReactMouseEvent<HTMLCanvasElement>, buttons: number): MouseEventSimple | null => {
+    const machine = handleGetMachineName()
+    if (machine === "APPLE2GS") {
+      // Guest cursor is in 640x200 coordinates (ADB_COUNTS_X/Y).
+      const gx = handleGetCursorX()
+      const gy = handleGetCursorY()
+      return { x: gx / 640, y: gy / 200, buttons }
+    }
     const evt = scaleMouseEvent(event)
+    if (!evt) return null
+    evt.buttons = buttons
+    return evt
+  }
+
+  const handleMouseDown = (event: ReactMouseEvent<HTMLCanvasElement>) => {
+    const evt = getClickEvent(event, event.button === 0 ? 0x10 : 0x11)
     if (!evt) return
-    evt.buttons = event.button === 0 ? 0x10 : 0x11
     passMouseEvent(evt)
     if (handleGetOverrideHires()) {
       const newLockHgrMagnifier = !lockHgrMagnifier
@@ -532,9 +551,8 @@ const Apple2Canvas = (props: DisplayProps) => {
   }
 
   const handleMouseUp = (event: ReactMouseEvent<HTMLCanvasElement>) => {
-    const evt = scaleMouseEvent(event)
+    const evt = getClickEvent(event, event.button === 0 ? 0x00 : 0x01)
     if (!evt) return
-    evt.buttons = event.button === 0 ? 0x00 : 0x01
     passMouseEvent(evt)
   }
 
