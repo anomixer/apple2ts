@@ -3413,3 +3413,114 @@ Regression test: `src/worker/gs_textpage.test.ts`.
 **Status**: worker suite 788/789 (only the pre-existing `vera.test.ts`
 CMDR-DOS failure), UI suite 265/272 (7 pre-existing failures, identical on a
 clean tree), `tsc --noEmit` clean.
+
+---
+
+### 60. SenseiPlay boots; IIgs slow mode implemented; MYCRATE Finder freeze still open
+
+#### 60a. senseiplay800.2mg - FIXED (see section 59)
+
+The ProDOS 16 disk boots and renders its file browser exactly like the
+GSSquared screenshot (`PRODOS 17,128 / NTPPLAYER 34,672 / DGR.RADIO.DGR 1,920 /
+SENSEI.SYSTEM 17,152 / SONGS`, the ninja graphic, the bottom menu bar).
+Browser lit pixels 0 -> 31,231.
+
+#### 60b. IIgs slow mode ($C036 bit 7) - FIXED
+
+**The bug**: `iigsSpeedRegister` was written by the `$C036` handler and
+**never read**. On the IIgs, `$C036` bit 7 selects the CPU clock: bit 7 set =
+fast (2.8 MHz), bit 7 clear = **slow (1.024 MHz)**. gssquared models this in
+the clock itself (`mmu_iigs.hpp`: `set_slow_mode(value & 0x80 ? false : true)`,
+and `NClockIIgs::slow_incr_cycles()` advancing the 14M rail at 1 MHz for
+slow accesses), so a program that asks for slow mode gets the 1 MHz clock it
+was written for.
+
+apple2ts always ran the machine at the selected speed-mode rate, so at
+speed 2.8 MHz any 1 MHz-era software ran **2.74x too fast**.
+
+**Fix**: the run loop's frame budget is now the slow-mode 17030-cycle figure
+when `$C036` says slow, so the CPU, the VBL window, the video counter
+(`readIigsVideoCounter`) and the Ensoniq DOC all scale together. The
+speed-mode table is untouched (`gs_speed.test.ts` still passes).
+
+**Measured**: the IIgs ROM writes `$C036 = 0x84` (fast) early in the boot,
+so the boot and GS/OS are unaffected. senseiplay / GSOS601 / mcs render
+identically in the browser (31,231 / 290,479 / 93,036 lit pixels).
+
+**Note**: AGENTS.md section 48 claimed a *native-mode* speed factor (0.366)
+had been implemented. It was **removed** again in commit `76d9f58b`
+("remove native-mode speedup - all code runs at selected speed"), which is
+the gssquared-faithful choice: on the real IIgs the 65816 runs at 2.8 MHz in
+*both* modes; only `$C036` bit 7 drops it to 1.024 MHz. The missing piece was
+therefore slow mode, not a native/emulation split. Section 48's text is
+wrong on this point and this section supersedes it.
+
+#### 60c. SenseiPlay music "2x fast" - NOT YET FIXED
+
+Measured so far:
+
+- The VBL interrupt rate is **59.8/s** (correct) - a new `vblCount` counter
+  in the `?ensoniqdbg=1` payload (`getIigsVblCount()`) measures it directly.
+- The DOC's `outRate` is 26320 Hz (32 oscillators enabled, `rege1 = 0x3E`),
+  matching gssquared's `894886 / (osce + 2)`.
+- The 65816's instruction/cycle ratio is identical in the ProDOS 16 phase and
+  the boot phase (0.2796 vs 0.2857 instr/cycle), so the cycle accounting is
+  not the problem.
+- `irqTicks = 0` and every oscillator reports `ctrl=1, vol=0, freq=0`:
+  **the DOC never starts an oscillator in the file browser**, so the music
+  path could not be captured. The ProDOS 16 system does not receive mouse
+  events (same failure as GS/OS, section 38), so a file/song cannot be
+  selected from the browser either.
+
+**Next step**: make the ProDOS 16 / GS/OS event manager receive mouse
+events (or a keyboard selection), then capture the PCM and compare the note
+onsets against a reference recording, exactly as section 51 did for Tass
+Times. The 2x factor is most likely a DOC oscillator frequency / `osce`
+mismatch (the ES5503's output rate sets the pitch, so a wrong `osce` reads
+as a 2x-fast tune) rather than a tempo error.
+
+#### 60d. MYCRATE.2MG - GS/OS Finder freezes - OPEN, NOT a regression
+
+**Reproduced**: MYCRATE.2MG (32 MB) boots to the GS/OS Finder (291,023 lit
+pixels) and then the screen **stops updating** - the canvas hash is
+identical 25 s apart - while the CPU keeps executing (69 M instructions).
+
+**Not a regression**: the identical freeze (same hash 1550612692, same lit
+count) reproduces with the pre-text-page-fix `memory.ts` (commit `b805d995`)
+and with the pre-slow-mode-fix `motherboard.ts`.
+
+**What is measured**:
+
+- The **SHR buffer stops changing** (`getShr()` hash identical across
+  300 ms), so the guest stopped drawing - the display path is fine, the
+  guest stalled.
+- The CPU is **not** interrupt-blocked: the `I` flag is clear in ~82 % of
+  samples.
+- The hot PCs (15 s window) are:
+  | PC | count | what |
+  |---|---|---|
+  | `ff:c054/c055/c056` | 44.5 K each | the IIgs ROM's own `$C054-$C056` soft-switch code, which does `LDA $E1:00FF` |
+  | `00:400b0-400c0` | 41.8 K each | the GS/OS kernel loop driving it |
+  | `e1:0000` | 28.3 K | the Toolbox manager |
+  | `fe:00c7-fe:0118` | 28.3 K each | the Toolbox ROM |
+
+- **The guest writes `$E1:00FF` with the values 0 and 1, 10,578 times in a
+  4,000-frame run**, and the ROM reads it back 10,574 times. So `$E1:00FF` is
+  the **IIgs 80-column text page 1/2 register** that the 80-column firmware
+  maintains, and the guest is polling the page state through the ROM's
+  `$C054` handler.
+
+**The open question**: on the real IIgs a read of `$C054`/`$C055` returns
+the *page state*, and gssquared implements those switches in C++
+(`txt_bus_read_C054` -> `reset_page2`, `txt_bus_read_C055` -> page 2,
+both returning floating bus). apple2ts instead runs the **generic**
+soft-switch path for `$C054`, which neither models the IIgs page register
+nor returns the ROM's `$E1:00FF` value. A guest that polls `$C054` waiting
+for the page flip to be acknowledged would therefore poll forever - which is
+exactly the observed hot loop.
+
+**Next step**: implement the IIgs `$C050-$C05D` soft switches in the style of
+gssquared's `txt_bus_read_C05x` (side effect + floating bus return), and
+make the display follow the IIgs page register rather than
+`SWITCHES.PAGE2`. This also affects the 80-column text page for ordinary
+8-bit software, so it is the same area as section 59's text-page work.
