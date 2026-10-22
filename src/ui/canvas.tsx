@@ -18,7 +18,7 @@ import {
   handleGetTextPage,
 } from "./main2worker"
 import { ARROW, RUN_MODE, convertAppleKey, MouseEventSimple, UI_THEME } from "../common/utility"
-import { ProcessDisplay, getCanvasSize, handleGetOverrideHires, canvasCoordToNormScreenCoord, xmargin, ymargin } from "./graphics"
+import { ProcessDisplay, getCanvasSize, handleGetOverrideHires, canvasCoordToNormScreenCoord, xmargin, ymargin, setHostCursorNorm } from "./graphics"
 import { checkGamepad, handleArrowKey, handleDiagonalKey, ensureGamepadEventListeners } from "./devices/gamepad"
 import { handleCopyToClipboard } from "./copycanvas"
 import { handleFileSave } from "./savestate"
@@ -548,6 +548,11 @@ const Apple2Canvas = (props: DisplayProps) => {
       return
     }
     setWithinScreen(true)
+    // Track the host pointer for the IIgs overlay cursor so it follows
+    // the pointer exactly (AGENTS.md section 54).
+    if (evt.x >= 0 && evt.x <= 1.0 && evt.y >= 0 && evt.y <= 1.0) {
+      setHostCursorNorm(evt.x, evt.y)
+    }
     passMouseEvent(evt)
   }
 
