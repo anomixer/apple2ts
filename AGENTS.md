@@ -3296,3 +3296,34 @@ set, and `passSetRunMode(NEED_BOOT)` fires from `handleFragment()` only after
   gssquared decides bootability from the IWM/SmartPort device status bytes; our
   `iigsHasFloppyMedia()`/`iigsHasHardDriveMedia()` mirror that intent but are
   checked in `motherboard.ts`, not in the device layer. Acceptable for now.
+
+
+
+---
+
+### 58. IIgs: 8-instruction batch starved SmartPort boot reads in the browser ??FIXED
+
+**Symptom**: MCS (`mcs.2mg`, SmartPort hard disk in Slot 7) booted in the jest
+harness but failed in the browser with `INSERT SYSTEM DISK AND RESTART -ERR 01`,
+even with mount + Ctrl-Reset. GS/OS showed a desktop with no disk icons + error
+beep when the mouse was moved during boot.
+
+**Root cause**: `doAdvance6502()` batched 8 instructions per outer-loop iteration
+(`for (let bi = 0; bi < 8; bi++)`), running all housekeeping (VBL signalling,
+IRQ re-evaluation, floppy motor, Ensoniq catch-up) only once per batch. The
+8-batch was a perf optimisation (11% of CPU time in the V8 profile) but it
+deferred VBL/IRQ/catch-up by up to 8 instructions. In the real-time browser
+run loop this starved the SmartPort block reads during the ProDOS 8 boot: the
+boot loader's reads returned stale/empty data, ProDOS printed `-ERR 01` and
+stopped. In jest (fake timers, one frame per `doAdvance6502` call) the batching
+happened to align and the boot succeeded, masking the bug.
+
+**Fix**: run **1 instruction per batch** (`for (let bi = 0; bi < 1; bi++)`).
+Housekeeping now runs every instruction, matching gssquared's per-instruction
+`clock->process_due()` + `execute_next` discipline. The 11% perf cost is
+acceptable for correctness.
+
+**Verification**: headless Chrome, `?machine=apple2gs&speed=2.8&boot=true&drive=0#.../mcs.2mg`:
+lit pixels went from 6,862 (black + ERR 01 text) to 91,463 (MCS title screen).
+GS/OS 6.0.1 boots to a fully rendered Finder. `tsc --noEmit` clean. Worker
+suites `gsos_boot`, `gs_tass_click_freeze`, `gs_basic_sound` pass.
