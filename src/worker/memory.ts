@@ -14,7 +14,7 @@ import { noSlotClock } from "./nsc"
 import { adbLogEnabled, noteAdbLog } from "./iigs_adb"
 import { videoTerm } from "./devices/videoterm"
 import { vidhd } from "./devices/vidhd"
-import { isDebugging, setIigsSpeedRegister, getCpuCyclesPerRefresh } from "./motherboard"
+import { isDebugging, setIigsSpeedRegister, getEffectiveCyclesPerRefresh } from "./motherboard"
 import { iigsClock } from "./iigs_clock"
 import { iigsADB } from "./iigs_adb"
 import { iigsEnsoniq, docAccess } from "./devices/iigs_ensoniq"
@@ -187,7 +187,7 @@ export const iigsInterruptPending = (): boolean => {
 // are the VBL rows (that is what $C019/VBLIRQ are keyed to), then 192 visible
 // rows.
 const readIigsVideoCounter = (wantHorz: boolean): number => {
-  const frameCycles = getCpuCyclesPerRefresh();
+  const frameCycles = getEffectiveCyclesPerRefresh();
   const vblCycles = Math.round((12460 / 46727) * frameCycles);
   const cyc = s6502.cycleCount % frameCycles;
   let vert: number;

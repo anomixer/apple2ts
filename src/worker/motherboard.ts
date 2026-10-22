@@ -98,6 +98,23 @@ export const getIigsVblCount = () => iigsVblCount
 export const resetIigsVblCount = () => { iigsVblCount = 0 }
 export let iigsSpeedRegister = 0x00
 export const setIigsSpeedRegister = (v: number) => { iigsSpeedRegister = v }
+// Apple IIgs slow mode. $C036 bit 7 = 1 -> fast (2.8 MHz), bit 7 = 0 ->
+// slow (1.024 MHz). gssquared models this in the clock itself
+// (mmu_iigs.hpp: `set_slow_mode(value & 0x80 ? false : true)` and
+// NClockIIgs::slow_incr_cycles() advancing the 14M rail at 1 MHz), so a
+// program that asks for slow mode gets the 1 MHz clock it was written for.
+// We had the register but never used it, so 1 MHz-era code ran at the
+// selected 2.8 MHz rate - 2.74x too fast (ProDOS 16 music sequencers
+// sequenced on CPU cycles came out at double tempo).
+const isIigsSlowMode = () => !(iigsSpeedRegister & 0x80)
+// CPU cycles in one 1/60 s refresh at the 1.024 MHz slow-mode clock.
+const IIGS_SLOW_CYCLES_PER_REFRESH = 17030
+const effCyclesPerRefresh = () =>
+  (machineName === "APPLE2GS" && isIigsSlowMode()) ? IIGS_SLOW_CYCLES_PER_REFRESH : cpuCyclesPerRefresh
+export const getIigsSlowMode = isIigsSlowMode
+// The number of CPU cycles the machine actually executes per 1/60 s refresh,
+// which is the slow-mode 1.024 MHz figure when $C036 says slow.
+export const getEffectiveCyclesPerRefresh = effCyclesPerRefresh
 let cpuSpeed = 0
 export let isDebugging = false
 let appMode = "default"
@@ -1305,9 +1322,14 @@ const doAdvance6502 = () => {
   // V8 profile.
   const isIIgs = (machineName === "APPLE2GS")
   const traceCb = tracing ? updateTrace : null
-  let frameCycles = isIIgs ? cpuCyclesPerRefresh : 17030
+  // The frame budget is the number of CPU cycles the machine executes in one
+  // 1/60 s refresh. In IIgs slow mode ($C036 bit 7 clear) the CPU runs at
+  // 1.024 MHz, so the budget is the 17030-cycle figure regardless of the
+  // selected speed mode.
+  let frameCycles = isIIgs ? effCyclesPerRefresh() : 17030
   let vblCycles = Math.round((isIIgs ? 12460 / 46727 : 4550 / 17030) * frameCycles)
   let cyclesPerLine = ((frameCycles - vblCycles) / 192) || 1
+  let cachedSlowMode = isIigsSlowMode()
 
   for (;;) {
     let cycles = 0
@@ -1341,9 +1363,10 @@ const doAdvance6502 = () => {
       break
     }
     if (cycles < 0) break
-    if (cachedSpeedMode !== speedMode) {
+    if (cachedSpeedMode !== speedMode || cachedSlowMode !== isIigsSlowMode()) {
       cachedSpeedMode = speedMode
-      frameCycles = isIIgs ? cpuCyclesPerRefresh : 17030
+      cachedSlowMode = isIigsSlowMode()
+      frameCycles = isIIgs ? effCyclesPerRefresh() : 17030
       vblCycles = Math.round((isIIgs ? 12460 / 46727 : 4550 / 17030) * frameCycles)
       cyclesPerLine = ((frameCycles - vblCycles) / 192) || 1
     }
@@ -1404,7 +1427,7 @@ const doAdvance6502 = () => {
       doSetRunMode(RUN_MODE.PAUSED, true, undefined, {reason: "cycle-limit"})
       break
     }
-    if (cycleTotal >= cpuCyclesPerRefresh) {
+    if (cycleTotal >= (isIIgs ? effCyclesPerRefresh() : cpuCyclesPerRefresh)) {
       break
     }
   }
