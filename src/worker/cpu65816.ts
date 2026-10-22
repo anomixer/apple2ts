@@ -133,8 +133,7 @@ export class CPU65816 implements ICPU {
     public D: number = 0; // Direct Page
     // Emulator-side dedup for the duplicate button events the ROM posts per
     // ADB dispatch (0 = never seen).
-    private lastMouseDownCycle: number = 0;
-    private lastMouseUpCycle: number = 0;
+    private lastPostEventCycle: number = 0;
     
     // Program Counter (16-bit) and Program Bank (8-bit)
     public PC: number = 0;
@@ -662,31 +661,32 @@ export class CPU65816 implements ICPU {
             case 0x22: // JSL
                 this.addrMode = ADDR_MODE_816.NONE
                 const jslTarget = this.addrAbsoluteLong();
-                // PostEvent (tool $1406) posts a mouseDown twice per ADB press
-                // dispatch (the ROM's loop at FE:C64B runs twice). The two posts
-                // are a few instructions apart, so drop the duplicate that
-                // arrives within the same dispatch. This prevents a single
-                // physical click from being read as a double-click by GS/OS.
-                if (jslTarget === 0xE10000 && this.X === 0x1406) {
-                    const sp = this.S & 0xFFFF
-                    // The event code is the first pushed word. The JSL's 3-byte
-                    // return address (PB + PC) leaves the stack at an odd offset,
-                    // so the param word sits at sp+5/sp+6.
-                    const what = this.readMemory((sp + 5) & 0xFFFF) |
-                        (this.readMemory((sp + 6) & 0xFFFF) << 8)
-                    if (what === 1 || what === 2) { // mouseDown / mouseUp
-                        const now = s6502.cycleCount
-                        const last = what === 1 ? this.lastMouseDownCycle : this.lastMouseUpCycle
-                        if (last > 0 && now - last < 2000) {
-                            // Duplicate: the ROM posts each button event twice
-                            // per ADB dispatch. Skip the second post; the caller
-                            // cleans its params up after the (skipped) JSL.
-                            this.cycles = 4
-                            break
-                        }
-                        if (what === 1) this.lastMouseDownCycle = now
-                        else this.lastMouseUpCycle = now
+                if (jslTarget === 0xE10000 && this.X === 0x2006) {
+                    // The IIgs ROM's mouse-button dispatch (FE:C5C8) reaches the
+                    // Toolbox through the inter-vector table at $E1:1000 and
+                    // posts each button event TWICE (the ROM's post loop at
+                    // FE:C64B runs twice because the Toolbox's PostEvent answers
+                    // 0 = success both times instead of rejecting the duplicate).
+                    // GS/OS then sees two mouseDown events and reads one
+                    // physical click as a double click.
+                    //
+                    // Drop the duplicate post that arrives within the same
+                    // dispatch. Two details matter:
+                    //  - the Toolbox's return value must be non-zero, otherwise
+                    //    the ROM's "JSL PostEvent / BEQ loop" spins forever
+                    //    (that is the "beep + BRK" the user saw: the guest ran
+                    //    out of stack and trapped).
+                    //  - the stack must NOT be inspected to identify the event
+                    //    code: reading through memGet24 can land on a $C0xx
+                    //    soft switch and toggle it, which corrupts the guest.
+                    //    The duplicate is identified by its timing alone.
+                    const now = s6502.cycleCount;
+                    if (this.lastPostEventCycle > 0 && now - this.lastPostEventCycle < 2000) {
+                        this.A = 0x0001;   // Toolbox: "duplicate rejected"
+                        this.cycles = 4;
+                        break;
                     }
+                    this.lastPostEventCycle = now;
                 }
                 this.push8Wide(this.PB);
                 this.push16Wide((this.PC - 1) & 0xFFFF); // PC is already incremented by 3 for abs long

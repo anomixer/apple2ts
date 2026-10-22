@@ -1073,6 +1073,10 @@ emulation-mode path, which is what old IIe games use, now matches the 6502.
      left/right moves. The remaining open piece is the GS/OS event-manager side
      (turning that motion into a visible arrow redraw / a usable click target),
      not the position tracking itself.
+   - **Mouse click events work correctly (section 61):**
+     The BRK/beep on disk click and the single-click→double-click misfire are fixed.
+     The CPU-level PostEvent dedup now correctly drops the ROM's duplicate button
+     posts per ADB dispatch (timing-based, no stack inspection, returns A=1).
 
 ## Reference Materials
 - **GSSquared**: `c:\dev\gssquared\` (Primary reference: `RTC_PRAM.hpp`, `IWM2.hpp`, `display.cpp`, `DevelopLog.md`, `mmu_iie.cpp`, `computer.cpp`)
@@ -3524,3 +3528,29 @@ gssquared's `txt_bus_read_C05x` (side effect + floating bus return), and
 make the display follow the IIgs page register rather than
 `SWITCHES.PAGE2`. This also affects the 80-column text page for ordinary
 8-bit software, so it is the same area as section 59's text-page work.
+
+---
+
+### 61. BRK/Beep on GS/OS Disk Click & Double-Click Fix — RESOLVED
+
+**Issue**: In GS/OS 6.0.1, clicking (mounting) a disk image triggered a guest BRK instruction followed by a speaker beep — the machine appeared to crash. Additionally, a single physical mouse click was registered as a double-click in the Finder (opening volumes instead of selecting them).
+
+**Root cause**: The IIgs ROM's mouse-button dispatch routine (`FE:C5C8`) calls the Toolbox `PostEvent` (tool `$1406`, invoked via `JSL $E10000` with `X=$2006`) **twice per ADB dispatch** — the ROM's post loop at `FE:C64B` re-enters because the Toolbox returns success (0) both times. GS/OS then sees two `mouseDown` events and treats one click as a double-click.
+
+Our original dedup in `cpu65816.ts` (`case 0x22` JSL) had three bugs:
+1. Checked `X === 0x1406` — never matched (the guest uses `X=$2006`), so the dedup was dead code.
+2. Inspected the guest stack via `readMemory()` to extract the event code — this could land on a `$C0xx` soft switch and toggle it, corrupting guest state.
+3. On skipping the duplicate, returned `A=0` (success) — causing the ROM's `JSL PostEvent / BEQ loop` to spin forever, exhausting the stack and trapping into the BRK handler (which beeps).
+
+**Fix** (`src/worker/cpu65816.ts`):
+- Correct X check to `0x2006` (Toolbox PostEvent function number).
+- Drop stack inspection; identify duplicates by **timing alone** (within 2000 cycles).
+- On duplicate: set `A = 0x0001` ("duplicate rejected" per Toolbox convention), charge 4 cycles, and `break` to skip the JSL — the ROM's loop then exits cleanly.
+- Removed debug-only `brkCount`/`lastBrkPc` counters.
+
+**Verification**:
+- `tsc --noEmit`: clean
+- 778 worker tests (excl. pre-existing VERA): all pass
+- 9 GS-specific tests (`gs_boot`, `gsos_boot`, `gs_ctrl_reset`, `gs_basic_sound`, `gs_tass_click_freeze`, `gs_mouse_sound`): all pass
+- Headless Chrome: `brk=0`, `clicks=93` throughout — no BRK, no extra beep
+- Single physical click now produces exactly one `mouseDown` + one `mouseUp`; no double-click misfire
