@@ -377,7 +377,15 @@ export const handleInputParams = (paramString = "") => {
 
   const bootParam = params.get("boot")
   if (bootParam === "true" || bootParam === "1") {
-    passSetRunMode(RUN_MODE.NEED_BOOT)
+    // Defer the boot if a fragment disk will be mounted by handleFragment(),
+    // so the cold boot runs AFTER the disk image has landed (otherwise the
+    // ROM scans an empty drive and the boot fails with "INSERT SYSTEM DISK").
+    const hasFragment = typeof window !== "undefined" && window.location && window.location.hash && window.location.hash.length >= 2
+    if (!hasFragment) {
+      passSetRunMode(RUN_MODE.NEED_BOOT)
+    } else {
+      (window as any).__pendingBootAfterDisk = true
+    }
   }
 
   return hasBasicProgram
@@ -399,6 +407,13 @@ const isOneDriveAuthRedirect = () => {
   const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""))
   const has = (key: string) => params.has(key) || hashParams.has(key)
   return has("oauth") || ((has("access_token") || has("error")) && has("state"))
+}
+
+const triggerPendingBoot = () => {
+  if ((window as any).__pendingBootAfterDisk) {
+    (window as any).__pendingBootAfterDisk = false
+    setTimeout(() => passSetRunMode(RUN_MODE.NEED_BOOT), 100)
+  }
 }
 
 export const handleFragment = async (updateDisplay: UpdateDisplay, hasBasicProgram: boolean) => {
@@ -443,21 +458,27 @@ export const handleFragment = async (updateDisplay: UpdateDisplay, hasBasicProgr
       // simply never looked for. Without it the disk goes to drive 0.
       const driveParam = params.get("drive")
       if (driveParam === null) {
-        handleSetDiskFromURL(url, updateDisplay)
+        handleSetDiskFromURL(url, updateDisplay).finally(() => triggerPendingBoot())
       } else {
         const driveIndex = Number(driveParam)
         if (!Number.isInteger(driveIndex) || driveIndex < 0 || driveIndex > 5) {
           console.error(`Ignoring invalid ?drive=${driveParam} (expected 0-5)`)
-          handleSetDiskFromURL(url, updateDisplay)
+          handleSetDiskFromURL(url, updateDisplay).finally(() => triggerPendingBoot())
         } else {
-          handleSetDiskFromURL(url, updateDisplay, driveIndex)
+          handleSetDiskFromURL(url, updateDisplay, driveIndex).finally(() => triggerPendingBoot())
         }
       }
     }
   } else if (hasBasicProgram) {
     // If we had a BASIC program in the URL, and we didn't have a floppy,
     // then boot our default blank ProDOS disk.
-    handleSetDiskFromURL("blank.woz", updateDisplay)
+    handleSetDiskFromURL("blank.woz", updateDisplay).finally(() => triggerPendingBoot())
+  }
+  // Trigger a deferred boot (requested via ?boot=true together with a
+  // fragment disk) now that the disk image has landed.
+  if ((window as any).__pendingBootAfterDisk) {
+    (window as any).__pendingBootAfterDisk = false
+    setTimeout(() => passSetRunMode(RUN_MODE.NEED_BOOT), 100)
   }
 }
 

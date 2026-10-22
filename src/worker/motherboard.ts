@@ -486,17 +486,25 @@ export const disableVidHD = () => {
   vidhd.reset()
 }
 
+const iigsHasHardDriveMedia = () => {
+  return getHardDriveState(1).filename !== "" || getHardDriveState(2).filename !== ""
+}
+
 // True when the Apple IIgs has a disk image in either of its built-in floppy
 // bays: slot 6 (5.25", drive-state indices 2/3) or slot 5 (3.5", indices 4/5).
 // Tests for actual media the same way the IWM data path does
 // (iigsFloppyHasMedia), so the two can never disagree about whether a drive is
-// loaded.
+// loaded. Also covers the Slot 7 SmartPort hard drives, so that mounting a
+// hard-disk image and pressing Ctrl-Reset re-runs the full device scan
+// (matching section 26a's floppy fix).
 const iigsHasFloppyMedia = () => {
   for (const index of [2, 3, 4, 5]) {
     if (iigsFloppyHasMedia(index)) return true
   }
   return false
 }
+
+const iigsHasAnyDiskMedia = () => iigsHasFloppyMedia() || iigsHasHardDriveMedia()
 
 const resetMachine = () => {
   softCard.reset()
@@ -574,7 +582,7 @@ export const doReset = () => {
     // built-in 5.25" (slot 6) or 3.5" (slot 5) bays, so the ROM re-runs the full
     // device scan. With no floppy the warm path is kept, which is what makes
     // Ctrl-Reset land on the Applesoft prompt (gs_ctrl_reset.test.ts).
-    if (iigsHasFloppyMedia()) {
+    if (iigsHasAnyDiskMedia()) {
       memSet24(0x000000 + 0x03f2, 0x00)
       memSet24(0x000000 + 0x03f3, 0x00)
       memSet24(0x000000 + 0x03f4, 0x00)
