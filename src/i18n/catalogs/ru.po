@@ -160,8 +160,8 @@ msgid "Machine Configuration"
 msgstr ""
 
 msgctxt "machine.slotConfigurator"
-msgid "Slot Configuration"
-msgstr "Конфигурация слотов"
+msgid "Expansion Slots"
+msgstr "Слоты расширения"
 
 msgctxt "machine.models.apple2p"
 msgid "Apple II+"
@@ -1222,7 +1222,7 @@ msgstr "Скачать диск"
 
 msgctxt "disk.downloadWoz"
 msgid "Download WOZ Disk Image"
-msgstr ""
+msgstr "Скачать образ диска WOZ"
 
 #, fuzzy
 msgctxt "disk.downloadAndEjectDisk"
@@ -1233,6 +1233,10 @@ msgstr "Скачать и извлечь диск"
 msgctxt "disk.ejectDisk"
 msgid "Eject Disk"
 msgstr "Извлечь диск"
+
+msgctxt "disk.ejectAllDisks"
+msgid "Eject All Disks"
+msgstr "Извлечь все диски"
 
 #, fuzzy
 msgctxt "disk.saveDiskToOneDrive"
@@ -1249,6 +1253,10 @@ msgstr "Сохранить диск на Google Drive"
 msgctxt "disk.loadDisk"
 msgid "Load Disk..."
 msgstr "Загрузить диск"
+
+msgctxt "disk.loadAdditionalDisks"
+msgid "Load Additional Disk(s)..."
+msgstr "Загрузить дополнительный диск..."
 
 msgctxt "disk.loadDiskFrom"
 msgid "Load Disk from"
@@ -1310,7 +1318,7 @@ msgstr "Загрузить диск из Google Drive"
 
 msgctxt "disk.insertBlankDisk"
 msgid "Insert Blank Disk"
-msgstr ""
+msgstr "Вставить чистый диск"
 
 #, fuzzy
 msgctxt "disk.syncEveryMinute"
@@ -1367,8 +1375,8 @@ msgstr ""
 
 #, fuzzy
 msgctxt "disk.clickToLoadDiskImage"
-msgid "Click to load disk image"
-msgstr "Нажмите, чтобы загрузить образ диска"
+msgid "Click to load disk image(s)"
+msgstr "Нажмите, чтобы загрузить образ(ы) диска"
 
 msgctxt "disk.downloadingDisk"
 msgid "Downloading disk"
@@ -1428,6 +1436,20 @@ msgctxt "help.diskImages"
 msgid "Disk images:"
 msgstr "Образы дисков:"
 
+msgctxt "help.diskContainers"
+msgid "Compressed archives:"
+msgstr "Сжатые архивы:"
+
+msgctxt "help.multiDiskNotice"
+msgid ""
+"Multi-disk swapping: Click a drive's multi-disk badge to open the quick-swap "
+"menu. Loading multi-disk archives (.zip, .7z, .gz) automatically mounts all "
+"disks into the swapper list."
+msgstr ""
+"Смена нескольких дисков: Нажмите на значок нескольких дисков, чтобы открыть "
+"меню быстрой смены. Архивы с несколькими дисками (.zip, .7z, .gz) "
+"автоматически загружаются в список смены."
+
 #, fuzzy
 msgctxt "help.urlParameters"
 msgid "Optional URL Parameters"
@@ -1484,7 +1506,7 @@ msgid "The open apple and closed apple keys behave the same as the ctrl key."
 msgstr "Клавиши open apple и closed apple ведут себя так же, как клавиша ctrl."
 
 msgctxt "help.controlPanelShortcut"
-msgid "SHIFT-ESC: display the Apple2TS control panel"
+msgid "<Shift>+<Esc>: display the Apple2TS control panel"
 msgstr ""
 
 #, fuzzy
@@ -1533,10 +1555,9 @@ msgctxt "help.exampleLinks.totalReplayChoplifter"
 msgid "Total Replay, load Choplifter, embedded mode"
 msgstr "Total Replay, загрузить Choplifter, встроенный режим"
 
-#, fuzzy
 msgctxt "help.exampleLinks.a2Desktop"
-msgid "A2Desktop 2MG with fast speed and white color"
-msgstr "A2DeskTop 2MG с быстрой скоростью и белым цветом"
+msgid "A2Desktop 2MG with fast speed and color"
+msgstr "A2DeskTop 2MG с быстрой скоростью и цветом"
 
 #, fuzzy
 msgctxt "help.exampleLinks.embeddedBasic"
@@ -1695,6 +1716,10 @@ msgstr ""
 msgctxt "keyboard.return"
 msgid "Return"
 msgstr "Ввод"
+
+msgctxt "keyboard.enableGamePatches"
+msgid "Enable Game Patches"
+msgstr ""
 
 #, fuzzy
 msgctxt "audio.speaker"
@@ -2368,6 +2393,10 @@ msgstr ""
 msgctxt "linkBuilder.sound"
 msgid "Sound"
 msgstr ""
+
+msgctxt "linkBuilder.startupOptionsTab"
+msgid "Startup Options"
+msgstr "Параметры запуска"
 
 msgctxt "linkBuilder.onStartup"
 msgid "On startup:"
@@ -3362,11 +3391,11 @@ msgid "Auxiliary RAM"
 msgstr ""
 
 msgctxt "debug.memoryDump.range.hgr1"
-msgid "HGR page 1 (screen order)"
+msgid "HGR page 1"
 msgstr ""
 
 msgctxt "debug.memoryDump.range.hgr2"
-msgid "HGR page 2 (screen order)"
+msgid "HGR page 2"
 msgstr ""
 
 msgctxt "debug.disassemblyPreviousLocation"
@@ -3604,3 +3633,51 @@ msgstr ""
 msgctxt "debug.breakpoint.mode.indirect"
 msgid "Indirect"
 msgstr ""
+
+msgctxt "disk.standbyDisks"
+msgid "Standby Disks (Click to change disk)"
+msgstr "Ожидающие диски (Нажмите, чтобы сменить диск)"
+
+msgctxt "linkBuilder.additionalDiskDrives"
+msgid "Additional Disk Drives"
+msgstr "Дополнительные дисководы"
+
+msgctxt "linkBuilder.slot6Drive1"
+msgid "Slot 6 Drive 1 (Floppy 1)"
+msgstr "Слот 6 Дисковод 1 (Флоппи 1)"
+
+msgctxt "linkBuilder.slot6Drive2"
+msgid "Slot 6 Drive 2 (Floppy 2)"
+msgstr "Слот 6 Дисковод 2 (Флоппи 2)"
+
+msgctxt "linkBuilder.slot7Drive1"
+msgid "Slot 7 Drive 1 (Hard Drive 1)"
+msgstr "Слот 7 Дисковод 1 (Жесткий диск 1)"
+
+msgctxt "linkBuilder.slot7Drive2"
+msgid "Slot 7 Drive 2 (Hard Drive 2)"
+msgstr "Слот 7 Дисковод 2 (Жесткий диск 2)"
+
+msgctxt "linkBuilder.slot2Drive1"
+msgid "Slot 2 Drive 1 (VERA SD)"
+msgstr "Слот 2 Дисковод 1 (VERA SD)"
+
+msgctxt "linkBuilder.slot4Drive1"
+msgid "Slot 4 Drive 1 (VERA SD)"
+msgstr "Слот 4 Дисковод 1 (VERA SD)"
+
+msgctxt "linkBuilder.addAdditionalDisk"
+msgid "Add additional disk for swapping"
+msgstr "Добавить дополнительный диск для смены"
+
+msgctxt "linkBuilder.removeDisk"
+msgid "Remove this disk"
+msgstr "Удалить этот диск"
+
+msgctxt "linkBuilder.addAnotherDisk"
+msgid "Add another disk"
+msgstr "Добавить еще один диск"
+
+msgctxt "linkBuilder.diskPlaceholder"
+msgid "Disk {num} filename (e.g. sideB.woz|Scenario Disk)"
+msgstr "Имя файла диска {num} (например, sideB.woz|Диск со сценарием)"

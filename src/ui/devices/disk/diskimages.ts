@@ -1,5 +1,17 @@
 export const diskImages: DiskCollectionItem[] = [
   {
+    title: "Autoduel",
+    diskUrl: {
+      s6d1: "https://archive.org/download/wozaday_Autoduel/Autoduel%20%28woz-a-day%20collection%29.zip/Autoduel%20%28woz-a-day%20collection%29%2FAutoduel%20side%20A.woz",
+      s6d2: "https://archive.org/download/wozaday_Autoduel/Autoduel%20%28woz-a-day%20collection%29.zip/Autoduel%20%28woz-a-day%20collection%29%2FAutoduel%20side%20B.woz",
+    },
+    imageUrl: "disks/autoduel.png",
+    detailsUrl: "https://www.mobygames.com/game/1296/autoduel",
+    type: "builtin",
+    lastUpdated: new Date(0),
+    fileSize: 246574,
+  },
+  {
     title: "Aztec",
     diskUrl: "Aztec.woz",
     imageUrl: "disks/Aztec.png",
@@ -131,6 +143,20 @@ export const diskImages: DiskCollectionItem[] = [
     lastUpdated: new Date(0),
     fileSize: 819264,
     params: "color=nofringe",
+  },
+  {
+    title: "Ultima III",
+    disks: {
+      s6d1: [
+        "https://archive.org/download/wozaday_Ultima_III_Exodus/Ultima%20III%20%28woz-a-day%20collection%29.zip/Ultima%20III%20%28woz-a-day%20collection%29%2FUltima%20III%20side%20A.woz|Program Disk",
+        "Ultima III side B.woz|Scenario Disk",
+      ],
+    },
+    imageUrl: "disks/Ultima III.png",
+    detailsUrl: "https://wiki.ultimacodex.com/wiki/Ultima_III:_Exodus",
+    type: "builtin",
+    lastUpdated: new Date(0),
+    fileSize: 236402,
   },
   {
     title: "Ultima IV",

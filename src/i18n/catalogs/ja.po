@@ -159,8 +159,8 @@ msgid "Machine Configuration"
 msgstr ""
 
 msgctxt "machine.slotConfigurator"
-msgid "Slot Configuration"
-msgstr "スロット設定"
+msgid "Expansion Slots"
+msgstr "拡張スロット"
 
 msgctxt "machine.models.apple2p"
 msgid "Apple II+"
@@ -1210,7 +1210,7 @@ msgstr "ディスクをダウンロード"
 
 msgctxt "disk.downloadWoz"
 msgid "Download WOZ Disk Image"
-msgstr ""
+msgstr "WOZ ディスクイメージをダウンロード"
 
 #, fuzzy
 msgctxt "disk.downloadAndEjectDisk"
@@ -1221,6 +1221,10 @@ msgstr "ディスクをダウンロードして排出"
 msgctxt "disk.ejectDisk"
 msgid "Eject Disk"
 msgstr "ディスクを排出"
+
+msgctxt "disk.ejectAllDisks"
+msgid "Eject All Disks"
+msgstr "すべてのディスクを排出"
 
 #, fuzzy
 msgctxt "disk.saveDiskToOneDrive"
@@ -1237,6 +1241,10 @@ msgstr "Google Driveにディスクを保存"
 msgctxt "disk.loadDisk"
 msgid "Load Disk..."
 msgstr "ディスクを読み込む"
+
+msgctxt "disk.loadAdditionalDisks"
+msgid "Load Additional Disk(s)..."
+msgstr "追加ディスクを読み込む..."
 
 msgctxt "disk.loadDiskFrom"
 msgid "Load Disk from"
@@ -1298,7 +1306,7 @@ msgstr "Google Driveからディスクを読み込み"
 
 msgctxt "disk.insertBlankDisk"
 msgid "Insert Blank Disk"
-msgstr ""
+msgstr "ブランクディスクを挿入"
 
 #, fuzzy
 msgctxt "disk.syncEveryMinute"
@@ -1355,7 +1363,7 @@ msgstr ""
 
 #, fuzzy
 msgctxt "disk.clickToLoadDiskImage"
-msgid "Click to load disk image"
+msgid "Click to load disk image(s)"
 msgstr "クリックしてディスクイメージを読み込む"
 
 msgctxt "disk.downloadingDisk"
@@ -1416,6 +1424,20 @@ msgctxt "help.diskImages"
 msgid "Disk images:"
 msgstr "ディスクイメージ:"
 
+msgctxt "help.diskContainers"
+msgid "Compressed archives:"
+msgstr "圧縮アーカイブ："
+
+msgctxt "help.multiDiskNotice"
+msgid ""
+"Multi-disk swapping: Click a drive's multi-disk badge to open the quick-swap "
+"menu. Loading multi-disk archives (.zip, .7z, .gz) automatically mounts all "
+"disks into the swapper list."
+msgstr ""
+"複数ディスク入替：ドライブのマルチディスクバッジをクリックしてクイック入替メ"
+"ニューを開きます。複数ディスクを含むアーカイブ（.zip、.7z、.gz）は自動的に入"
+"替リストへ読み込まれます。"
+
 #, fuzzy
 msgctxt "help.urlParameters"
 msgid "Optional URL Parameters"
@@ -1471,7 +1493,7 @@ msgid "The open apple and closed apple keys behave the same as the ctrl key."
 msgstr "open appleおよびclosed appleキーはctrlキーと同じように動作します。"
 
 msgctxt "help.controlPanelShortcut"
-msgid "SHIFT-ESC: display the Apple2TS control panel"
+msgid "<Shift>+<Esc>: display the Apple2TS control panel"
 msgstr ""
 
 #, fuzzy
@@ -1519,10 +1541,9 @@ msgctxt "help.exampleLinks.totalReplayChoplifter"
 msgid "Total Replay, load Choplifter, embedded mode"
 msgstr "Total Replay、Choplifterをロード、埋め込みモード"
 
-#, fuzzy
 msgctxt "help.exampleLinks.a2Desktop"
-msgid "A2Desktop 2MG with fast speed and white color"
-msgstr "高速・白黒表示のA2DeskTop 2MG"
+msgid "A2Desktop 2MG with fast speed and color"
+msgstr "高速・カラー表示のA2DeskTop 2MG"
 
 #, fuzzy
 msgctxt "help.exampleLinks.embeddedBasic"
@@ -1678,6 +1699,10 @@ msgstr ""
 
 msgctxt "keyboard.return"
 msgid "Return"
+msgstr ""
+
+msgctxt "keyboard.enableGamePatches"
+msgid "Enable Game Patches"
 msgstr ""
 
 #, fuzzy
@@ -2352,6 +2377,10 @@ msgstr ""
 msgctxt "linkBuilder.sound"
 msgid "Sound"
 msgstr ""
+
+msgctxt "linkBuilder.startupOptionsTab"
+msgid "Startup Options"
+msgstr "起動オプション"
 
 msgctxt "linkBuilder.onStartup"
 msgid "On startup:"
@@ -3344,11 +3373,11 @@ msgid "Auxiliary RAM"
 msgstr ""
 
 msgctxt "debug.memoryDump.range.hgr1"
-msgid "HGR page 1 (screen order)"
+msgid "HGR page 1"
 msgstr ""
 
 msgctxt "debug.memoryDump.range.hgr2"
-msgid "HGR page 2 (screen order)"
+msgid "HGR page 2"
 msgstr ""
 
 msgctxt "debug.disassemblyPreviousLocation"
@@ -3586,3 +3615,51 @@ msgstr ""
 msgctxt "debug.breakpoint.mode.indirect"
 msgid "Indirect"
 msgstr ""
+
+msgctxt "disk.standbyDisks"
+msgid "Standby Disks (Click to change disk)"
+msgstr "待機ディスク (クリックしてディスクを変更)"
+
+msgctxt "linkBuilder.additionalDiskDrives"
+msgid "Additional Disk Drives"
+msgstr "追加ディスクドライブ"
+
+msgctxt "linkBuilder.slot6Drive1"
+msgid "Slot 6 Drive 1 (Floppy 1)"
+msgstr "スロット 6 ドライブ 1 (フロッピー 1)"
+
+msgctxt "linkBuilder.slot6Drive2"
+msgid "Slot 6 Drive 2 (Floppy 2)"
+msgstr "スロット 6 ドライブ 2 (フロッピー 2)"
+
+msgctxt "linkBuilder.slot7Drive1"
+msgid "Slot 7 Drive 1 (Hard Drive 1)"
+msgstr "スロット 7 ドライブ 1 (ハードディスク 1)"
+
+msgctxt "linkBuilder.slot7Drive2"
+msgid "Slot 7 Drive 2 (Hard Drive 2)"
+msgstr "スロット 7 ドライブ 2 (ハードディスク 2)"
+
+msgctxt "linkBuilder.slot2Drive1"
+msgid "Slot 2 Drive 1 (VERA SD)"
+msgstr "スロット 2 ドライブ 1 (VERA SD)"
+
+msgctxt "linkBuilder.slot4Drive1"
+msgid "Slot 4 Drive 1 (VERA SD)"
+msgstr "スロット 4 ドライブ 1 (VERA SD)"
+
+msgctxt "linkBuilder.addAdditionalDisk"
+msgid "Add additional disk for swapping"
+msgstr "交換用の追加ディスクを追加"
+
+msgctxt "linkBuilder.removeDisk"
+msgid "Remove this disk"
+msgstr "このディスクを削除"
+
+msgctxt "linkBuilder.addAnotherDisk"
+msgid "Add another disk"
+msgstr "別のディスクを追加"
+
+msgctxt "linkBuilder.diskPlaceholder"
+msgid "Disk {num} filename (e.g. sideB.woz|Scenario Disk)"
+msgstr "ディスク {num} ファイル名 (例: sideB.woz|シナリオディスク)"

@@ -159,8 +159,8 @@ msgid "Machine Configuration"
 msgstr ""
 
 msgctxt "machine.slotConfigurator"
-msgid "Slot Configuration"
-msgstr "Configuração de Slots"
+msgid "Expansion Slots"
+msgstr "Slots de expansão"
 
 msgctxt "machine.models.apple2p"
 msgid "Apple II+"
@@ -1213,7 +1213,7 @@ msgstr "Baixar Disco"
 
 msgctxt "disk.downloadWoz"
 msgid "Download WOZ Disk Image"
-msgstr ""
+msgstr "Baixar imagem de disco WOZ"
 
 #, fuzzy
 msgctxt "disk.downloadAndEjectDisk"
@@ -1224,6 +1224,10 @@ msgstr "Baixar e Ejetar Disco"
 msgctxt "disk.ejectDisk"
 msgid "Eject Disk"
 msgstr "Ejetar Disco"
+
+msgctxt "disk.ejectAllDisks"
+msgid "Eject All Disks"
+msgstr "Ejetar todos os discos"
 
 #, fuzzy
 msgctxt "disk.saveDiskToOneDrive"
@@ -1240,6 +1244,10 @@ msgstr "Salvar Disco no Google Drive"
 msgctxt "disk.loadDisk"
 msgid "Load Disk..."
 msgstr "Carregar disco"
+
+msgctxt "disk.loadAdditionalDisks"
+msgid "Load Additional Disk(s)..."
+msgstr "Carregar disco adicional..."
 
 msgctxt "disk.loadDiskFrom"
 msgid "Load Disk from"
@@ -1301,7 +1309,7 @@ msgstr "Carregar Disco do Google Drive"
 
 msgctxt "disk.insertBlankDisk"
 msgid "Insert Blank Disk"
-msgstr ""
+msgstr "Inserir disco em branco"
 
 #, fuzzy
 msgctxt "disk.syncEveryMinute"
@@ -1358,8 +1366,8 @@ msgstr ""
 
 #, fuzzy
 msgctxt "disk.clickToLoadDiskImage"
-msgid "Click to load disk image"
-msgstr "Clique para carregar a imagem do disco"
+msgid "Click to load disk image(s)"
+msgstr "Clique para carregar a(s) imagem(ns) do disco"
 
 msgctxt "disk.downloadingDisk"
 msgid "Downloading disk"
@@ -1418,6 +1426,20 @@ msgstr ""
 msgctxt "help.diskImages"
 msgid "Disk images:"
 msgstr "Imagens de disco:"
+
+msgctxt "help.diskContainers"
+msgid "Compressed archives:"
+msgstr "Arquivos compactados:"
+
+msgctxt "help.multiDiskNotice"
+msgid ""
+"Multi-disk swapping: Click a drive's multi-disk badge to open the quick-swap "
+"menu. Loading multi-disk archives (.zip, .7z, .gz) automatically mounts all "
+"disks into the swapper list."
+msgstr ""
+"Troca de vários discos: Clique no selo de vários discos para abrir o menu de "
+"troca rápida. Arquivos com vários discos (.zip, .7z, .gz) são carregados "
+"automaticamente na lista de troca."
 
 #, fuzzy
 msgctxt "help.urlParameters"
@@ -1478,7 +1500,7 @@ msgstr ""
 "ctrl."
 
 msgctxt "help.controlPanelShortcut"
-msgid "SHIFT-ESC: display the Apple2TS control panel"
+msgid "<Shift>+<Esc>: display the Apple2TS control panel"
 msgstr ""
 
 #, fuzzy
@@ -1527,10 +1549,9 @@ msgctxt "help.exampleLinks.totalReplayChoplifter"
 msgid "Total Replay, load Choplifter, embedded mode"
 msgstr "Total Replay, carregar Choplifter, modo integrado"
 
-#, fuzzy
 msgctxt "help.exampleLinks.a2Desktop"
-msgid "A2Desktop 2MG with fast speed and white color"
-msgstr "A2DeskTop 2MG com velocidade rápida e cor branca"
+msgid "A2Desktop 2MG with fast speed and color"
+msgstr "A2DeskTop 2MG com velocidade rápida e cor"
 
 #, fuzzy
 msgctxt "help.exampleLinks.embeddedBasic"
@@ -1685,6 +1706,10 @@ msgstr ""
 
 msgctxt "keyboard.return"
 msgid "Return"
+msgstr ""
+
+msgctxt "keyboard.enableGamePatches"
+msgid "Enable Game Patches"
 msgstr ""
 
 #, fuzzy
@@ -2359,6 +2384,10 @@ msgstr ""
 msgctxt "linkBuilder.sound"
 msgid "Sound"
 msgstr ""
+
+msgctxt "linkBuilder.startupOptionsTab"
+msgid "Startup Options"
+msgstr "Opções de inicialização"
 
 msgctxt "linkBuilder.onStartup"
 msgid "On startup:"
@@ -3351,11 +3380,11 @@ msgid "Auxiliary RAM"
 msgstr ""
 
 msgctxt "debug.memoryDump.range.hgr1"
-msgid "HGR page 1 (screen order)"
+msgid "HGR page 1"
 msgstr ""
 
 msgctxt "debug.memoryDump.range.hgr2"
-msgid "HGR page 2 (screen order)"
+msgid "HGR page 2"
 msgstr ""
 
 msgctxt "debug.disassemblyPreviousLocation"
@@ -3593,3 +3622,51 @@ msgstr ""
 msgctxt "debug.breakpoint.mode.indirect"
 msgid "Indirect"
 msgstr ""
+
+msgctxt "disk.standbyDisks"
+msgid "Standby Disks (Click to change disk)"
+msgstr "Discos em espera (Clique para trocar de disco)"
+
+msgctxt "linkBuilder.additionalDiskDrives"
+msgid "Additional Disk Drives"
+msgstr "Unidades de disco adicionais"
+
+msgctxt "linkBuilder.slot6Drive1"
+msgid "Slot 6 Drive 1 (Floppy 1)"
+msgstr "Slot 6 Unidade 1 (Disquete 1)"
+
+msgctxt "linkBuilder.slot6Drive2"
+msgid "Slot 6 Drive 2 (Floppy 2)"
+msgstr "Slot 6 Unidade 2 (Disquete 2)"
+
+msgctxt "linkBuilder.slot7Drive1"
+msgid "Slot 7 Drive 1 (Hard Drive 1)"
+msgstr "Slot 7 Unidade 1 (Disco rígido 1)"
+
+msgctxt "linkBuilder.slot7Drive2"
+msgid "Slot 7 Drive 2 (Hard Drive 2)"
+msgstr "Slot 7 Unidade 2 (Disco rígido 2)"
+
+msgctxt "linkBuilder.slot2Drive1"
+msgid "Slot 2 Drive 1 (VERA SD)"
+msgstr "Slot 2 Unidade 1 (VERA SD)"
+
+msgctxt "linkBuilder.slot4Drive1"
+msgid "Slot 4 Drive 1 (VERA SD)"
+msgstr "Slot 4 Unidade 1 (VERA SD)"
+
+msgctxt "linkBuilder.addAdditionalDisk"
+msgid "Add additional disk for swapping"
+msgstr "Adicionar disco adicional para troca"
+
+msgctxt "linkBuilder.removeDisk"
+msgid "Remove this disk"
+msgstr "Remover este disco"
+
+msgctxt "linkBuilder.addAnotherDisk"
+msgid "Add another disk"
+msgstr "Adicionar outro disco"
+
+msgctxt "linkBuilder.diskPlaceholder"
+msgid "Disk {num} filename (e.g. sideB.woz|Scenario Disk)"
+msgstr "Nome do arquivo do disco {num} (ex.: sideB.woz|Disco de cenário)"

@@ -92,7 +92,7 @@ const Apple2Canvas = (props: DisplayProps) => {
     ArrowRight: () => passGoForwardInTime(),
     b: () => handleSetCPUState(RUN_MODE.NEED_BOOT),
     c: () => handleCopyToClipboard(),
-    o: () => props.setShowFileOpenDialog(true, 0),
+    o: () => props.setShowFileOpenDialog(true, -1),
     r: () => handleSetCPUState(RUN_MODE.NEED_RESET),
     s: () => handleFileSave(false),
     v: () => syntheticPaste(),

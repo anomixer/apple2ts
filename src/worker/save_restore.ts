@@ -1,5 +1,5 @@
 import { Buffer } from "buffer"
-import { MAX_SNAPSHOTS, RamWorksMemoryStart, ROMmemoryStart, RUN_MODE } from "../common/utility"
+import { MAX_SNAPSHOTS, RamWorksMemoryStart, ROMmemoryStart, RUN_MODE, SAVE_STATE_VERSION } from "../common/utility"
 import { getDriveSaveState, restoreDriveSaveState } from "./devices/drivestate"
 import { handleGameSetup } from "./games/game_mappings"
 import { s6502, getStackDump, setState6502, setStackDump } from "./instructions"
@@ -9,6 +9,7 @@ import { SWITCHES } from "./softswitches"
 import { vidhd } from "./devices/vidhd"
 import { passRequestThumbnail } from "./worker2main"
 import { getSlotCardSaveState, restoreSlotCardSaveState } from "./devices/slot_card_state"
+import { getJoystickSaveState, restoreJoystickSaveState } from "./devices/joystick"
 import { getMemoryView } from "./memory_view"
 
 let iTempState = 0
@@ -62,6 +63,7 @@ export const getApple2State = (): Apple2SaveState => {
     extraRamSize: 64 * (RamWorksMaxBank + 1),
     machineName: getMachineName(),
     cardStates: getSlotCardSaveState(),
+    joystick: getJoystickSaveState(),
     softSwitches: getSoftSwitches(),
     stackDump: getStackDump(),
     memvalid: memvalid.slice(0, maxGood + 1).join(""),
@@ -104,7 +106,8 @@ export const setApple2State = (
     SWITCHES.BSR_WRITE.isSet = softSwitches.WRITEBSR1 || softSwitches.WRITEBSR2 ||
       softSwitches.RDWRBSR1 || softSwitches.RDWRBSR2
   }
-  const newmemory = Buffer.from(newState.memory, "base64")
+  // Decode to a plain Uint8Array: Buffer.prototype.slice is deprecated.
+  const newmemory = new Uint8Array(Buffer.from(newState.memory, "base64"))
   if (version < 1) {
     // Main memory
     memory.set(newmemory.slice(0, 0x10000))
@@ -148,6 +151,7 @@ export const setApple2State = (
     setStackDump(newState.stackDump)
   }
   restoreSlotCardSaveState(newState.cardStates)
+  restoreJoystickSaveState(newState.joystick)
   updateAddressTables()
   // Force the help text to be reset if necessary.
   handleGameSetup(true)
@@ -176,10 +180,12 @@ export const doRestoreSaveState = (
   sState: EmulatorSaveState,
   eraseSnapshots = false,
   publishState = true,
-  version = sState.emulator?.version || 0.9,
+  version = sState.emulator?.version || (sState.state6502.memvalid ? SAVE_STATE_VERSION : 0.9),
 ) => {
   doReset()
-  // Versionless save files predate version 1 and use the legacy memory layout.
+  // A state without a version is either a save file from before version 1, which
+  // uses the legacy memory layout, or a time travel snapshot, which has no emulator
+  // field. Only the version 2 layout has memvalid, so the default tells them apart.
   setApple2State(sState.state6502, version, publishState)
   restoreDriveSaveState(sState.driveState)
   if (eraseSnapshots) {
@@ -207,7 +213,7 @@ export const restoreSessionSnapshot = (snapshotId: string): SessionSnapshotRecei
   }
   const snapshot = sessionSnapshot.state
   // Worker-local snapshots use v2 memory without the UI's version metadata.
-  doRestoreSaveState(snapshot, false, false, 2)
+  doRestoreSaveState(snapshot, false, false, SAVE_STATE_VERSION)
   return {snapshotId, cycleCount: snapshot.state6502.s6502.cycleCount}
 }
 

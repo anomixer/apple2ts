@@ -134,8 +134,8 @@ msgid "Machine Configuration"
 msgstr "Machine Rigging"
 
 msgctxt "machine.slotConfigurator"
-msgid "Slot Configuration"
-msgstr "Ship's Hold Configuration"
+msgid "Expansion Slots"
+msgstr "Cargo Holds"
 
 msgctxt "machine.models.apple2p"
 msgid "Apple II+"
@@ -1163,7 +1163,7 @@ msgstr "Plunder th' Disk"
 
 msgctxt "disk.downloadWoz"
 msgid "Download WOZ Disk Image"
-msgstr ""
+msgstr "Plunder WOZ Disk Image"
 
 msgctxt "disk.downloadAndEjectDisk"
 msgid "Download and Eject Disk"
@@ -1172,6 +1172,10 @@ msgstr "Plunder an' Eject Disk"
 msgctxt "disk.ejectDisk"
 msgid "Eject Disk"
 msgstr "Cast Out Disk"
+
+msgctxt "disk.ejectAllDisks"
+msgid "Eject All Disks"
+msgstr "Cast Out All Disks"
 
 msgctxt "disk.saveDiskToOneDrive"
 msgid "Save Disk to OneDrive"
@@ -1186,6 +1190,10 @@ msgstr "Stash Disk in Google Drive"
 msgctxt "disk.loadDisk"
 msgid "Load Disk..."
 msgstr "Load Disk Aboard"
+
+msgctxt "disk.loadAdditionalDisks"
+msgid "Load Additional Disk(s)..."
+msgstr "Load More Disks Aboard..."
 
 msgctxt "disk.loadDiskFrom"
 msgid "Load Disk from"
@@ -1241,7 +1249,7 @@ msgstr "Load from Google Drive"
 
 msgctxt "disk.insertBlankDisk"
 msgid "Insert Blank Disk"
-msgstr ""
+msgstr "Load Blank Disk Aboard"
 
 msgctxt "disk.syncEveryMinute"
 msgid "Sync Every Minute"
@@ -1288,8 +1296,8 @@ msgid "Click to show"
 msgstr ""
 
 msgctxt "disk.clickToLoadDiskImage"
-msgid "Click to load disk image"
-msgstr "Click to load disk aboard"
+msgid "Click to load disk image(s)"
+msgstr "Click to load disk(s) aboard"
 
 msgctxt "disk.downloadingDisk"
 msgid "Downloading disk"
@@ -1340,6 +1348,20 @@ msgstr ""
 msgctxt "help.diskImages"
 msgid "Disk images:"
 msgstr ""
+
+msgctxt "help.diskContainers"
+msgid "Compressed archives:"
+msgstr "Compressed booty chests:"
+
+msgctxt "help.multiDiskNotice"
+msgid ""
+"Multi-disk swapping: Click a drive's multi-disk badge to open the quick-swap "
+"menu. Loading multi-disk archives (.zip, .7z, .gz) automatically mounts all "
+"disks into the swapper list."
+msgstr ""
+"Multi-platter swappin': Click a drive's badge to open the quick-swap menu. "
+"Multi-disk booty chests (.zip, .7z, .gz) load all platters at once into yer "
+"stack."
 
 msgctxt "help.urlParameters"
 msgid "Optional URL Parameters"
@@ -1395,7 +1417,7 @@ msgstr ""
 "The open apple an' closed apple keys behave the same as the ctrl key, matey."
 
 msgctxt "help.controlPanelShortcut"
-msgid "SHIFT-ESC: display the Apple2TS control panel"
+msgid "<Shift>+<Esc>: display the Apple2TS control panel"
 msgstr ""
 
 #, fuzzy
@@ -1443,10 +1465,9 @@ msgctxt "help.exampleLinks.totalReplayChoplifter"
 msgid "Total Replay, load Choplifter, embedded mode"
 msgstr "Total Replay, load Choplifter, embedded mode"
 
-#, fuzzy
 msgctxt "help.exampleLinks.a2Desktop"
-msgid "A2Desktop 2MG with fast speed and white color"
-msgstr "A2Desktop 2MG wit' fast speed an' white color"
+msgid "A2Desktop 2MG with fast speed and color"
+msgstr "A2Desktop 2MG wit' fast speed an' color"
 
 #, fuzzy
 msgctxt "help.exampleLinks.embeddedBasic"
@@ -1584,6 +1605,10 @@ msgstr "Walk th' Plank"
 
 msgctxt "keyboard.return"
 msgid "Return"
+msgstr ""
+
+msgctxt "keyboard.enableGamePatches"
+msgid "Enable Game Patches"
 msgstr ""
 
 msgctxt "audio.speaker"
@@ -2180,6 +2205,10 @@ msgstr "Show debuggin' deck"
 msgctxt "linkBuilder.sound"
 msgid "Sound"
 msgstr "Squawkin'"
+
+msgctxt "linkBuilder.startupOptionsTab"
+msgid "Startup Options"
+msgstr "Startup Orders"
 
 msgctxt "linkBuilder.onStartup"
 msgid "On startup:"
@@ -3181,11 +3210,11 @@ msgid "Auxiliary RAM"
 msgstr ""
 
 msgctxt "debug.memoryDump.range.hgr1"
-msgid "HGR page 1 (screen order)"
+msgid "HGR page 1"
 msgstr ""
 
 msgctxt "debug.memoryDump.range.hgr2"
-msgid "HGR page 2 (screen order)"
+msgid "HGR page 2"
 msgstr ""
 
 msgctxt "debug.disassemblyPreviousLocation"
@@ -3423,3 +3452,51 @@ msgstr ""
 msgctxt "debug.breakpoint.mode.indirect"
 msgid "Indirect"
 msgstr ""
+
+msgctxt "disk.standbyDisks"
+msgid "Standby Disks (Click to change disk)"
+msgstr "Standby Platters (Click to swap yer plunder)"
+
+msgctxt "linkBuilder.additionalDiskDrives"
+msgid "Additional Disk Drives"
+msgstr "Extra Platter Drives"
+
+msgctxt "linkBuilder.slot6Drive1"
+msgid "Slot 6 Drive 1 (Floppy 1)"
+msgstr "Slot 6 Platter 1 (Floppy 1)"
+
+msgctxt "linkBuilder.slot6Drive2"
+msgid "Slot 6 Drive 2 (Floppy 2)"
+msgstr "Slot 6 Platter 2 (Floppy 2)"
+
+msgctxt "linkBuilder.slot7Drive1"
+msgid "Slot 7 Drive 1 (Hard Drive 1)"
+msgstr "Slot 7 Platter 1 (Hard Platter 1)"
+
+msgctxt "linkBuilder.slot7Drive2"
+msgid "Slot 7 Drive 2 (Hard Drive 2)"
+msgstr "Slot 7 Platter 2 (Hard Platter 2)"
+
+msgctxt "linkBuilder.slot2Drive1"
+msgid "Slot 2 Drive 1 (VERA SD)"
+msgstr "Slot 2 Platter 1 (VERA SD)"
+
+msgctxt "linkBuilder.slot4Drive1"
+msgid "Slot 4 Drive 1 (VERA SD)"
+msgstr "Slot 4 Platter 1 (VERA SD)"
+
+msgctxt "linkBuilder.addAdditionalDisk"
+msgid "Add additional disk for swapping"
+msgstr "Add extra platter for swappin'"
+
+msgctxt "linkBuilder.removeDisk"
+msgid "Remove this disk"
+msgstr "Cast away this platter"
+
+msgctxt "linkBuilder.addAnotherDisk"
+msgid "Add another disk"
+msgstr "Add another platter"
+
+msgctxt "linkBuilder.diskPlaceholder"
+msgid "Disk {num} filename (e.g. sideB.woz|Scenario Disk)"
+msgstr "Platter {num} parchment name (e.g. sideB.woz|Scenario Platter)"

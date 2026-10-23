@@ -1,13 +1,17 @@
 import { KeyboardEvent } from "react"
+import { convertwoz2dsk } from "./convertwoz2dsk"
+
+// Be sure to update this version whenever the save state format changes.
+export const SAVE_STATE_VERSION = 2.0
 
 export const TEST_DEBUG = false
 export const TEST_GRAPHICS = false
 export const MAX_SNAPSHOTS = 30
 const FILE_OPEN_SUFFIXES = ".a2ts,.bin,.a,.bas"
-const FLOPPY_DISK_SUFFIXES = ".dsk,.woz,.do"
-const HARD_DRIVE_SUFFIXES = ".2mg,.hdv,.po,.2meg"
+const FLOPPY_DISK_SUFFIXES = ".dsk,.woz,.do,.nib"
+const HARD_DRIVE_SUFFIXES = ".2mg,.hdv,.po,.2meg,.img"
 export const FILE_SUFFIXES_DISK = `${FLOPPY_DISK_SUFFIXES},${HARD_DRIVE_SUFFIXES}`
-export const FILE_SUFFIXES_ALL = `${FILE_OPEN_SUFFIXES},${FILE_SUFFIXES_DISK}`
+export const FILE_SUFFIXES_ALL = `${FILE_OPEN_SUFFIXES},${FILE_SUFFIXES_DISK},.zip,.gz,.7z,.tar`
 export const MAX_DRIVES = 6
 // export const DISK_CONVERSION_SUFFIXES = new Map<string, string>([[".dsk", ".woz"]])
 
@@ -81,12 +85,12 @@ export enum MSG_MAIN {
   DEBUG,
   DRIVE_NEW_DATA,
   DRIVE_PROPS,
+  ENABLE_GAME_PATCHES,
   EXECUTE_BASIC_COMMAND,
   GAMEPAD,
   GET_MEMORY_REQUEST,
   GET_SAVE_STATE,
   GET_SAVE_STATE_SNAPSHOTS,
-  HEATMAP_STATE,
   KEYBOARD_STATE,
   KEY_SEQUENCE,
   KEYPRESS,
@@ -230,16 +234,6 @@ export enum MEMORY_DUMP_STATE {
   HGR1,
   HGR2,
   NONE,
-}
-
-export enum HEATMAP_STATE {
-  CPU,
-  GETMEM,
-  SETMEM,
-  GETSET,   // Not currently used
-  // Heat Map tab is not the visible tab: producers stop sending heatmap
-  // data and the panel skips its redraw work entirely.
-  NONE
 }
 
 export const colorToName = (mode: COLOR_MODE) => {
@@ -460,6 +454,38 @@ export const crc32 = (data: Uint8Array, offset = 0) => {
   return (crc ^ (-1)) >>> 0
 }
 
+export const isWozData = (data?: Uint8Array | null): boolean => {
+  return Boolean(data && data.length >= 4 && data[0] === 0x57 && data[1] === 0x4F && data[2] === 0x5A)
+}
+
+export const updateWozCrc = (diskData?: Uint8Array | null): Uint8Array | undefined => {
+  if (diskData && isWozData(diskData) && diskData.length >= 12) {
+    const crc = crc32(diskData, 12)
+    diskData.set(uint32toBytes(crc), 8)
+  }
+  return diskData ?? undefined
+}
+
+export const getBlobFromDiskData = (diskData: Uint8Array, filename: string): Blob => {
+  if (filename.toLowerCase().endsWith(".woz") || isWozData(diskData)) {
+    updateWozCrc(diskData)
+  }
+  return new Blob([diskData] as BlobPart[], { type: "application/octet-stream" })
+}
+
+export const getDiskBlobForSync = (diskData: Uint8Array, filename: string, isHardDrive = false): Blob => {
+  const fileExt = filename.substring(filename.lastIndexOf(".")).toLowerCase()
+  const isFloppy = !isHardDrive && [".dsk", ".do", ".po"].includes(fileExt)
+  let targetData = diskData
+  if (isFloppy) {
+    const converted = convertwoz2dsk(diskData, fileExt === ".po")
+    if (converted.length > 0) {
+      targetData = converted
+    }
+  }
+  return getBlobFromDiskData(targetData, filename)
+}
+
 export const lockedKeyStyle = (mode: number) => {
   return `push-button key-button ${(["", "button-active", "button-locked"])[mode]}`
 }
@@ -570,7 +596,7 @@ export const getSymbolTables = (machineName: string) => {
 
   if (machineSymbolTable.size === 0 && !fetchingTable) {
     fetchingTable = true
-    const url = "/symbol_tables/" + machineName.toLowerCase() + ".sym"
+    const url = "./symbol_tables/" + machineName.toLowerCase() + ".sym"
     fetchAndProcessSymbolFile(url).then(symbolMap => {
       machineSymbolTable = symbolMap
       fetchingTable = false
@@ -584,13 +610,20 @@ export const getSymbolTables = (machineName: string) => {
 
 export const isHardDriveImage = (filename: string, fileSize: number) => {
   const f = filename.toLowerCase()
+  if (/\.(?:woz|dsk|do)(?:$|[^a-z0-9])/.test(f)) {
+    return false
+  }
   if (/\.(?:hdv|2mg|2meg)(?:$|[^a-z0-9])/.test(f)) {
     return true
   }
-  if (/\.po(?:$|[^a-z0-9])/.test(f)) {
+  if (/\.(?:po|img)(?:$|[^a-z0-9])/.test(f)) {
     // 5.25" ProDOS floppy disk is 140KB (143360 bytes).
+    // Converted WOZ2 floppy images from 140KB disks are ~234KB - 236KB (35-40 tracks).
     // Anything larger (e.g. 800KB 3.5" disk, 2MB, 16MB, 32MB hard drive images)
     // is treated as a Slot 7 SmartPort hard drive image.
+    if (fileSize >= 230000 && fileSize <= 275000) {
+      return false
+    }
     return fileSize > 143360
   }
   return false
@@ -637,4 +670,85 @@ export const playAudio = (audioDevice: AudioDevice, timeout: number) => {
 //      console.log(error)
     })
   }
+}
+
+export const getCleanDiskFilename = (rawName: string): string => {
+  if (!rawName) return ""
+  let decoded = rawName
+  try {
+    decoded = decodeURIComponent(rawName)
+  } catch {
+    // keep raw
+  }
+  decoded = decoded.replace(/%2f/gi, "/")
+  const segments = decoded.split(/[\\/]/)
+  return segments.pop()?.trim() || rawName.trim()
+}
+
+export const separateUrlAndComment = (entry: string): { url: string; comment?: string } => {
+  const pipeIndex = entry.indexOf("|")
+  if (pipeIndex >= 0) {
+    const comment = entry.substring(pipeIndex + 1).trim()
+    return {
+      url: entry.substring(0, pipeIndex).trim(),
+      comment: comment.length > 0 ? comment : undefined,
+    }
+  }
+  return { url: entry.trim() }
+}
+
+export const getPrimaryDiskUrl = (item?: Partial<DiskCollectionItem> | null): string => {
+  if (!item) return ""
+  const source = item.disks || item.diskUrl
+  if (!source) return ""
+  let candidate = ""
+  if (typeof source === "string") {
+    candidate = source
+  } else if (Array.isArray(source)) {
+    candidate = source[0] || ""
+  } else if (typeof source === "object") {
+    const raw = source.s6d1 || source.s7d1 || source.d1 || source.hd1 || source.s6d2 || source.s7d2 || ""
+    if (Array.isArray(raw)) candidate = raw[0] || ""
+    else candidate = raw || ""
+  }
+  return separateUrlAndComment(candidate).url
+}
+
+export const resolveDiskSwapperUrls = (rawUrls: string[]): string[] => {
+  if (rawUrls.length === 0) return []
+  const firstParsed = separateUrlAndComment(rawUrls[0])
+  const firstUrl = firstParsed.url
+  const lastSlash = firstUrl.lastIndexOf("/")
+  const lastEncodedSlash = firstUrl.toLowerCase().lastIndexOf("%2f")
+  let basePrefix = ""
+  if (lastEncodedSlash > lastSlash) {
+    basePrefix = firstUrl.substring(0, lastEncodedSlash + 3)
+  } else if (lastSlash >= 0) {
+    basePrefix = firstUrl.substring(0, lastSlash + 1)
+  }
+
+  return rawUrls.map((rawUrl, idx) => {
+    const { url, comment } = separateUrlAndComment(rawUrl)
+    let resolvedUrl = url
+    if (idx > 0 && !/^(https?:|\/|file:)/i.test(url) && basePrefix) {
+      const encodedFilename = url.includes("%") ? url : encodeURIComponent(url)
+      resolvedUrl = `${basePrefix}${encodedFilename}`
+    }
+    return comment ? `${resolvedUrl}|${comment}` : resolvedUrl
+  })
+}
+
+export const parseDiskSwapperParam = (paramValue: string): string[] => {
+  const trimmed = paramValue.trim()
+  if (!trimmed) return []
+  let content = trimmed
+  if (content.toLowerCase().startsWith("%7b") && content.toLowerCase().endsWith("%7d")) {
+    content = decodeURIComponent(content)
+  }
+  if (content.startsWith("{") && content.endsWith("}")) {
+    content = content.slice(1, -1).trim()
+    const parts = content.split(",").map(p => p.trim()).filter(Boolean)
+    return resolveDiskSwapperUrls(parts)
+  }
+  return [trimmed]
 }

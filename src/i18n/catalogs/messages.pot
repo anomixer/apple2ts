@@ -123,7 +123,7 @@ msgid "Machine Configuration"
 msgstr ""
 
 msgctxt "machine.slotConfigurator"
-msgid "Slot Configuration"
+msgid "Expansion Slots"
 msgstr ""
 
 msgctxt "machine.models.apple2p"
@@ -1053,6 +1053,10 @@ msgctxt "disk.ejectDisk"
 msgid "Eject Disk"
 msgstr ""
 
+msgctxt "disk.ejectAllDisks"
+msgid "Eject All Disks"
+msgstr ""
+
 msgctxt "disk.saveDiskToOneDrive"
 msgid "Save Disk to OneDrive"
 msgstr ""
@@ -1063,6 +1067,10 @@ msgstr ""
 
 msgctxt "disk.loadDisk"
 msgid "Load Disk..."
+msgstr ""
+
+msgctxt "disk.loadAdditionalDisks"
+msgid "Load Additional Disk(s)..."
 msgstr ""
 
 msgctxt "disk.loadDiskFrom"
@@ -1166,7 +1174,7 @@ msgid "Click to show"
 msgstr ""
 
 msgctxt "disk.clickToLoadDiskImage"
-msgid "Click to load disk image"
+msgid "Click to load disk image(s)"
 msgstr ""
 
 msgctxt "disk.downloadingDisk"
@@ -1213,6 +1221,14 @@ msgctxt "help.diskImages"
 msgid "Disk images:"
 msgstr ""
 
+msgctxt "help.diskContainers"
+msgid "Compressed archives:"
+msgstr ""
+
+msgctxt "help.multiDiskNotice"
+msgid "Multi-disk swapping: Click a drive's multi-disk badge to open the quick-swap menu. Loading multi-disk archives (.zip, .7z, .gz) automatically mounts all disks into the swapper list."
+msgstr ""
+
 msgctxt "help.urlParameters"
 msgid "Optional URL Parameters"
 msgstr ""
@@ -1254,7 +1270,7 @@ msgid "The open apple and closed apple keys behave the same as the ctrl key."
 msgstr ""
 
 msgctxt "help.controlPanelShortcut"
-msgid "SHIFT-ESC: display the Apple2TS control panel"
+msgid "<Shift>+<Esc>: display the Apple2TS control panel"
 msgstr ""
 
 msgctxt "help.openAppleKey"
@@ -1291,7 +1307,7 @@ msgid "Total Replay, load Choplifter, embedded mode"
 msgstr ""
 
 msgctxt "help.exampleLinks.a2Desktop"
-msgid "A2Desktop 2MG with fast speed and white color"
+msgid "A2Desktop 2MG with fast speed and color"
 msgstr ""
 
 msgctxt "help.exampleLinks.embeddedBasic"
@@ -1428,6 +1444,10 @@ msgstr ""
 
 msgctxt "keyboard.return"
 msgid "Return"
+msgstr ""
+
+msgctxt "keyboard.enableGamePatches"
+msgid "Enable Game Patches"
 msgstr ""
 
 msgctxt "audio.speaker"
@@ -2015,6 +2035,10 @@ msgstr ""
 
 msgctxt "linkBuilder.sound"
 msgid "Sound"
+msgstr ""
+
+msgctxt "linkBuilder.startupOptionsTab"
+msgid "Startup Options"
 msgstr ""
 
 msgctxt "linkBuilder.onStartup"
@@ -3000,11 +3024,11 @@ msgid "Auxiliary RAM"
 msgstr ""
 
 msgctxt "debug.memoryDump.range.hgr1"
-msgid "HGR page 1 (screen order)"
+msgid "HGR page 1"
 msgstr ""
 
 msgctxt "debug.memoryDump.range.hgr2"
-msgid "HGR page 2 (screen order)"
+msgid "HGR page 2"
 msgstr ""
 
 msgctxt "debug.disassemblyPreviousLocation"
@@ -3241,4 +3265,52 @@ msgstr ""
 
 msgctxt "debug.breakpoint.mode.indirect"
 msgid "Indirect"
+msgstr ""
+
+msgctxt "disk.standbyDisks"
+msgid "Standby Disks (Click to change disk)"
+msgstr ""
+
+msgctxt "linkBuilder.additionalDiskDrives"
+msgid "Additional Disk Drives"
+msgstr ""
+
+msgctxt "linkBuilder.slot6Drive1"
+msgid "Slot 6 Drive 1 (Floppy 1)"
+msgstr ""
+
+msgctxt "linkBuilder.slot6Drive2"
+msgid "Slot 6 Drive 2 (Floppy 2)"
+msgstr ""
+
+msgctxt "linkBuilder.slot7Drive1"
+msgid "Slot 7 Drive 1 (Hard Drive 1)"
+msgstr ""
+
+msgctxt "linkBuilder.slot7Drive2"
+msgid "Slot 7 Drive 2 (Hard Drive 2)"
+msgstr ""
+
+msgctxt "linkBuilder.slot2Drive1"
+msgid "Slot 2 Drive 1 (VERA SD)"
+msgstr ""
+
+msgctxt "linkBuilder.slot4Drive1"
+msgid "Slot 4 Drive 1 (VERA SD)"
+msgstr ""
+
+msgctxt "linkBuilder.addAdditionalDisk"
+msgid "Add additional disk for swapping"
+msgstr ""
+
+msgctxt "linkBuilder.removeDisk"
+msgid "Remove this disk"
+msgstr ""
+
+msgctxt "linkBuilder.addAnotherDisk"
+msgid "Add another disk"
+msgstr ""
+
+msgctxt "linkBuilder.diskPlaceholder"
+msgid "Disk {num} filename (e.g. sideB.woz|Scenario Disk)"
 msgstr ""

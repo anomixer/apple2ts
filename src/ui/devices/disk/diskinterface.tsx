@@ -1,6 +1,6 @@
 import { DiskCollectionSortMode, setPreferenceDiskCollectionSort } from "../../localstorage"
 import { handleGetMachineName, handleGetSlotConfig, handleGetVeraSdStatus, handleSetVeraSdWriteProtected, passSetDriveProps } from "../../main2worker"
-import { CLOUD_SYNC, getDefaultDiskDriveIndex } from "../../../common/utility"
+import { CLOUD_SYNC, getCleanDiskFilename, getDefaultDiskDriveIndex, getPrimaryDiskUrl } from "../../../common/utility"
 import {
   DISK_COLLECTION_ITEM_TYPE,
   TAB_INDEX,
@@ -26,16 +26,20 @@ import { createRetroInternetArchiveControl } from "./internetarchive_retro"
 import {
   DISK_DRIVE_LABELS,
   downloadDiskToDevice,
-  getBlobFromDiskData,
   saveDiskToDevice,
 } from "./diskdrive"
+import { getDiskBlobForSync } from "../../../common/utility"
 import {
   doSetUIDriveProps,
+  ejectAllDisks,
+  getStandbyActiveIndex,
+  getStandbyDisks,
   handleEjectDisk,
   handleGetDriveProps,
   handleGetFilename,
   handleSaveWritableFile,
   handleSetDiskWriteProtected,
+  swapStandbyDisk,
 } from "./driveprops"
 import { GoogleDrive } from "./googledrive"
 import { createRetroGoogleDriveControl } from "./googledrive_retro"
@@ -59,12 +63,15 @@ import VeraSdIcon, {
   downloadAndEjectVeraSd,
   downloadVeraSd,
   ejectVeraSd,
+  getStandbyVeraActiveIndex,
+  getStandbyVeraDisks,
   isVeraSdSyncing,
   isVeraSdSyncPaused,
   loadVeraSdFromCloud,
   openSdFilePicker,
   saveVeraSdToCloud,
   saveVeraSdToDevice,
+  swapVeraStandbyDisk,
   syncVeraSdNow,
   toggleVeraSdSyncPaused,
 } from "../vera/verasdicon"
@@ -109,7 +116,7 @@ export const resetCollectionDriveSelectionSession = () => {
 
 const getCollectionDriveIndex = (disk: DiskCollectionItem) => {
   if (selectedCollectionDriveIndex !== undefined) return selectedCollectionDriveIndex
-  const filename = disk.cloudData?.fileName || disk.diskUrl
+  const filename = disk.cloudData?.fileName || getPrimaryDiskUrl(disk)
   const fileSize = disk.cloudData?.fileSize ?? disk.fileSize
   return getDefaultDiskDriveIndex(filename, fileSize)
 }
@@ -361,12 +368,22 @@ const collectionItems = (
         return collectionItems(runtime, tabIndex, disks, sortMode)
       },
       action: runtime => {
-        loadDiskIntoDrive(
-          getCollectionDriveIndex(disk),
-          disk,
-          runtime.displayProps.updateDisplay,
-          runtime.close,
-        )
+        if (selectedCollectionDriveIndex !== undefined) {
+          loadDiskIntoDrive(
+            getCollectionDriveIndex(disk),
+            disk,
+            runtime.displayProps.updateDisplay,
+            runtime.close,
+          )
+        } else {
+          loadDisk(
+            -1,
+            disk,
+            runtime.displayProps.updateDisplay,
+            undefined,
+            runtime.close,
+          )
+        }
       },
     })),
     sortSepBase,
@@ -416,6 +433,18 @@ const diskLoadItems = (driveIndex: number): RetroControlMetadata[] => [
   {
     ...controlFromJson(
       "diskTemplates",
+      "diskDrives.{{driveIndex}}.loadAdditional",
+      {},
+      { driveIndex },
+    ),
+    selectable: () => Boolean(handleGetDriveProps(driveIndex).filename),
+    action: context => {
+      context.displayProps.setShowFileOpenDialog(true, driveIndex, true)
+    },
+  },
+  {
+    ...controlFromJson(
+      "diskTemplates",
       "diskDrives.{{driveIndex}}.load.from",
       {},
       { driveIndex },
@@ -435,7 +464,7 @@ const diskMenuSeparator = (driveIndex: number | string, id: string): RetroContro
 const diskMenuGroup = (
   driveIndex: number | string,
   id: string,
-  label: string,
+  label: string | ((context: RetroMenuContext) => string),
   items: RetroControlMetadata[],
 ): RetroControlMetadata[] => items.length > 0
     ? [{ ...diskMenuSeparator(driveIndex, id), label }, ...items]
@@ -454,6 +483,18 @@ const veraSdLoadItems = (): RetroControlMetadata[] => [
     },
     { driveIndex: "vera" },
   ),
+  {
+    ...controlFromJson(
+      "diskTemplates",
+      "diskDrives.{{driveIndex}}.loadAdditional",
+      {},
+      { driveIndex: "vera" },
+    ),
+    selectable: () => Boolean(handleGetVeraSdStatus().attached),
+    action: () => {
+      void openSdFilePicker(true)
+    },
+  },
   {
     ...controlFromJson(
       "diskTemplates",
@@ -557,7 +598,55 @@ const veraSdInsertedItems = (): RetroControlMetadata[] => {
     },
   ]
 
+  // Multi-disk swap group — only shown when there are 2 or more valid standby disks
+  const standby = getStandbyVeraDisks()
+  const validDisks = standby.filter(d => Boolean(d?.filename?.trim()))
+
+  const swapGroup: RetroControlMetadata[] = validDisks.length >= 2 ? diskMenuGroup(
+    "vera",
+    "swapSeparator",
+    (context: RetroMenuContext) => context.t("disk.standbyDisks"),
+    [
+      ...validDisks.map((disk, idx) => {
+        const cleanName = getCleanDiskFilename(disk.filename)
+        const displayName = disk.comment ? `${cleanName} (${disk.comment})` : cleanName
+        return {
+          ...controlFromJson(
+            "diskTemplates",
+            "diskDrives.{{driveIndex}}.swapDisk.{{diskIndex}}",
+            diskTemplateBindings,
+            { driveIndex: "vera", diskIndex: idx },
+          ),
+          label: displayName,
+          indicator: () => idx === getStandbyVeraActiveIndex() ? "*" : undefined,
+          selectable: () => true,
+          refreshAfterAction: true,
+          action: async (ctx?: RetroMenuContext) => {
+            if (idx !== getStandbyVeraActiveIndex()) {
+              await swapVeraStandbyDisk(idx)
+              ctx?.displayProps?.updateDisplay?.()
+            }
+          },
+        }
+      }),
+      {
+        ...controlFromJson(
+          "diskTemplates",
+          "diskDrives.{{driveIndex}}.ejectAll",
+          {},
+          { driveIndex: "vera" },
+        ),
+        selectable: () => true,
+        action: (ctx: RetroMenuContext) => {
+          ejectVeraSd()
+          ctx.displayProps.updateDisplay()
+        },
+      },
+    ],
+  ) : []
+
   return [
+    ...swapGroup,
     ...diskMenuGroup("vera", "diskSeparator", "Disk", diskItems),
     ...diskMenuGroup("vera", "downloadSeparator", "Download", downloadItems),
     ...diskMenuGroup("vera", "saveSeparator", "Save", saveItems),
@@ -576,9 +665,10 @@ const getCurrentDiskScreenshotUrl = () => {
 
 const saveDiskToCloud = async (driveIndex: number, provider: CloudProvider) => {
   const drive = handleGetDriveProps(driveIndex)
+  const blob = getDiskBlobForSync(drive.diskData, drive.filename, drive.hardDrive)
   const cloudData = await provider.upload(
     drive.filename,
-    getBlobFromDiskData(drive.diskData, drive.filename),
+    blob,
   )
   if (!cloudData) return
   if (drive.writableFileHandle) await handleSaveWritableFile(driveIndex)
@@ -592,14 +682,15 @@ const saveDiskToCloud = async (driveIndex: number, provider: CloudProvider) => {
 
 const syncCloudDisk = async (driveIndex: number) => {
   const drive = handleGetDriveProps(driveIndex)
-  if (!drive.cloudData) return
+  if (!drive.cloudData || drive.cloudData.isArchive) return
   const provider = drive.cloudData.providerName === "OneDrive"
     ? new OneDriveCloudDrive()
     : drive.cloudData.providerName === "GoogleDrive"
       ? new GoogleDrive()
       : null
   if (!provider) return
-  const blob = getBlobFromDiskData(drive.diskData, drive.filename)
+  const targetFilename = drive.cloudData.fileName || drive.filename
+  const blob = getDiskBlobForSync(drive.diskData, targetFilename, drive.hardDrive)
   if (!await provider.sync(blob, drive.cloudData)) return
   passSetDriveProps({
     ...drive,
@@ -660,10 +751,14 @@ export const insertedDiskItems = (
   const hasDisk = Boolean(drive.filename)
   const isElectron = navigator.userAgent.includes("Electron")
   const activeCloudDisk = Boolean(
-    drive.cloudData && drive.cloudData.syncStatus !== CLOUD_SYNC.INACTIVE
+    drive.cloudData &&
+    drive.cloudData.syncStatus !== CLOUD_SYNC.INACTIVE &&
+    !drive.cloudData.isArchive
   )
-  const supportedCloudDisk = activeCloudDisk && (
-    drive.cloudData?.providerName === "OneDrive" || drive.cloudData?.providerName === "GoogleDrive"
+  const supportedCloudDisk = Boolean(
+    activeCloudDisk && (
+      drive.cloudData?.providerName === "OneDrive" || drive.cloudData?.providerName === "GoogleDrive"
+    )
   )
   const setSyncInterval = (syncInterval: number) => {
     const latestDrive = handleGetDriveProps(driveIndex)
@@ -739,7 +834,57 @@ export const insertedDiskItems = (
     drive,
   )
 
+  // Multi-disk swap group — only shown when there are 2 or more valid standby disks
+  const standby = getStandbyDisks(driveIndex)
+  const validDisks = standby.filter(d => Boolean(d?.filename?.trim()))
+
+  const swapGroup: RetroControlMetadata[] = validDisks.length >= 2 ? diskMenuGroup(
+    driveIndex,
+    "swapSeparator",
+    (context: RetroMenuContext) => context.t("disk.standbyDisks"),
+    [
+      ...validDisks.map((disk, idx) => {
+        const cleanName = getCleanDiskFilename(disk.filename)
+        const displayName = disk.comment ? `${cleanName} (${disk.comment})` : cleanName
+        return {
+          ...controlFromJson(
+            "diskTemplates",
+            "diskDrives.{{driveIndex}}.swapDisk.{{diskIndex}}",
+            diskTemplateBindings,
+            { driveIndex, diskIndex: idx },
+          ),
+          label: displayName,
+          indicator: () => idx === getStandbyActiveIndex(driveIndex) ? "*" : undefined,
+          selectable: () => true,
+          refreshAfterAction: true,
+          action: async (ctx?: RetroMenuContext) => {
+            if (idx !== getStandbyActiveIndex(driveIndex)) {
+              const curDrive = handleGetDriveProps(driveIndex)
+              if (curDrive.diskHasChanges && curDrive.writableFileHandle) {
+                await handleSaveWritableFile(driveIndex)
+              }
+              await swapStandbyDisk(driveIndex, idx, undefined, () => ctx?.displayProps?.updateDisplay?.())
+            }
+          },
+        }
+      }),
+      {
+        ...controlFromJson(
+          "diskTemplates",
+          "diskDrives.{{driveIndex}}.ejectAll",
+          {},
+          { driveIndex },
+        ),
+        selectable: () => true,
+        action: (ctx: RetroMenuContext) => {
+          ejectAllDisks(driveIndex, () => ctx.displayProps.updateDisplay())
+        },
+      },
+    ],
+  ) : []
+
   return [
+    ...swapGroup,
     ...diskMenuGroup(driveIndex, "diskSeparator", "Disk", [
       baseWriteProtectItem(driveIndex, drive),
       favorite,
@@ -900,21 +1045,21 @@ const DiskInterface = (props: DisplayProps) => {
           <span className="flex-row">
             {!isMinimalTheme() && <DiskImageChooser {...props} />}
             <DiskDrive key={0} index={0} renderCount={props.renderCount}
-              setShowFileOpenDialog={props.setShowFileOpenDialog} />
+              setShowFileOpenDialog={props.setShowFileOpenDialog} updateDisplay={props.updateDisplay} />
             <DiskDrive key={1} index={1} renderCount={props.renderCount}
-              setShowFileOpenDialog={props.setShowFileOpenDialog} />
+              setShowFileOpenDialog={props.setShowFileOpenDialog} updateDisplay={props.updateDisplay} />
             {(isMinimalTheme() && isScreenNarrow) && <VeraSdIcon renderCount={props.renderCount} />}
             {(isMinimalTheme() && isScreenNarrow) && <ImageWriter />}
           </span>
           <span className="flex-row">
             <DiskDrive key={2} index={2} renderCount={props.renderCount}
-              setShowFileOpenDialog={props.setShowFileOpenDialog} />
+              setShowFileOpenDialog={props.setShowFileOpenDialog} updateDisplay={props.updateDisplay} />
             <DiskDrive key={3} index={3} renderCount={props.renderCount}
-              setShowFileOpenDialog={props.setShowFileOpenDialog} />
+              setShowFileOpenDialog={props.setShowFileOpenDialog} updateDisplay={props.updateDisplay} />
             {isIIgs && <DiskDrive key={4} index={4} renderCount={props.renderCount}
-              setShowFileOpenDialog={props.setShowFileOpenDialog} />}
+              setShowFileOpenDialog={props.setShowFileOpenDialog} updateDisplay={props.updateDisplay} />}
             {isIIgs && <DiskDrive key={5} index={5} renderCount={props.renderCount}
-              setShowFileOpenDialog={props.setShowFileOpenDialog} />}
+              setShowFileOpenDialog={props.setShowFileOpenDialog} updateDisplay={props.updateDisplay} />}
             {(!isMinimalTheme() || !isScreenNarrow) && <VeraSdIcon renderCount={props.renderCount} />}
             {(!isMinimalTheme() || !isScreenNarrow) && <ImageWriter />}
           </span>

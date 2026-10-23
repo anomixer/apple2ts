@@ -1,16 +1,29 @@
 import { diskImages } from "./diskimages"
-import * as fflate from "fflate"
+import { unzipSingleFile, decompressSingleFile, decompressAllDiskFiles } from "../../../common/zip_utils"
 import { OneDriveCloudDrive } from "./onedriveclouddrive"
 import { GoogleDrive } from "./googledrive"
 import {
-  FILE_SUFFIXES_DISK,
+  CLOUD_SYNC,
   getDefaultDiskDriveIndex,
+  getPrimaryDiskUrl,
   MAX_DRIVES,
   RUN_MODE,
+  getCleanDiskFilename,
+  parseDiskSwapperParam,
+  resolveDiskSwapperUrls,
+  separateUrlAndComment,
+  updateWozCrc,
+  getDiskBlobForSync,
 } from "../../../common/utility"
 import { clearDialogMessageContext, hasDialogMessageContext, showGlobalProgressModal } from "../../ui_utilities"
 import { passSetDriveNewData, requestSetDriveNewData, passSetDriveProps, passSetBinaryBlock, passPasteText, handleGetRunMode, passSetRunMode } from "../../main2worker"
 import { internetArchiveUrlProtocol, getDiskImageUrlFromIdentifier } from "./internetarchive_utils"
+import {
+  isDemoZooDiskUrl,
+  parseDemoZooProductionPageHtml,
+  resolveExternalDownloadUrls,
+  sortDemoZooDisks
+} from "./demozoo_utils"
 import { newReleases } from "./newreleases"
 import { DiskBookmarks } from "./diskbookmarks"
 import { parseGameList } from "./totalreplayutilities"
@@ -23,7 +36,6 @@ import {
   getHelpFileUrl,
   readHelpResponseText
 } from "./helpfile"
-import { getBlobFromDiskData } from "./diskdrive"
 
 // Technically, all of these properties should be in the main2worker.ts file,
 // since they just maintain the state that needs to be passed to/from the
@@ -54,19 +66,6 @@ const driveProps: DriveProps[] = [
   initDriveProps(4, 1, false), initDriveProps(5, 2, false),
 ]
 
-const demoZooDiskDownloadExtensions = [
-  ".hdv", ".2mg", ".dsk", ".woz", ".po", ".do", ".bin", ".bas", ".nib", ".2img", ".d13", ".dc", ".img",
-  ".zip", ".7z", ".gz", ".tar"
-]
-
-const isDemoZooDiskDownload = (url: string) => {
-  try {
-    const pathname = decodeURIComponent(new URL(url).pathname).toLowerCase()
-    return demoZooDiskDownloadExtensions.some(extension => pathname.endsWith(extension))
-  } catch {
-    return false
-  }
-}
 
 export const normalizeDownloadUrl = (url: string): string => {
   if (!url) return url
@@ -104,15 +103,10 @@ export const getWaybackRawUrl = (url: string): string => {
 }
 
 const chooseDemoZooDownloads = (links: Array<{ url: string; link_class?: string }>) => {
-  return [...links]
+  const urls = [...links]
     .filter(link => Boolean(link.url))
-    .map(link => ({ ...link, url: normalizeDownloadUrl(link.url) }))
-    .sort((left, right) => {
-      const leftScore = isDemoZooDiskDownload(left.url) ? 100 : /download/i.test(left.link_class || "") ? 10 : 0
-      const rightScore = isDemoZooDiskDownload(right.url) ? 100 : /download/i.test(right.link_class || "") ? 10 : 0
-      return rightScore - leftScore
-    })
-    .map(link => link.url)
+    .map(link => normalizeDownloadUrl(link.url))
+  return sortDemoZooDisks(urls)
 }
 
 export const handleGetFilename = (index: number) => {
@@ -128,6 +122,13 @@ export const handleGetFilename = (index: number) => {
 }
 
 export const doSetUIDriveProps = (props: DriveProps, replaceDiskData = false) => {
+  // If the UI has loaded a disk more recently than a stale empty worker update, ignore the empty update
+  if (props.filename === "" && driveProps[props.index].filename !== "") {
+    if (driveProps[props.index].lastLocalFileWriteTime > props.lastLocalFileWriteTime) {
+      return
+    }
+  }
+
   // For efficiency we only receive disk data if it has changed.
   // If our disk is the same but it hasn't changed, keep the existing data.
   // Also preserve writableFileHandle (custom Electron handlers aren't sent to worker)
@@ -167,7 +168,7 @@ const setDiskData = (
   if (cloudData) {
     cloudData.fileSize = data.length
   }
-  driveProps[index].filename = filename
+  driveProps[index].filename = getCleanDiskFilename(filename)
   driveProps[index].diskData = data
   driveProps[index].lastLocalFileWriteTime = lastLocalFileWriteTime
   driveProps[index].cloudData = cloudData
@@ -187,9 +188,24 @@ const setDiskData = (
     passSetDriveNewData(propsForWorker, forceIndex)
   }
   if (filename) {
+    standbyDisks[index] = [{
+      filename: getCleanDiskFilename(filename),
+      diskData: data,
+      diskHasChanges: false,
+      isWriteProtected: driveProps[index].isWriteProtected,
+      writableFileHandle,
+      cloudData,
+      lastAppleWriteTime: -1,
+      lastLocalFileWriteTime,
+      helpFile,
+    }]
+    standbyActiveIndex[index] = 0
     setTimeout(() => {
       selectHelpText(helpFile, applyHelpText)
     }, 150)
+  } else {
+    standbyDisks[index] = []
+    standbyActiveIndex[index] = 0
   }
 
   return workerOperation
@@ -218,6 +234,154 @@ export const handleSetDiskData = (
   )
 }
 
+export type StandbyDisk = {
+  filename: string
+  diskData: Uint8Array
+  diskHasChanges: boolean
+  isWriteProtected: boolean
+  writableFileHandle: WritableFileHandle | null
+  cloudData: CloudData | null
+  lastAppleWriteTime: number
+  lastLocalFileWriteTime: number
+  helpFile?: string
+  comment?: string
+}
+
+const standbyDisks: StandbyDisk[][] = [[], [], [], []]
+const standbyActiveIndex: number[] = [0, 0, 0, 0]
+
+export const getStandbyDisks = (driveIndex: number): StandbyDisk[] => {
+  if (driveIndex < 0 || driveIndex >= 4) return []
+  const drive = driveProps[driveIndex]
+  if (!drive || !drive.filename) {
+    return [...standbyDisks[driveIndex]]
+  }
+  if (standbyDisks[driveIndex].length === 0) {
+    standbyDisks[driveIndex] = [{
+      filename: getCleanDiskFilename(drive.filename),
+      diskData: drive.diskData,
+      diskHasChanges: drive.diskHasChanges,
+      isWriteProtected: drive.isWriteProtected,
+      writableFileHandle: drive.writableFileHandle,
+      cloudData: drive.cloudData,
+      lastAppleWriteTime: drive.lastAppleWriteTime,
+      lastLocalFileWriteTime: drive.lastLocalFileWriteTime,
+    }]
+    standbyActiveIndex[driveIndex] = 0
+  }
+  syncActiveDiskToStandby(driveIndex)
+  return [...standbyDisks[driveIndex]]
+}
+
+export const getStandbyActiveIndex = (driveIndex: number): number => {
+  return standbyActiveIndex[driveIndex] ?? 0
+}
+
+export const syncActiveDiskToStandby = (driveIndex: number) => {
+  if (driveIndex < 0 || driveIndex >= 4) return
+  const activeIdx = standbyActiveIndex[driveIndex]
+  const drive = driveProps[driveIndex]
+  if (drive && standbyDisks[driveIndex][activeIdx]) {
+    if (drive.diskHasChanges && drive.diskData?.length > 0) {
+      updateWozCrc(drive.diskData)
+    }
+    standbyDisks[driveIndex][activeIdx] = {
+      ...standbyDisks[driveIndex][activeIdx],
+      filename: drive.filename,
+      diskData: drive.diskData,
+      diskHasChanges: drive.diskHasChanges,
+      isWriteProtected: drive.isWriteProtected,
+      writableFileHandle: drive.writableFileHandle,
+      cloudData: drive.cloudData,
+      lastAppleWriteTime: drive.lastAppleWriteTime,
+      lastLocalFileWriteTime: drive.lastLocalFileWriteTime,
+    }
+  }
+}
+
+export const setStandbyDisks = (driveIndex: number, disks: StandbyDisk[], activeIndex = 0) => {
+  if (driveIndex < 0 || driveIndex >= 4) return
+  standbyDisks[driveIndex] = [...disks]
+  standbyActiveIndex[driveIndex] = Math.max(0, Math.min(activeIndex, disks.length - 1))
+}
+
+export const appendStandbyDisks = (driveIndex: number, newDisks: StandbyDisk[]) => {
+  if (driveIndex < 0 || driveIndex >= 4) return
+  getStandbyDisks(driveIndex)
+  standbyDisks[driveIndex].push(...newDisks)
+}
+
+export const swapStandbyDisk = async (
+  driveIndex: number,
+  newDiskIndex: number,
+  saveActiveDiskCallback?: () => Promise<void>,
+  updateDisplay?: UpdateDisplay,
+) => {
+  if (driveIndex < 0 || driveIndex >= 4) return
+  const currentDisks = standbyDisks[driveIndex]
+  if (!currentDisks || newDiskIndex < 0 || newDiskIndex >= currentDisks.length) return
+
+  syncActiveDiskToStandby(driveIndex)
+
+  if (driveProps[driveIndex].diskHasChanges && saveActiveDiskCallback) {
+    await saveActiveDiskCallback()
+  }
+
+  const target = currentDisks[newDiskIndex]
+  if (target.diskHasChanges && target.diskData?.length > 0) {
+    updateWozCrc(target.diskData)
+  }
+  standbyActiveIndex[driveIndex] = newDiskIndex
+
+  driveProps[driveIndex].filename = target.filename
+  driveProps[driveIndex].diskData = target.diskData
+  driveProps[driveIndex].diskHasChanges = target.diskHasChanges
+  driveProps[driveIndex].isWriteProtected = target.isWriteProtected
+  driveProps[driveIndex].writableFileHandle = target.writableFileHandle
+  driveProps[driveIndex].cloudData = target.cloudData
+  driveProps[driveIndex].lastLocalFileWriteTime = target.lastLocalFileWriteTime
+  driveProps[driveIndex].lastAppleWriteTime = target.lastAppleWriteTime
+
+  passSetDriveNewData(driveProps[driveIndex], true)
+  updateDisplay?.()
+}
+
+export const removeStandbyDisk = (
+  driveIndex: number,
+  removeIndex: number,
+  updateDisplay?: UpdateDisplay,
+) => {
+  if (driveIndex < 0 || driveIndex >= 4) return
+  const disks = standbyDisks[driveIndex]
+  if (!disks || removeIndex < 0 || removeIndex >= disks.length) return
+
+  syncActiveDiskToStandby(driveIndex)
+  const wasActive = standbyActiveIndex[driveIndex] === removeIndex
+  disks.splice(removeIndex, 1)
+
+  if (disks.length === 0) {
+    handleEjectDisk(driveIndex)
+    standbyActiveIndex[driveIndex] = 0
+    updateDisplay?.()
+  } else if (wasActive) {
+    const nextIdx = Math.min(removeIndex, disks.length - 1)
+    void swapStandbyDisk(driveIndex, nextIdx, undefined, updateDisplay)
+  } else {
+    if (standbyActiveIndex[driveIndex] > removeIndex) {
+      standbyActiveIndex[driveIndex]--
+    }
+    updateDisplay?.()
+  }
+}
+
+export const ejectAllDisks = (driveIndex: number, updateDisplay?: UpdateDisplay) => {
+  if (driveIndex < 0 || driveIndex >= 4) return
+  standbyDisks[driveIndex] = []
+  standbyActiveIndex[driveIndex] = 0
+  handleEjectDisk(driveIndex)
+  updateDisplay?.()
+}
+
 export const handleSetDiskWriteProtected = (
   index: number,
   isWriteProtected: boolean,
@@ -228,15 +392,19 @@ export const handleSetDiskWriteProtected = (
 
 export const handleEjectDisk = (index: number) => {
   driveProps[index] = initDriveProps(index, driveProps[index].drive, driveProps[index].hardDrive)
+  standbyDisks[index] = []
+  standbyActiveIndex[index] = 0
   passSetDriveNewData(driveProps[index])
 }
 
 export const requestEjectDisk = (index: number) => {
   driveProps[index] = initDriveProps(index, driveProps[index].drive, driveProps[index].hardDrive)
+  standbyDisks[index] = []
+  standbyActiveIndex[index] = 0
   return requestSetDriveNewData(driveProps[index])
 }
 
-const findMatchingDiskImage = (url: string) => {
+export const findMatchingDiskImage = (url: string) => {
   const name = decodeURIComponent(url).replace(/[^A-Z]/gi, "").toUpperCase()
   for (let i = 0; i < diskImages.length; i++) {
     const diskname = diskImages[i].title.replace(/[^A-Z]/gi, "").toUpperCase()
@@ -273,7 +441,31 @@ const setDiskOrFileFromBuffer = (
   writableFileHandle: WritableFileHandle | null,
   helpFile?: string,
   preserveDriveIndex = false,
-  confirmed = false) => {
+  confirmed = false,
+  noReset = false,
+  noBoot = false) => {
+
+  // Auto-unzip if archive or zipped disk image
+  const unzipped = unzipSingleFile(buffer, filename, [".dsk", ".woz", ".do", ".po", ".2mg", ".hdv", ".2meg", ".img", ".nib", ".bin", ".bas", ".a"])
+  if (unzipped) {
+    const origFilename = filename
+    filename = unzipped.filename
+    buffer = unzipped.buffer
+    writableFileHandle = null
+    cloudData = {
+      providerName: cloudData?.providerName || "Local",
+      syncStatus: CLOUD_SYNC.INACTIVE,
+      syncInterval: cloudData?.syncInterval ?? -1,
+      lastSyncTime: cloudData?.lastSyncTime ?? -1,
+      fileName: cloudData?.fileName || origFilename,
+      itemId: cloudData?.itemId || "",
+      apiEndpoint: cloudData?.apiEndpoint || "",
+      downloadUrl: cloudData?.downloadUrl || "",
+      detailsUrl: cloudData?.detailsUrl || "",
+      fileSize: cloudData?.fileSize ?? buffer.byteLength,
+      isArchive: true,
+    }
+  }
 
   // Sanity check for strange downloads with no filename.
   if (buffer.byteLength === 143360 && !filename.includes(".")) {
@@ -320,17 +512,18 @@ const setDiskOrFileFromBuffer = (
     }
   } else {
     const defaultDriveIndex = getDefaultDiskDriveIndex(fname, buffer.byteLength)
-    const bootsExplicitDrive = preserveDriveIndex && index === defaultDriveIndex
+    const isIdle = handleGetRunMode() === RUN_MODE.IDLE
+    const bootsExplicitDrive = !noReset && !noBoot && isIdle && preserveDriveIndex && index === defaultDriveIndex
     if (bootsExplicitDrive) {
       passSetRunMode(RUN_MODE.IDLE)
       resetAllDiskDrives()
     }
-    if (!preserveDriveIndex || index < 0) {
-      if (defaultDriveIndex < 2) {
-        if (index < 0 || index > 1) newIndex = defaultDriveIndex
-      } else if (index < 2) {
-        newIndex = defaultDriveIndex
-      }
+    if (newIndex < 0) {
+      newIndex = defaultDriveIndex
+    } else if (defaultDriveIndex < 2) {
+      if (newIndex < 0 || newIndex > 1) newIndex = defaultDriveIndex
+    } else if (newIndex < 2 || newIndex > 3) {
+      newIndex = defaultDriveIndex
     }
     setDiskData(
       newIndex,
@@ -344,7 +537,7 @@ const setDiskOrFileFromBuffer = (
       preserveDriveIndex,
       false,
     )
-    const needsBoot = bootsExplicitDrive || handleGetRunMode() === RUN_MODE.IDLE
+    const needsBoot = !noBoot && (bootsExplicitDrive || isIdle)
 
     if (needsBoot) {
       setTimeout(() => {
@@ -364,7 +557,10 @@ export const handleSetDiskOrFileFromBuffer = (
   cloudData: CloudData | null,
   writableFileHandle: WritableFileHandle | null,
   helpFile?: string,
-  preserveDriveIndex = false) => {
+  preserveDriveIndex = false,
+  confirmed = false,
+  noReset = false,
+  noBoot = false) => {
   return setDiskOrFileFromBuffer(
     index,
     buffer,
@@ -373,6 +569,9 @@ export const handleSetDiskOrFileFromBuffer = (
     writableFileHandle,
     helpFile,
     preserveDriveIndex,
+    confirmed,
+    noReset,
+    noBoot,
   ).mountedDrive
 }
 
@@ -650,29 +849,6 @@ const fetchDemoZooResource = async (url: string): Promise<Response | null> => {
   return fetchWithCorsProxy(url)
 }
 
-const fetchExternalDownloadPage = async (url: string): Promise<Response | null> => {
-  return fetchWithCorsProxy(url)
-}
-
-const findDirectDownloadOnExternalPage = async (url: string): Promise<string> => {
-  if (isDemoZooDiskDownload(url)) return url
-
-  const response = await fetchExternalDownloadPage(url)
-  if (!response?.ok) return ""
-
-  const html = await response.text()
-  const hrefPattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>/gi
-  for (const match of html.matchAll(hrefPattern)) {
-    try {
-      const candidate = new URL(match[1].trim(), url).toString()
-      if (isDemoZooDiskDownload(candidate)) return candidate
-    } catch {
-      // Ignore malformed links.
-    }
-  }
-
-  return ""
-}
 
 
 
@@ -686,6 +862,9 @@ const diskImageLocalStorageSync = (url: string, index: number) => {
   timerId = setInterval(() => {
     const dprops = handleGetDriveProps(index)
     if (dprops.diskHasChanges && !dprops.motorRunning) {
+      if (dprops.diskData?.length > 0) {
+        updateWozCrc(dprops.diskData)
+      }
       setDiskImageToLocalStorage(index, dprops.diskData)      
       dprops.diskHasChanges = false
       dprops.lastLocalFileWriteTime = Date.now()
@@ -694,9 +873,209 @@ const diskImageLocalStorageSync = (url: string, index: number) => {
   }, 3 * 1000)
 }
 
+const resolveDemoZooProductionDisks = async (prodId: string): Promise<string[]> => {
+  const resolvedUrls: string[] = []
+
+  // 1. Try JSON API first
+  try {
+    const apiRes = await fetchDemoZooResource(`https://demozoo.org/api/v1/productions/${prodId}/?format=json`)
+    if (apiRes && apiRes.ok) {
+      const prodData = await apiRes.json()
+      if (prodData && prodData.download_links && prodData.download_links.length > 0) {
+        for (const downloadUrl of chooseDemoZooDownloads(prodData.download_links)) {
+          const directUrls = await resolveExternalDownloadUrls(downloadUrl)
+          for (const resolvedUrl of (directUrls.length > 0 ? directUrls : [downloadUrl])) {
+            const normalizedUrl = normalizeDownloadUrl(resolvedUrl)
+            if (isDemoZooDiskUrl(normalizedUrl) && !resolvedUrls.includes(normalizedUrl)) {
+              resolvedUrls.push(normalizedUrl)
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to resolve DemoZoo production from API:", err)
+  }
+
+  // 2. Fallback to public web page scraping if API failed or was blocked (e.g. 403 without API key)
+  if (resolvedUrls.length === 0) {
+    try {
+      const pageRes = await fetchDemoZooResource(`https://demozoo.org/productions/${prodId}/`)
+      if (pageRes && pageRes.ok) {
+        const html = await pageRes.text()
+        const pageDisks = parseDemoZooProductionPageHtml(html, `https://demozoo.org/productions/${prodId}/`)
+        for (const candidate of pageDisks) {
+          const directUrls = await resolveExternalDownloadUrls(candidate)
+          for (const resolvedUrl of (directUrls.length > 0 ? directUrls : [candidate])) {
+            const normalizedUrl = normalizeDownloadUrl(resolvedUrl)
+            if (isDemoZooDiskUrl(normalizedUrl) && !resolvedUrls.includes(normalizedUrl)) {
+              resolvedUrls.push(normalizedUrl)
+            }
+          }
+        }
+      }
+    } catch (pageErr) {
+      console.warn("Failed to resolve DemoZoo production from public webpage:", pageErr)
+    }
+  }
+
+  return sortDemoZooDisks(resolvedUrls)
+}
+
+export const fetchDiskBufferAndNameFromURL = async (
+  rawUrl: string,
+  debug?: (message: string) => void,
+): Promise<{ buffer: ArrayBuffer; name: string; allDisks?: StandbyDisk[] } | null> => {
+  let url = rawUrl
+  if (url.startsWith(internetArchiveUrlProtocol)) {
+    const identifier = url.substring(internetArchiveUrlProtocol.length)
+    const [resolvedUrl] = await getDiskImageUrlFromIdentifier(identifier)
+    if (resolvedUrl) {
+      url = resolvedUrl.toString()
+    } else {
+      return null
+    }
+  }
+
+  url = normalizeDownloadUrl(url)
+
+  let alternateDownloadUrls: string[] = []
+  if (url.includes("demozoo.org/productions/") && !/\.(zip|dsk|po|woz|nib|2mg|img)$/i.test(url)) {
+    const match = url.match(/productions\/(\d+)/)
+    if (match) {
+      alternateDownloadUrls = await resolveDemoZooProductionDisks(match[1])
+      url = alternateDownloadUrls[0] || url
+    }
+  }
+
+  let name = ""
+  let buffer: ArrayBuffer | undefined
+  let response: Response | null = null
+
+  const initialUrls = [url, ...alternateDownloadUrls.filter(candidate => candidate !== url)]
+  const downloadUrlsToTry: string[] = []
+  for (const candidate of initialUrls) {
+    if (!downloadUrlsToTry.includes(candidate)) {
+      downloadUrlsToTry.push(candidate)
+    }
+    const iaCors = getArchiveOrgCorsUrl(candidate)
+    if (iaCors && !downloadUrlsToTry.includes(iaCors)) {
+      downloadUrlsToTry.push(iaCors)
+    }
+    const wayback = getWaybackRawUrl(candidate)
+    if (wayback && !downloadUrlsToTry.includes(wayback)) {
+      downloadUrlsToTry.push(wayback)
+    }
+  }
+
+  for (const candidateUrl of downloadUrlsToTry) {
+    url = candidateUrl
+    response = null
+
+    if (shouldAttemptDirectFetch(url)) {
+      try {
+        response = await fetch(url)
+        if (!response.ok) response = null
+      } catch {
+        response = null
+      }
+    }
+
+    if (!response || !response.ok) {
+      logFetchDebug("Direct fetch failed, trying corsfix proxy")
+      response = await fetchWithCorsProxy(url, debug)
+    }
+
+    if ((!response || !response.ok) && shouldUseCloudflareDiskProxy(url)) {
+      response = await fetchWithCloudflareDiskProxy(url)
+    }
+
+    if (response?.ok) break
+  }
+
+  if (!response || !response.ok) {
+    return null
+  }
+
+  try {
+    const fileBuffer = await response.arrayBuffer()
+    if (fileBuffer.byteLength < 1024) return null
+    const responseHead = new TextDecoder().decode(fileBuffer.slice(0, 256)).trimStart().toLowerCase()
+    if (responseHead.startsWith("<!doctype html") || responseHead.startsWith("<html") || responseHead.includes("just a moment")) {
+      return null
+    }
+
+    const contentDisposition = response.headers.get("content-disposition")
+    if (contentDisposition) {
+      const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
+      if (filenameMatch && filenameMatch[1]) {
+        name = filenameMatch[1].replace(/['"]/g, "")
+      }
+    }
+
+    if (name === "" && url.includes("00playable")) {
+      const urlParts = url.split("/")
+      if (urlParts.length >= 2) {
+        const possibleName = urlParts[urlParts.length - 2]
+        const suffixIndex = url.lastIndexOf(".")
+        if (suffixIndex >= 0) {
+          const suffix = url.substring(suffixIndex)
+          name = possibleName + suffix
+        }
+      }
+    }
+
+    let downloadPath = url.toLowerCase()
+    try {
+      downloadPath = new URL(url).pathname.toLowerCase()
+    } catch {
+      // Keep raw url
+    }
+
+    const decompressedList = await decompressAllDiskFiles(fileBuffer, name || downloadPath, [".woz", ".po", ".dsk", ".do", ".2mg", ".hdv", ".2meg", ".img", ".nib", ".bin", ".bas", ".a"])
+    let allDisks: StandbyDisk[] | undefined
+    if (decompressedList && decompressedList.length > 0) {
+      name = decompressedList[0].filename
+      buffer = decompressedList[0].buffer
+      if (decompressedList.length > 1) {
+        allDisks = decompressedList.map(item => ({
+          filename: getCleanDiskFilename(item.filename),
+          diskData: new Uint8Array(item.buffer),
+          diskHasChanges: false,
+          isWriteProtected: false,
+          writableFileHandle: null,
+          cloudData: null,
+          lastAppleWriteTime: -1,
+          lastLocalFileWriteTime: -1,
+        }))
+      }
+    } else {
+      if (name === "") {
+        const urlObj = new URL(url)
+        name = url
+        const hasSlash = urlObj.pathname.lastIndexOf("/")
+        if (hasSlash >= 0) {
+          name = urlObj.pathname.substring(hasSlash + 1)
+        }
+      }
+      buffer = fileBuffer
+    }
+
+    return { buffer, name: getCleanDiskFilename(name), allDisks }
+  } catch (err) {
+    console.error("fetchDiskBufferAndNameFromURL error:", err)
+    debug?.(`Error processing disk buffer from ${url}: ${err}`)
+    return null
+  }
+}
+
 const setDiskFromURL = async (url: string,
   updateDisplay?: UpdateDisplay, index = 0, cloudData?: CloudData, callback?: (buffer: ArrayBuffer | null) => void,
-  debug?: (message: string) => void, preserveDriveIndex = false, confirmed = false): Promise<boolean> => {
+  debug?: (message: string) => void, preserveDriveIndex = false, confirmed = false,
+  noReset = false, noBoot = false): Promise<boolean> => {
+  const parsed = separateUrlAndComment(url)
+  url = parsed.url
+  const comment = parsed.comment
   const requestedIndex = index
   const installDisk = (
     installIndex: number,
@@ -726,10 +1105,15 @@ const setDiskFromURL = async (url: string,
       writableFileHandle,
       helpFile,
       preserveInstallIndex,
+      confirmed,
+      noReset,
+      noBoot,
     ))
   }
   debug?.(`handleSetDiskFromURL(${url}) drive=${index}`)
   let helpFile = findCatalogHelpFile(url)
+  let name = ""
+  let buffer: ArrayBuffer | undefined
   // Check if it's a local file (not http/https URL and not Internet Archive)
   const isLocalFile = !url.startsWith("http://") && !url.startsWith("https://") && !url.startsWith(internetArchiveUrlProtocol)
   
@@ -744,23 +1128,25 @@ const setDiskFromURL = async (url: string,
         }
         const state = bypassCache ? null : getDiskImageFromLocalStorage()
         if (state) {
-          if (!preserveDriveIndex) resetAllDiskDrives()
-          index = await installDisk(state.index, state.data.buffer, url, null, null, helpFile)
+          if (!preserveDriveIndex && !noReset) resetAllDiskDrives()
+          const installed = await installDisk(state.index, state.data.buffer, url, null, null, helpFile)
+          if (typeof installed === "number") index = installed
         } else {
           const response = await fetch(url)
-          const buffer = await response.arrayBuffer()
+          const localBuffer = await response.arrayBuffer()
           const fileName = url.split("/").pop() || url        
-          if (!preserveDriveIndex) resetAllDiskDrives()
-          index = await installDisk(
+          if (!preserveDriveIndex && !noReset) resetAllDiskDrives()
+          const installed = await installDisk(
             index,
-            buffer,
+            localBuffer,
             fileName,
             cloudData || null,
             null,
             helpFile,
             preserveDriveIndex,
           )
-          setDiskImageToLocalStorage(index, new Uint8Array(buffer))
+          if (typeof installed === "number") index = installed
+          setDiskImageToLocalStorage(index, new Uint8Array(localBuffer))
         }
         diskImageLocalStorageSync(url, index)
         return true
@@ -772,23 +1158,54 @@ const setDiskFromURL = async (url: string,
     
     // Otherwise, try to find matching disk image in collections
     const match = findMatchingDiskImage(url)
-    if ( !match.diskUrl ) {
+    const matchUrl = getPrimaryDiskUrl(match)
+    if ( !matchUrl ) {
       return false
     }
-    url = match.diskUrl
+    url = matchUrl
     helpFile ??= match.helpFile
     if (!URL.canParse(url) && updateDisplay) {
-      handleSetDiskFromFile(url, updateDisplay, index, undefined, undefined, preserveDriveIndex)
-      return true
+      return await handleSetDiskFromFile(url, updateDisplay, index, undefined, undefined, preserveDriveIndex, noReset, noBoot)
     }
   }
 
-  // Resolve Internet Archive URL, if necessary
+  // Resolve DemoZoo production URL, if necessary
+  if (url.includes("demozoo.org/productions/") && !/\.(zip|dsk|po|woz|2mg|img)$/i.test(url)) {
+    const match = url.match(/productions\/(\d+)/)
+    if (match) {
+      const prodDisks = await resolveDemoZooProductionDisks(match[1])
+      if (prodDisks.length > 1 && !callback) {
+        return handleSetDiskSwapperFromURLs(
+          prodDisks,
+          updateDisplay,
+          index < 0 ? 0 : index,
+          preserveDriveIndex,
+          noReset,
+          noBoot,
+          cloudData,
+        )
+      }
+      if (prodDisks[0]) {
+        url = prodDisks[0]
+      }
+    }
+  }
   if (url.startsWith(internetArchiveUrlProtocol)) {
     const identifier = url.substring(internetArchiveUrlProtocol.length)
-    const [resolvedUrl, fileSize] = await getDiskImageUrlFromIdentifier(identifier)
+    const [resolvedUrl, fileSize, allUrls] = await getDiskImageUrlFromIdentifier(identifier)
 
     if (resolvedUrl) {
+      if (allUrls && allUrls.length > 1 && !callback) {
+        return handleSetDiskSwapperFromURLs(
+          allUrls.map(u => u.toString()),
+          updateDisplay,
+          index < 0 ? 2 : index,
+          preserveDriveIndex,
+          noReset,
+          noBoot,
+        )
+      }
+
       url = resolvedUrl.toString()
 
       const diskBookmarks = new DiskBookmarks()
@@ -812,214 +1229,35 @@ const setDiskFromURL = async (url: string,
     }
   }
 
-  // Normalize external URLs such as scene.org to direct archive downloads
-  url = normalizeDownloadUrl(url)
-
-  // Resolve DemoZoo production web page URL to direct download link if needed
-  let alternateDownloadUrls: string[] = []
-  if (url.includes("demozoo.org/productions/") && !/\.(zip|dsk|po|woz|nib|2mg|img)$/i.test(url)) {
-    const match = url.match(/productions\/(\d+)/)
-    if (match) {
-      const prodId = match[1]
-      try {
-        const apiRes = await fetchDemoZooResource(`https://demozoo.org/api/v1/productions/${prodId}/?format=json`)
-        if (apiRes && apiRes.ok) {
-          const prodData = await apiRes.json()
-          if (prodData && prodData.download_links && prodData.download_links.length > 0) {
-            const resolvedUrls: string[] = []
-            for (const downloadUrl of chooseDemoZooDownloads(prodData.download_links)) {
-              const resolvedUrl = await findDirectDownloadOnExternalPage(downloadUrl) || downloadUrl
-              const normalizedUrl = normalizeDownloadUrl(resolvedUrl)
-              if (!resolvedUrls.includes(normalizedUrl)) {
-                resolvedUrls.push(normalizedUrl)
-              }
-            }
-            alternateDownloadUrls = resolvedUrls
-            url = alternateDownloadUrls[0] || url
-          }
-        }
-      } catch (err) {
-        console.warn("Failed to resolve DemoZoo production download link:", err)
-      }
-    }
-  }
-
-  // Download the file from the fragment URL
-  let name = ""
-  let buffer
-  let response: Response | null = null
-
-  if (!callback) {
-    showGlobalProgressModal(true, "Downloading disk")
-  } else {
-    // showGlobalProgressModal(true)
-  }
-
-  // Try a direct fetch first for every host (GitHub, Internet Archive, etc.).
-  // Most sources (including archive.org/download) send permissive CORS headers,
-  // so the direct fetch succeeds and never burdens the CORS proxy. We only fall
-  // back to the proxy when a direct fetch genuinely fails (truly CORS-blocked
-  // hosts). The disk VTOC check that drives these downloads is serialized one
-  // request at a time, so this does not flood Internet Archive with parallel
-  // requests (the cause of the earlier 429 throttling).
-  const initialUrls = [url, ...alternateDownloadUrls.filter(candidate => candidate !== url)]
-  const downloadUrlsToTry: string[] = []
-  for (const candidate of initialUrls) {
-    if (!downloadUrlsToTry.includes(candidate)) {
-      downloadUrlsToTry.push(candidate)
-    }
-    const iaCors = getArchiveOrgCorsUrl(candidate)
-    if (iaCors && !downloadUrlsToTry.includes(iaCors)) {
-      downloadUrlsToTry.push(iaCors)
-    }
-    const wayback = getWaybackRawUrl(candidate)
-    if (wayback && !downloadUrlsToTry.includes(wayback)) {
-      downloadUrlsToTry.push(wayback)
-    }
-  }
-  for (const candidateUrl of downloadUrlsToTry) {
-    url = candidateUrl
-    response = null
-
-    if (shouldAttemptDirectFetch(url)) {
-      try {
-        response = await fetch(url)
-        if (!response.ok) {
-          response = null
-        }
-      } catch {
-        // Expected for many cross-origin sources; fall through to proxy chain.
-        response = null
-      }
-    }
-
-    if (!response || !response.ok) {
-      logFetchDebug("Direct fetch failed, trying corsfix proxy")
-      response = await fetchWithCorsProxy(url, debug)
-    }
-
-    if ((!response || !response.ok) && shouldUseCloudflareDiskProxy(url)) {
-      response = await fetchWithCloudflareDiskProxy(url)
-    }
-
-    if (response?.ok) break
-  }
-    if (!response || !response.ok) {
-      console.error(`❌ All fetch methods failed for: ${url}`)
-      if (!callback) {
-        showGlobalProgressModal(false)
-      }
-      
-      // Show user-friendly error message
-      const isGitHub = url.includes("github.com")
-      const isExternal = !url.includes(window.location.hostname)
-      
-      let errorMessage = `Unable to download disk image:\n"${url}".\n`
-      
-      if (isGitHub) {
-        errorMessage += "Some GitHub files cannot be loaded directly in browsers due to cross-origin restrictions.\n"
-        errorMessage += "Options:\n"
-        errorMessage += "1. Download the file manually and use 'Load from File'\n"
-        errorMessage += "2. Use the desktop/Electron version of this emulator"
-      } else if (isExternal) {
-        errorMessage += "This external URL cannot be loaded due to browser cross-origin restrictions.\n"
-        errorMessage += "Options:\n"
-        errorMessage += "1. Download the file manually and use 'Load from File'\n"
-        errorMessage += "2. Use the Desktop version for unrestricted downloads"
-      } else {
-        errorMessage += "The file could not be downloaded. Please check your internet connection and try again."
-      }
-      
-      if (callback) {
-        callback(null)
-        return false
-      } else {
-        console.warn(errorMessage)
-        return false
-      }
-    }
-
   try {
-    const fileBuffer = await response.arrayBuffer()
-    debug?.(`Downloaded ${fileBuffer.byteLength} bytes from ${url}`)
-
-    // Do not pass a Corsfix error/challenge page to the disk parser merely
-    // because the proxy returned HTTP 200.
-    if (fileBuffer.byteLength < 1024) {
-      throw new Error(`Downloaded response is too small to be a disk image (${fileBuffer.byteLength} bytes)`)
-    }
-    const responseHead = new TextDecoder().decode(fileBuffer.slice(0, 256)).trimStart().toLowerCase()
-    if (responseHead.startsWith("<!doctype html") || responseHead.startsWith("<html") || responseHead.includes("just a moment")) {
-      throw new Error("Downloaded response is an HTML error page, not a disk image")
+    if (!callback) {
+      showGlobalProgressModal(true, "Downloading disk")
     }
 
-    // Try to get filename from Content-Disposition header first
-    const contentDisposition = response.headers.get("content-disposition")
-    if (contentDisposition) {
-      const filenameMatch = contentDisposition.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/)
-      if (filenameMatch && filenameMatch[1]) {
-        name = filenameMatch[1].replace(/['"]/g, "")
-      }
+  const fetched = await fetchDiskBufferAndNameFromURL(url, debug)
+  if (!fetched) {
+    if (!callback) {
+      showGlobalProgressModal(false)
     }
+    if (callback) {
+      callback(null)
+    }
+    return false
+  }
 
-    // Hack for Internet Archive downloads which have the format:
-    // https://archive.org/download/Muppetville4amCrack/00playable.dsk
-    // Extract the actual game name from the URL.
-    if (name === "" && url.includes("00playable")) {
-      // Take the second-to-last part of the URL, and tack on the file suffix
-      const urlParts = url.split("/")
-      if (urlParts.length >= 2) {
-        const possibleName = urlParts[urlParts.length - 2]
-        const suffixIndex = url.lastIndexOf(".")
-        if (suffixIndex >= 0) {
-          const suffix = url.substring(suffixIndex)
-          name = possibleName + suffix
-        }
-      }
-    }
-
-    let downloadPath = url.toLowerCase()
-    try {
-      downloadPath = new URL(url).pathname.toLowerCase()
-    } catch {
-      // Keep the raw URL for local/blob-style inputs.
-    }
-    if (downloadPath.endsWith(".zip")) {
-      try {
-        const unzipped = fflate.unzipSync(new Uint8Array(fileBuffer))
-        for (const fileName of Object.keys(unzipped)) {
-          const fileExtension = fileName.substring(fileName.lastIndexOf(".")).toLowerCase()
-          if (FILE_SUFFIXES_DISK.includes(fileExtension) && unzipped[fileName].length > 1024) {
-            name = fileName
-            buffer = unzipped[fileName].buffer
-            break
-          }
-        }
-      } catch (err) {
-        console.error("Failed to unzip disk image:", err)
-      }
-    } else {
-      if (name === "") {
-        const urlObj = new URL(url)
-        name = url
-        const hasSlash = urlObj.pathname.lastIndexOf("/")
-        if (hasSlash >= 0) {
-          name = urlObj.pathname.substring(hasSlash + 1)
-        }
-      }
-      buffer = fileBuffer
-    }
+  name = fetched.name
+  buffer = fetched.buffer
 
     if (buffer) {
       if (callback) {
         callback(buffer)
       } else {
-        if (!preserveDriveIndex) {
+        if (!preserveDriveIndex && !noReset) {
           // If we are loading from a URL, reset all drives. Fixes issue#186
           resetAllDiskDrives()
         }
         
-        await installDisk(
+        const installed = await installDisk(
           index,
           buffer,
           name,
@@ -1028,9 +1266,24 @@ const setDiskFromURL = async (url: string,
           helpFile,
           preserveDriveIndex,
         )
+        if (typeof installed === "number") index = installed
+        if (fetched.allDisks && fetched.allDisks.length > 1) {
+          if (cloudData && fetched.allDisks[0]) {
+            fetched.allDisks[0].cloudData = cloudData
+          }
+          setStandbyDisks(index, fetched.allDisks, 0)
+          updateDisplay?.()
+          passSetDriveProps(driveProps[index])
+        } else if (comment) {
+          const currentStandby = getStandbyDisks(index)
+          if (currentStandby[0]) {
+            currentStandby[0].comment = comment
+          }
+          updateDisplay?.()
+        }
         // Loading a disk from a remote URL must boot it even when the
         // emulator was already paused or had previously run a program.
-        if (!preserveDriveIndex) passSetRunMode(RUN_MODE.NEED_BOOT)
+        if (!preserveDriveIndex && !noBoot) passSetRunMode(RUN_MODE.NEED_BOOT)
         debug?.(`Disk buffer installed as ${name}; NEED_BOOT sent`)
       }
     } else {
@@ -1059,8 +1312,56 @@ const setDiskFromURL = async (url: string,
 
 export const handleSetDiskFromURL = async (url: string,
   updateDisplay?: UpdateDisplay, index = 0, cloudData?: CloudData, callback?: (buffer: ArrayBuffer | null) => void,
-  debug?: (message: string) => void, preserveDriveIndex = false): Promise<boolean> => {
-  return setDiskFromURL(url, updateDisplay, index, cloudData, callback, debug, preserveDriveIndex)
+  debug?: (message: string) => void, preserveDriveIndex = false, confirmed = false,
+  noReset = false, noBoot = false): Promise<boolean> => {
+  if (url.startsWith(internetArchiveUrlProtocol)) {
+    const identifier = url.substring(internetArchiveUrlProtocol.length)
+    const [resolvedUrl, fileSize, allUrls] = await getDiskImageUrlFromIdentifier(identifier)
+
+    if (resolvedUrl) {
+      if (allUrls && allUrls.length > 1 && !callback) {
+        return handleSetDiskSwapperFromURLs(
+          allUrls.map(u => u.toString()),
+          updateDisplay,
+          index < 0 ? 2 : index,
+          preserveDriveIndex,
+          noReset,
+          noBoot,
+        )
+      }
+
+      url = resolvedUrl.toString()
+
+      const diskBookmarks = new DiskBookmarks()
+      const bookmark = diskBookmarks.get(identifier)
+      if (bookmark) {
+        bookmark.diskUrl = resolvedUrl.toString()
+        if (bookmark.cloudData) {
+          bookmark.cloudData.fileSize = fileSize
+        }
+        diskBookmarks.set(bookmark)
+      }
+    } else {
+      console.warn(`Unable to resolve Internet Archive disk image for "${identifier}"`)
+      if (callback) {
+        callback(null)
+      }
+      return false
+    }
+  }
+
+  const swapperUrls = parseDiskSwapperParam(url)
+  if (swapperUrls.length > 1) {
+    return handleSetDiskSwapperFromURLs(
+      swapperUrls,
+      updateDisplay,
+      index < 0 ? 2 : index,
+      preserveDriveIndex,
+      noReset,
+      noBoot,
+    )
+  }
+  return setDiskFromURL(url, updateDisplay, index, cloudData, callback, debug, preserveDriveIndex, confirmed, noReset, noBoot)
 }
 
 export const requestSetDiskFromURL = async (url: string,
@@ -1068,6 +1369,82 @@ export const requestSetDiskFromURL = async (url: string,
   debug?: (message: string) => void): Promise<number | false> => {
   const mounted = await setDiskFromURL(url, updateDisplay, index, cloudData, callback, debug, true, true)
   return mounted ? index : false
+}
+
+export const handleSetDiskSwapperFromURLs = async (
+  urls: string[],
+  updateDisplay?: UpdateDisplay,
+  index = 2,
+  preserveDriveIndex = true,
+  noReset = false,
+  noBoot = false,
+  cloudData?: CloudData,
+): Promise<boolean> => {
+  if (urls.length === 0) return false
+  const resolvedUrls = resolveDiskSwapperUrls(urls)
+  const firstParsed = separateUrlAndComment(resolvedUrls[0])
+
+  const success = await handleSetDiskFromURL(
+    firstParsed.url,
+    updateDisplay,
+    index,
+    cloudData,
+    undefined,
+    undefined,
+    preserveDriveIndex,
+    false,
+    noReset,
+    noBoot,
+  )
+  if (!success) return false
+
+  const activeDisk: StandbyDisk = {
+    filename: getCleanDiskFilename(driveProps[index].filename),
+    diskData: driveProps[index].diskData,
+    diskHasChanges: driveProps[index].diskHasChanges,
+    isWriteProtected: driveProps[index].isWriteProtected,
+    writableFileHandle: driveProps[index].writableFileHandle,
+    cloudData: driveProps[index].cloudData,
+    lastAppleWriteTime: driveProps[index].lastAppleWriteTime,
+    lastLocalFileWriteTime: driveProps[index].lastLocalFileWriteTime,
+    comment: firstParsed.comment,
+  }
+
+  const allDisks: StandbyDisk[] = [activeDisk]
+
+  for (let i = 1; i < resolvedUrls.length; i++) {
+    const { url: rawUrl, comment } = separateUrlAndComment(resolvedUrls[i])
+    let resolvedUrl = rawUrl
+    const isLocalFile = !rawUrl.startsWith("http://") && !rawUrl.startsWith("https://") && !rawUrl.startsWith(internetArchiveUrlProtocol)
+    if (isLocalFile && !rawUrl.startsWith("/") && !rawUrl.startsWith("file://")) {
+      const match = findMatchingDiskImage(rawUrl)
+      const matchUrl = getPrimaryDiskUrl(match)
+      if (matchUrl) {
+        resolvedUrl = matchUrl
+      }
+      if (!URL.canParse(resolvedUrl) && !resolvedUrl.startsWith("/")) {
+        resolvedUrl = "disks/" + resolvedUrl
+      }
+    }
+    const fetched = await fetchDiskBufferAndNameFromURL(resolvedUrl)
+    if (fetched) {
+      allDisks.push({
+        filename: getCleanDiskFilename(fetched.name),
+        diskData: new Uint8Array(fetched.buffer),
+        diskHasChanges: false,
+        isWriteProtected: false,
+        writableFileHandle: null,
+        cloudData: null,
+        lastAppleWriteTime: -1,
+        lastLocalFileWriteTime: -1,
+        comment,
+      })
+    }
+  }
+
+  setStandbyDisks(index, allDisks, 0)
+  updateDisplay?.()
+  return true
 }
 
 export const prepWritableFile = async (index: number, writableFileHandle: WritableFileHandle) => {
@@ -1109,7 +1486,7 @@ export const prepWritableFile = async (index: number, writableFileHandle: Writab
   return () => clearInterval(timer)
 }
 
-const resetAllDiskDrives = () => {
+export const resetAllDiskDrives = () => {
   for (let i=0; i < MAX_DRIVES; i++) {
     setDiskData(i, new Uint8Array(), "", null, null, -1)
   }
@@ -1136,38 +1513,55 @@ export const handleSetDiskFromFile = async (disk: string,
   updateDisplay: UpdateDisplay | null, driveIndex: number = -1,
   callback?: (buffer: ArrayBuffer | null) => void,
   onLoadSuccess?: () => void,
-  preserveDriveIndex = false) => {
+  preserveDriveIndex = false,
+  noReset = false,
+  noBoot = false): Promise<boolean> => {
   clearDialogMessageContext()
   const configuredHelpFile = findCatalogHelpFile(disk)
   let data: ArrayBuffer
   try {
     const res = await fetch("disks/" + disk)
+    if (!res.ok) {
+      if (callback) {
+        callback(null)
+      }
+      return false
+    }
     data = await res.arrayBuffer()
+    const unzipped = await decompressSingleFile(data, disk, [".dsk", ".woz", ".do", ".po", ".2mg", ".hdv", ".2meg", ".img", ".nib", ".bin", ".bas", ".a"])
+    if (unzipped) {
+      disk = unzipped.filename
+      data = unzipped.buffer
+    }
   } catch {
     if (callback) {
       callback(null)
     } else {
       // $TODO: Add error handling
     }
-    return
+    return false
   }
 
   if (callback) {
     callback(data)
+    return true
   } else {
     const defaultDriveIndex = getDefaultDiskDriveIndex(disk, data.byteLength)
-    let needsBoot = preserveDriveIndex
-      ? (driveIndex === 0 || driveIndex === 2)
-      : handleGetRunMode() === RUN_MODE.IDLE
-    
     if (driveIndex < 0) {
+      driveIndex = defaultDriveIndex
+    }
+    let needsBoot = !noBoot && (preserveDriveIndex
+      ? (driveIndex === 0 || driveIndex === 2)
+      : handleGetRunMode() === RUN_MODE.IDLE)
+    
+    if (!noReset && driveIndex < 0) {
       needsBoot = true
     }
     
-    if (needsBoot) {
+    if (!noReset && needsBoot) {
       if (preserveDriveIndex) passSetRunMode(RUN_MODE.IDLE)
       resetAllDiskDrives()
-      if (!preserveDriveIndex || driveIndex < 0) {
+      if (!preserveDriveIndex) {
         driveIndex = defaultDriveIndex
       }
     }
@@ -1187,13 +1581,14 @@ export const handleSetDiskFromFile = async (disk: string,
       preserveDriveIndex,
     )
 
-    if (needsBoot) {
+    if (!noBoot && needsBoot) {
       setTimeout(() => {
         if (!hasDialogMessageContext()) {
           passSetRunMode(RUN_MODE.NEED_BOOT)
         }}, 10)
     }
     onLoadSuccess?.()
+    return true
   }
 }
 
@@ -1210,8 +1605,11 @@ export const handleSaveWritableFile = async (index: number, writableFileHandle: 
 
   if (writableFileHandle) {
     try {
+      if (dprops.diskData?.length > 0) {
+        updateWozCrc(dprops.diskData)
+      }
       console.log(`🔨 Creating blob from disk data: ${dprops.filename}, ${dprops.diskData.length} bytes`)
-      const blob = getBlobFromDiskData(dprops.diskData, dprops.filename)
+      const blob = getDiskBlobForSync(dprops.diskData, dprops.filename, dprops.hardDrive)
       console.log("📝 Calling createWritable()...")
       const writable = await writableFileHandle.createWritable()
 

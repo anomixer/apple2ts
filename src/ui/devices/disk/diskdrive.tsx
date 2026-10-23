@@ -5,23 +5,30 @@ import {
   handleSaveWritableFile,
   prepWritableFile,
   doSetUIDriveProps,
-  handleSetDiskFromFile
+  handleSetDiskFromFile,
+  getStandbyDisks,
+  getStandbyActiveIndex,
+  swapStandbyDisk,
+  removeStandbyDisk,
+  syncActiveDiskToStandby,
+  setStandbyDisks,
+  type StandbyDisk,
 } from "./driveprops"
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome"
 import {
   faCloud, faDownload, faEject, faFloppyDisk, faFolderOpen,
-  faGlobe,
+  faGlobe, faLayerGroup,
   faLock, faPause, faRotate, faStar, faSync
 } from "@fortawesome/free-solid-svg-icons"
 import { OneDriveCloudDrive } from "./onedriveclouddrive"
 import { GoogleDrive } from "./googledrive"
 import { setDiskImageToLocalStorage } from "../../localstorage"
 import React from "react"
-import { CLOUD_SYNC, crc32, FILE_SUFFIXES_DISK, uint32toBytes } from "../../../common/utility"
+import { CLOUD_SYNC, FILE_SUFFIXES_ALL, getCleanDiskFilename, isWozData, getBlobFromDiskData, getDiskBlobForSync, RUN_MODE } from "../../../common/utility"
+import { decompressAllDiskFiles, compareDiskFilenames } from "../../../common/zip_utils"
 import PopupMenu from "../../controls/popupmenu"
 import { svgDemoZooLogo } from "../../img/icon_demozoo"
-import { passSetDriveProps, handleGetSlotConfig } from "../../main2worker"
-import { handleGetMachineName } from "../../main2worker"
+import { passSetDriveProps, handleGetSlotConfig, handleGetMachineName, handleGetRunMode } from "../../main2worker"
 import InternetArchivePopup from "./internetarchivedialog"
 import DemoZooDialog from "./demozoodialog"
 
@@ -30,41 +37,117 @@ import { DiskBookmarks } from "./diskbookmarks"
 import { canFavoriteDisk, isDiskFavorite, setDiskFavorite } from "./diskfavorites"
 import { isFileSystemApiSupported } from "../../ui_utilities"
 import { useTranslation } from "../../../i18n/useTranslation"
-import { convertwoz2dsk } from "../../../common/convertwoz2dsk"
 import { faInternetArchive } from "@fortawesome/free-brands-svg-icons"
+import { RestoreSaveState } from "../../savestate"
+import { DISK_LOAD_SUCCESS_EVENT } from "../../ui_settings"
 
 export const DISK_DRIVE_LABELS = ["S7,D1", "S7,D2", "S6,D1", "S6,D2", "S5,D1", "S5,D2"]
 
 export const loadDiskFromCloudDrive = async (cloudDrive: CloudProvider, driveIndex: number) => {
-  const result = await cloudDrive.download(FILE_SUFFIXES_DISK)
+  const result = await cloudDrive.download(FILE_SUFFIXES_ALL)
   if (!result) return false
 
-  const [blob, cloudData] = result
-  const buffer = await new Response(blob).arrayBuffer()
-  handleSetDiskOrFileFromBuffer(driveIndex, buffer, cloudData.fileName, cloudData, null)
+  const rawItems: Array<[Blob, CloudData]> = Array.isArray(result)
+    ? (Array.isArray(result[0]) ? (result as Array<[Blob, CloudData]>) : [result as [Blob, CloudData]])
+    : [result]
+
+  if (rawItems.length === 1) {
+    const [blob, cloudData] = rawItems[0]
+    const ext = cloudData.fileName.substring(cloudData.fileName.lastIndexOf(".")).toLowerCase()
+    if (ext === ".a2ts") {
+      const text = typeof blob.text === "function"
+        ? await blob.text()
+        : await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onload = () => resolve(reader.result as string)
+            reader.onerror = () => reject(reader.error)
+            reader.readAsText(blob)
+          })
+      RestoreSaveState(text)
+      window.dispatchEvent(new CustomEvent(DISK_LOAD_SUCCESS_EVENT))
+      return true
+    }
+  }
+
+  const processedList: StandbyDisk[] = []
+  for (const [blob, cloudData] of rawItems) {
+    const buffer = typeof blob.arrayBuffer === "function"
+      ? await blob.arrayBuffer()
+      : await new Promise<ArrayBuffer>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(reader.result as ArrayBuffer)
+          reader.onerror = () => reject(reader.error)
+          reader.readAsArrayBuffer(blob)
+        })
+    const decompressedList = await decompressAllDiskFiles(
+      buffer,
+      cloudData.fileName,
+      [".woz", ".po", ".dsk", ".do", ".2mg", ".hdv", ".2meg", ".img", ".nib", ".bin", ".bas", ".a"]
+    )
+    if (decompressedList && decompressedList.length > 0) {
+      const archiveCloudData: CloudData = {
+        ...cloudData,
+        syncStatus: CLOUD_SYNC.INACTIVE,
+        isArchive: true,
+      }
+      for (const item of decompressedList) {
+        processedList.push({
+          filename: getCleanDiskFilename(item.filename),
+          diskData: new Uint8Array(item.buffer),
+          diskHasChanges: false,
+          isWriteProtected: false,
+          writableFileHandle: null,
+          cloudData: archiveCloudData,
+          lastAppleWriteTime: -1,
+          lastLocalFileWriteTime: -1,
+        })
+      }
+    } else {
+      processedList.push({
+        filename: getCleanDiskFilename(cloudData.fileName),
+        diskData: new Uint8Array(buffer),
+        diskHasChanges: false,
+        isWriteProtected: false,
+        writableFileHandle: null,
+        cloudData,
+        lastAppleWriteTime: -1,
+        lastLocalFileWriteTime: -1,
+      })
+    }
+  }
+
+  if (processedList.length === 0) return false
+
+  processedList.sort((a, b) => compareDiskFilenames(a.filename, b.filename))
+
+  const first = processedList[0]
+  const isIdle = handleGetRunMode() === RUN_MODE.IDLE
+  const newIndex = handleSetDiskOrFileFromBuffer(
+    driveIndex,
+    first.diskData.buffer as ArrayBuffer,
+    first.filename,
+    first.cloudData,
+    null,
+    undefined,
+    true, // preserveDriveIndex: keep user's chosen drive!
+    false, // confirmed
+    true, // noReset
+    !isIdle, // noBoot: if already running, DO NOT reboot! If idle, boot!
+  )
+  setStandbyDisks(newIndex, processedList, 0)
+  window.dispatchEvent(new CustomEvent(DISK_LOAD_SUCCESS_EVENT))
   return true
 }
 
-export const getBlobFromDiskData = (diskData: Uint8Array, filename: string): Blob => {
-  // Only WOZ requires a checksum. Other formats should be ready to download.
-  if (filename.toLowerCase().endsWith(".woz")) {
-    const crc = crc32(diskData, 12)
-    diskData.set(uint32toBytes(crc), 8)
-  }
-  return new Blob([diskData] as BlobPart[], { type: "application/octet-stream" })
-}
+export { getBlobFromDiskData }
 
 const downloadDisk = (diskData: Uint8Array, filename: string, isHardDrive: boolean, downloadWoz: boolean) => {
   const fileExt = filename.substring(filename.lastIndexOf(".")).toLowerCase()
   const isFloppy = !isHardDrive && [".dsk", ".do", ".po"].includes(fileExt)
-  if (isFloppy) {
-    if (downloadWoz) {
-      filename = filename.substring(0, filename.lastIndexOf(".")) + ".woz"
-    } else {
-      diskData = convertwoz2dsk(diskData, fileExt === ".po")
-    }
+  if (isFloppy && downloadWoz) {
+    filename = filename.substring(0, filename.lastIndexOf(".")) + ".woz"
   }
-  const blob = getBlobFromDiskData(diskData, filename)
+  const blob = getDiskBlobForSync(diskData, filename, isHardDrive)
   const link = document.createElement("a")
   const url = URL.createObjectURL(blob)
   link.setAttribute("href", url)
@@ -112,30 +195,49 @@ export const saveDiskToDevice = async (index: number) => {
   }
   passSetDriveProps(nextProps)
   await prepWritableFile(index, writableFileHandle)
+  await handleSaveWritableFile(index, writableFileHandle)
+  nextProps.diskHasChanges = false
+  nextProps.lastLocalFileWriteTime = Date.now()
+  passSetDriveProps(nextProps)
 }
 
 type DiskDriveProps = {
   index: number,
   renderCount: number,
-  setShowFileOpenDialog: (show: boolean, index: number) => void
+  setShowFileOpenDialog: (show: boolean, index: number, append?: boolean) => void,
+  updateDisplay?: UpdateDisplay,
 }
 
 const DiskDrive = (props: DiskDriveProps) => {
-  const { t } = useTranslation()
+  const { t, language } = useTranslation()
+  const isEnglish = language.startsWith("en")
   const dprops = handleGetDriveProps(props.index)
   const diskBookmarks = new DiskBookmarks()
 
   const [internetDialogDialogOpen, setInternetDialogDialogOpen] = useState<boolean>(false)
   const [demoZooDialogOpen, setDemoZooDialogOpen] = useState<boolean>(false)
   const [popupLocation, setPopupLocation] = useState<[number, number]>()
+  const [swapperPopupLocation, setSwapperPopupLocation] = useState<[number, number]>()
+  const [, setStandbyRefresh] = useState(0)
+
+  const triggerStandbyUpdate = () => {
+    setStandbyRefresh(v => v + 1)
+    props.updateDisplay?.()
+  }
+
+  const standbyDisks = getStandbyDisks(props.index)
+  const validStandbyDisks = standbyDisks.filter(d => Boolean(d && d.filename && d.filename.trim()))
+  const hasMultipleDisks = Boolean(dprops.filename) && validStandbyDisks.length >= 2
+  const standbyActiveIndex = getStandbyActiveIndex(props.index)
 
   const ejectDisk = (index: number) => {
     handleSetDiskData(index, new Uint8Array(), "", null, null, -1)
     setDiskImageToLocalStorage(index, null)
+    triggerStandbyUpdate()
   }
 
   const getDriveFileName = () => {
-    if (dprops.cloudData) {
+    if (dprops.cloudData && !dprops.cloudData.itemId) {
       if (dprops.filename != dprops.cloudData.fileName) {
         const dpropsTmp: DriveProps = { ...dprops }
         if (dpropsTmp.cloudData) {
@@ -144,11 +246,13 @@ const DiskDrive = (props: DiskDriveProps) => {
         }
       }
     }
-    return dprops.filename
+    return dprops.cloudData?.fileName || dprops.filename
   }
 
   const updateCloudDrive = async (cloudProvider: CloudProvider) => {
-    const blob = getBlobFromDiskData(dprops.diskData, getDriveFileName())
+    if (!dprops.cloudData || dprops.cloudData.isArchive) return
+    const filename = getDriveFileName()
+    const blob = getDiskBlobForSync(dprops.diskData, filename, dprops.hardDrive)
     if (dprops.cloudData) {
       const success = await cloudProvider.sync(blob, dprops.cloudData)
       if (success) {
@@ -166,6 +270,7 @@ const DiskDrive = (props: DiskDriveProps) => {
     if (!dprops.cloudData) return
 
     const timer = setInterval(() => {
+      if (dprops.cloudData?.isArchive) return
       if (dprops.cloudData?.syncStatus == CLOUD_SYNC.ACTIVE && dprops.diskHasChanges) {
         const dpropsTmp: DriveProps = { ...dprops }
         if (dpropsTmp.cloudData) {
@@ -196,7 +301,7 @@ const DiskDrive = (props: DiskDriveProps) => {
   dprops.diskHasChanges])
 
   const cloudDriveStatusClassName = useMemo(() => {
-    if (!dprops.cloudData) return "disk-clouddrive-inactive"
+    if (!dprops.cloudData || dprops.cloudData.isArchive) return "disk-clouddrive-inactive"
 
     const syncStatus = dprops.cloudData?.syncStatus
 
@@ -208,7 +313,7 @@ const DiskDrive = (props: DiskDriveProps) => {
       return `disk-clouddrive-${CLOUD_SYNC[syncStatus].toLowerCase()}`
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dprops.cloudData, dprops.cloudData?.syncStatus, dprops.cloudData?.syncInterval])
+  }, [dprops.cloudData, dprops.cloudData?.syncStatus, dprops.cloudData?.syncInterval, dprops.cloudData?.isArchive])
 
   const diskDriveLabel = useMemo(() => {
     let label = (dprops.filename + (dprops.diskHasChanges ? ` (${t("disk.modified")})` : ""))
@@ -221,7 +326,8 @@ const DiskDrive = (props: DiskDriveProps) => {
   }, [dprops.cloudData, dprops.diskHasChanges, dprops.filename, t])
 
   const saveDiskToCloud = async (cloudProvider: CloudProvider) => {
-    const blob = getBlobFromDiskData(dprops.diskData, getDriveFileName())
+    const filename = getDriveFileName()
+    const blob = getDiskBlobForSync(dprops.diskData, filename, dprops.hardDrive)
     const dpropsTmp: DriveProps = { ...dprops }
     dpropsTmp.cloudData = await cloudProvider.upload(dprops.filename, blob)
     if (dpropsTmp.cloudData) {
@@ -257,6 +363,11 @@ const DiskDrive = (props: DiskDriveProps) => {
       dpropsTmp.lastLocalFileWriteTime = -1
       passSetDriveProps(dpropsTmp)
       prepWritableFile(index, writableFileHandle)
+      await handleSaveWritableFile(index, writableFileHandle)
+      dpropsTmp.diskHasChanges = false
+      // eslint-disable-next-line react-hooks/purity
+      dpropsTmp.lastLocalFileWriteTime = Date.now()
+      passSetDriveProps(dpropsTmp)
     }
   }
 
@@ -395,6 +506,18 @@ const DiskDrive = (props: DiskDriveProps) => {
               if (!isSlotDisabled) handleMenuClick(event)
             }}
             onClick={(event) => { if (!isSlotDisabled) handleMenuClick(event) }} />
+          {hasMultipleDisks && (
+            <span
+              className="disk-multidisk-badge"
+              title={t("disk.standbyDisks")}
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                setSwapperPopupLocation([event.clientX, event.clientY])
+              }}>
+              <FontAwesomeIcon icon={faLayerGroup} />
+            </span>
+          )}
           <FontAwesomeIcon
             icon={cloudDriveStatusClassName === "disk-clouddrive-paused" ? faPause : faRotate}
             className={`fa-fw disk-clouddrive ${cloudDriveStatusClassName}`}>
@@ -420,9 +543,15 @@ const DiskDrive = (props: DiskDriveProps) => {
         menuItems={[[
           // Disk load
           {
-            label: t("disk.loadDisk"),
+            label: isEnglish ? "Load Disk(s)..." : t("disk.loadDisk"),
             icon: faFolderOpen,
-            onClick: () => { props.setShowFileOpenDialog(true, props.index) }
+            onClick: () => { props.setShowFileOpenDialog(true, props.index, false) }
+          },
+          {
+            label: t("disk.loadAdditionalDisks"),
+            icon: faLayerGroup,
+            isDisabled: dprops.filename.length === 0,
+            onClick: () => { props.setShowFileOpenDialog(true, props.index, true) }
           },
           {
             label: t("disk.loadDiskFrom"),
@@ -463,12 +592,19 @@ const DiskDrive = (props: DiskDriveProps) => {
             label: "-",
           },
           {
-            label: t("disk.downloadDisk"),
+            label: (isEnglish && hasMultipleDisks) ? "Download Disk(s)..." : `${t("disk.downloadDisk")}...`,
             icon: faDownload,
             isDisabled: dprops.filename.length === 0,
             onClick: () => {
               if (dprops.diskData.length > 0) {
-                downloadDisk(dprops.diskData, filename, dprops.hardDrive, false)
+                syncActiveDiskToStandby(props.index)
+                const currentStandby = getStandbyDisks(props.index).filter(d => Boolean(d && d.filename && d.filename.trim()))
+                const disksToDownload = hasMultipleDisks ? currentStandby : [{ filename, diskData: dprops.diskData }]
+                disksToDownload.forEach((d, i) => {
+                  setTimeout(() => {
+                    downloadDisk(d.diskData, d.filename, dprops.hardDrive, false)
+                  }, i * 200)
+                })
                 const dpropsTmp: DriveProps = { ...dprops }
                 dpropsTmp.diskHasChanges = false
                 doSetUIDriveProps(dpropsTmp)
@@ -494,7 +630,17 @@ const DiskDrive = (props: DiskDriveProps) => {
             isDisabled: dprops.filename.length === 0,
             onClick: () => {
               if (dprops.diskData.length > 0) {
-                downloadDisk(dprops.diskData, filename, dprops.hardDrive, false)
+                if (hasMultipleDisks) {
+                  syncActiveDiskToStandby(props.index)
+                  const currentStandby = getStandbyDisks(props.index).filter(d => Boolean(d && d.filename && d.filename.trim()))
+                  currentStandby.forEach((d, i) => {
+                    setTimeout(() => {
+                      downloadDisk(d.diskData, d.filename, dprops.hardDrive, false)
+                    }, i * 200)
+                  })
+                } else {
+                  downloadDisk(dprops.diskData, filename, dprops.hardDrive, false)
+                }
                 const dpropsTmp: DriveProps = { ...dprops }
                 dpropsTmp.diskHasChanges = false
                 doSetUIDriveProps(dpropsTmp)
@@ -503,22 +649,79 @@ const DiskDrive = (props: DiskDriveProps) => {
             }
           },
           {
-            label: t("disk.ejectDisk"),
+            label: (isEnglish && hasMultipleDisks) ? "Eject Disk(s)" : t("disk.ejectDisk"),
             icon: faEject,
             isDisabled: dprops.filename.length === 0,
-            onClick: () => {
-              ejectDisk(props.index)
-            }
+            subMenu: hasMultipleDisks
+              ? [
+                  {
+                    label: t("disk.ejectAllDisks"),
+                    onClick: () => {
+                      ejectDisk(props.index)
+                    }
+                  },
+                  {
+                    label: "-"
+                  },
+                  ...validStandbyDisks.map((disk, idx) => {
+                    const cleanFilename = getCleanDiskFilename(disk.filename)
+                    const displayName = disk.comment ? `${cleanFilename} (${disk.comment})` : cleanFilename
+                    return {
+                      label: `Eject: ${displayName}`,
+                      onClick: () => {
+                        removeStandbyDisk(props.index, idx, triggerStandbyUpdate)
+                      }
+                    }
+                  })
+                ]
+              : undefined,
+            onClick: !hasMultipleDisks ? () => { ejectDisk(props.index) } : undefined,
           },
           {
             label: "-"
           },
           {
-            label: t("disk.saveDiskToDevice"),
+            label: (isEnglish && hasMultipleDisks) ? "Save Disk(s)" : t("disk.saveDiskToDevice"),
             icon: faFloppyDisk,
             isDisabled: dprops.filename.length === 0,
             isVisible: () => { return isFileSystemApiSupported() && !dprops.writableFileHandle },
-            onClick: () => { showDiskSaveFilePicker(props.index) }
+            onClick: async () => {
+              if (!hasMultipleDisks) {
+                await showDiskSaveFilePicker(props.index)
+              } else {
+                syncActiveDiskToStandby(props.index)
+                const currentStandby = getStandbyDisks(props.index).filter(d => Boolean(d && d.filename && d.filename.trim()))
+                for (let i = 0; i < currentStandby.length; i++) {
+                  const disk = currentStandby[i]
+                  const fileExtension = disk.filename.includes(".")
+                    ? disk.filename.substring(disk.filename.lastIndexOf("."))
+                    : (isWozData(disk.diskData) ? ".woz" : ".dsk")
+                  try {
+                    const writableFileHandle = await window.showSaveFilePicker({
+                      excludeAcceptAllOption: false,
+                      suggestedName: disk.filename,
+                      types: [{
+                        description: t("disk.diskImage"),
+                        accept: { "application/octet": [fileExtension] as `.${string}`[] },
+                      }],
+                    })
+                    if (writableFileHandle) {
+                      const targetName = writableFileHandle.name || disk.filename
+                      const writable = await writableFileHandle.createWritable()
+                      await writable.write(getDiskBlobForSync(disk.diskData, targetName, dprops.hardDrive))
+                      await writable.close()
+                      disk.diskHasChanges = false
+                      disk.filename = targetName
+                      disk.writableFileHandle = writableFileHandle
+                    }
+                  } catch {
+                    break
+                  }
+                }
+                const dpropsTmp: DriveProps = { ...dprops, diskHasChanges: false }
+                doSetUIDriveProps(dpropsTmp)
+              }
+            }
           },
           {
             label: t("disk.saveDiskTo"),
@@ -530,7 +733,12 @@ const DiskDrive = (props: DiskDriveProps) => {
           {
             label: t("disk.pauseSyncing"),
             icon: faPause,
-            isDisabled: dprops.filename.length === 0,
+            isDisabled: () => {
+              if (dprops.filename.length === 0) return true
+              if (!dprops.cloudData || dprops.cloudData.isArchive) return true
+              if (dprops.cloudData.providerName !== "OneDrive" && dprops.cloudData.providerName !== "GoogleDrive") return true
+              return false
+            },
             isSelected: () => { return dprops.cloudData?.syncInterval == Number.MAX_VALUE },
             onClick: () => {
               if (dprops.cloudData) {
@@ -546,7 +754,12 @@ const DiskDrive = (props: DiskDriveProps) => {
           {
             label: t("disk.syncNow"),
             icon: faSync,
-            isDisabled: dprops.filename.length === 0,
+            isDisabled: () => {
+              if (dprops.filename.length === 0) return true
+              if (!dprops.cloudData || dprops.cloudData.isArchive) return true
+              if (dprops.cloudData.providerName !== "OneDrive" && dprops.cloudData.providerName !== "GoogleDrive") return true
+              return false
+            },
             isSelected: () => { return dprops.cloudData?.syncInterval == Number.MIN_VALUE },
             onClick: () => {
               if (dprops.cloudData) {
@@ -566,16 +779,56 @@ const DiskDrive = (props: DiskDriveProps) => {
         ]]}
       />
 
+      {hasMultipleDisks && (
+        <PopupMenu
+          location={swapperPopupLocation}
+          style={{
+            padding: "5px",
+            paddingLeft: "10px",
+            paddingRight: "10px",
+          }}
+          onClose={() => {
+            setSwapperPopupLocation(undefined)
+          }}
+          menuItems={[
+            validStandbyDisks.map((disk, idx) => {
+              const cleanFilename = getCleanDiskFilename(disk.filename)
+              const displayName = disk.comment ? `${cleanFilename} (${disk.comment})` : cleanFilename
+              return {
+                label: displayName,
+                icon: faFloppyDisk,
+                isSelected: () => idx === standbyActiveIndex,
+                onClick: async () => {
+                  setSwapperPopupLocation(undefined)
+                  if (idx !== standbyActiveIndex) {
+                    if (dprops.diskHasChanges) {
+                      if (dprops.writableFileHandle) {
+                        await handleSaveWritableFile(dprops.index)
+                      } else if (isFileSystemApiSupported()) {
+                        await showDiskSaveFilePicker(props.index)
+                      }
+                    }
+                    await swapStandbyDisk(props.index, idx, undefined, triggerStandbyUpdate)
+                  }
+                },
+              }
+            }),
+          ]}
+        />
+      )}
+
       <InternetArchivePopup
         driveIndex={dprops.index}
         open={internetDialogDialogOpen}
-        onClose={() => { setInternetDialogDialogOpen(false) }}>
+        onClose={() => { setInternetDialogDialogOpen(false) }}
+        onLoadSuccess={triggerStandbyUpdate}>
       </InternetArchivePopup>
 
       <DemoZooDialog
         driveIndex={dprops.index}
         open={demoZooDialogOpen}
-        onClose={() => { setDemoZooDialogOpen(false) }}>
+        onClose={() => { setDemoZooDialogOpen(false) }}
+        onLoadSuccess={triggerStandbyUpdate}>
       </DemoZooDialog>
     </span>
   )

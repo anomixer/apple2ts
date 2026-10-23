@@ -1,7 +1,8 @@
-import { COLOR_MODE, MONITOR_MODE, RUN_MODE, UI_THEMES } from "../common/utility"
+import { COLOR_MODE, MONITOR_MODE, RUN_MODE, UI_THEMES, parseDiskSwapperParam } from "../common/utility"
 import { useGlobalContext } from "./globalcontext"
-import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging, passSetSlotConfig, passSetIwmStatsEnabled, passSetRomTraceEnabled, passResetRomTrace, passSetRomTracePeek, passSetAdbTraceEnabled, clearAdbTrace, setMouseEventLog, passSetEnsoniqDebugEnabled } from "./main2worker"
-import { setDefaultBinaryAddress, handleSetDiskFromURL } from "./devices/disk/driveprops"
+import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging, passSetSlotConfig, passSetIwmStatsEnabled, passSetRomTraceEnabled, passResetRomTrace, passSetRomTracePeek, passSetAdbTraceEnabled, clearAdbTrace, setMouseEventLog, passSetEnsoniqDebugEnabled, passEnableGamePatches } from "./main2worker"
+import { setDefaultBinaryAddress, handleSetDiskFromURL, handleSetDiskSwapperFromURLs, resetAllDiskDrives } from "./devices/disk/driveprops"
+import { handleSetVeraSdFromURL } from "./devices/vera/verasdicon"
 import { loadOneDriveScript } from "./devices/disk/cloudscriptloader"
 import { isOneDriveMsalAuthCallback } from "./devices/disk/onedrive_authredirect"
 import { audioEnable } from "./devices/audio/speaker"
@@ -79,6 +80,11 @@ export const handleInputParams = (paramString = "") => {
 
   if (params.get("ensoniqdbg")) {
     passSetEnsoniqDebugEnabled(true)
+  }
+
+  if (params.get("gamepatches") === "off") {
+    passEnableGamePatches(false)
+    setUIStateBoolean("enableGamePatches", false)
   }
 
   const mode = params.get("appmode") as string
@@ -239,6 +245,29 @@ export const handleInputParams = (paramString = "") => {
     }
   }
 
+  if (params.has("s2d1") && nextSlotConfig[2] !== "vera") {
+    if (nextSlotConfig[4] === "vera") {
+      nextSlotConfig[4] = "none"
+    }
+    nextSlotConfig[2] = "vera"
+    setPreferenceVeraSlot(2)
+    slotConfigChanged = true
+  }
+  if (params.has("s4d1") && nextSlotConfig[4] !== "vera") {
+    if (nextSlotConfig[2] === "vera") {
+      nextSlotConfig[2] = "none"
+    }
+    nextSlotConfig[4] = "vera"
+    setPreferenceVeraSlot(4)
+    slotConfigChanged = true
+  }
+  const verasd = params.has("verasd") || params.has("sd")
+  if (verasd && nextSlotConfig[2] !== "vera" && nextSlotConfig[4] !== "vera") {
+    nextSlotConfig[2] = "vera"
+    setPreferenceVeraSlot(2)
+    slotConfigChanged = true
+  }
+
   if (slotConfigChanged) {
     setPreferenceSlotConfig(nextSlotConfig)
     passSetSlotConfig(nextSlotConfig)
@@ -392,7 +421,7 @@ export const handleInputParams = (paramString = "") => {
 }
 
 // Examples:
-// https://apple2ts.com/?color=white&speed=fast#https://a2desktop.s3.amazonaws.com/A2DeskTop-1.4-en_800k.2mg
+// https://apple2ts.com/?color=color&speed=fast#https://a2desktop.s3.amazonaws.com/A2DeskTop-1.4-en_800k.2mg
 // https://apple2ts.com/#https://archive.org/download/TotalReplay/Total%20Replay%20v5.0.1.hdv
 // https://apple2ts.com/#https://archive.org/download/wozaday_Davids_Midnight_Magic/00playable.woz
 
@@ -416,15 +445,27 @@ const triggerPendingBoot = () => {
   }
 }
 
-export const handleFragment = async (updateDisplay: UpdateDisplay, hasBasicProgram: boolean) => {
-  const fragment = window.location.hash
-  // If you start npm locally with 'npm start --xyz=blahblah', then npm
-  // will automatically create an environment variable "npm_config_xyz".
-  // So here we check for a --urlparam command line argument and load it if it exists.
-  // For example, npm start --urlparam=speed=fast#Replay
-  if (process.env.npm_config_urlparam) {
+export const handleFragment = async (
+  updateDisplay?: UpdateDisplay,
+  hasBasicProgram = false,
+  searchString = "",
+  hashString = "",
+) => {
+  const search = searchString.length > 0 ? searchString : window.location.search
+  const fragment = hashString.length > 0 ? hashString : window.location.hash
+
+  // URL parameters for local development are supplied via the A2TS_URLPARAM
+  // environment variable (see vite.config.ts), so here we redirect to that
+  // parameter string if it exists.
+  //
+  // For example: A2TS_URLPARAM="speed=fast#Replay" npm start
+  //
+  // Older npm versions supported `npm start --urlparam=...`, which set
+  // npm_config_urlparam. npm 11+ rejects unknown CLI flags, but vite.config.ts
+  // still falls back to npm_config_urlparam for older npm versions.
+  if (process.env.A2TS_URLPARAM) {
     if (window.location.search === "") {
-      window.location.href = window.location.pathname + "?" + process.env.npm_config_urlparam
+      window.location.href = window.location.pathname + "?" + process.env.A2TS_URLPARAM
     }
   }
   if (isOneDriveMsalAuthCallback()) return
@@ -439,11 +480,131 @@ export const handleFragment = async (updateDisplay: UpdateDisplay, hasBasicProgr
     return
   }
 
+  // Check for multi-drive parameters:
+  // Slot 7 Drive 1 (SmartPort 1): s7d1 or hd1 -> drive index 0
+  // Slot 7 Drive 2 (SmartPort 2): s7d2 or hd2 -> drive index 1
+  // Slot 6 Drive 1 (Disk II 1):   s6d1 or d1  -> drive index 2
+  // Slot 6 Drive 2 (Disk II 2):   s6d2 or d2  -> drive index 3
+  const params = new URLSearchParams(search.toLowerCase())
+  const porig = new URLSearchParams(search)
+
+  const driveParamDefs = [
+    { keys: ["s7d1", "hd1"], index: 0 },
+    { keys: ["s7d2", "hd2"], index: 1 },
+    { keys: ["s6d1", "d1"],  index: 2 },
+    { keys: ["s6d2", "d2"],  index: 3 },
+  ]
+
+  const driveConfigs: Array<{ index: number; url: string }> = []
+  for (const def of driveParamDefs) {
+    for (const key of def.keys) {
+      if (params.has(key)) {
+        let val: string | null = null
+        for (const [origKey, origVal] of porig.entries()) {
+          if (origKey.toLowerCase() === key) {
+            val = origVal
+            break
+          }
+        }
+        if (val && val.trim() !== "") {
+          driveConfigs.push({ index: def.index, url: val.trim() })
+          break
+        }
+      }
+    }
+  }
+
+  // VERA SD parameter handling:
+  // s2d1, s4d1, or verasd/sd
+  let veraSdUrl: string | null = null
+  const veraKeys = ["s2d1", "s4d1", "verasd", "sd"]
+  for (const key of veraKeys) {
+    if (params.has(key)) {
+      for (const [origKey, origVal] of porig.entries()) {
+        if (origKey.toLowerCase() === key) {
+          if (origVal && origVal.trim() !== "") {
+            veraSdUrl = origVal.trim()
+            break
+          }
+        }
+      }
+      if (veraSdUrl) break
+    }
+  }
+
+  if (driveConfigs.length > 0 || veraSdUrl) {
+    if (driveConfigs.length > 0) resetAllDiskDrives()
+    let anyLoaded = false
+    for (const config of driveConfigs) {
+      const parsedUrls = parseDiskSwapperParam(config.url)
+      let success = false
+      if (parsedUrls.length > 1) {
+        success = await handleSetDiskSwapperFromURLs(
+          parsedUrls,
+          updateDisplay,
+          config.index,
+          true,
+          true,
+          true,
+        )
+      } else {
+        success = await handleSetDiskFromURL(
+          parsedUrls[0] || config.url,
+          updateDisplay,
+          config.index,
+          undefined,
+          undefined,
+          undefined,
+          true, // preserveDriveIndex
+          false,
+          true, // noReset
+          true, // noBoot
+        )
+      }
+      if (success) anyLoaded = true
+    }
+    if (veraSdUrl) {
+      const success = await handleSetVeraSdFromURL(veraSdUrl)
+      if (success) anyLoaded = true
+    }
+    const hasBootDriveInConfig = driveConfigs.some(c => c.index === 0 || c.index === 2)
+    if (fragment.length >= 2 && !hasBootDriveInConfig) {
+      const cloudProvider = params.get("cloudProvider")
+      const regex: RegExp = /access_token=([^&]+)/
+      const matches = regex.exec(fragment)
+
+      if (cloudProvider && matches && matches.length > 0) {
+        const opener = window.opener as OpenerWindow
+        opener.accessToken = matches[1]
+        window.close()
+        return
+      } else {
+        const url = decodeURI(fragment.substring(1))
+        const success = await handleSetDiskFromURL(
+          url,
+          updateDisplay,
+          -1,
+          undefined,
+          undefined,
+          undefined,
+          true,
+          false,
+          true,
+          true,
+        )
+        if (success) anyLoaded = true
+      }
+    }
+    if (anyLoaded) {
+      passSetRunMode(RUN_MODE.NEED_BOOT)
+    }
+    return
+  }
+
   if (fragment.length >= 2) {
-    const params = new URLSearchParams(window.location.search)
     const cloudProvider = params.get("cloudProvider")
     const regex: RegExp = /access_token=([^&]+)/
-    const matches = regex.exec(window.location.hash)
+    const matches = regex.exec(fragment)
 
     if (cloudProvider && matches && matches.length > 0) {
       // Handle access token in fragment for cloud drive providers

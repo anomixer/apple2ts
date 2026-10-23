@@ -1,9 +1,10 @@
 import { ImportedDiskFile, loadWozAndExtractProDosFiles, loadWozAndExtractDosImage, classifyImageKind, stripTwoImgHeader, ensureDosVolumeHasHelloGreeting, PRODOS_FILE_TYPE_TEXT, PRODOS_FILE_TYPE_DOS_MASTER, MenuDiskEntry, buildProDosHdv, VTOC_REFRESH, determineVtocType, FourCadeExportFailure } from "../../common/prodos_hdv"
-import { RUN_MODE } from "../../common/utility"
+import { getDefaultDiskDriveIndex, getPrimaryDiskUrl, parseDiskSwapperParam, resolveDiskSwapperUrls, separateUrlAndComment, RUN_MODE } from "../../common/utility"
 import { i18n } from "../../i18n"
 import { DiskBookmarks } from "../devices/disk/diskbookmarks"
 import { diskImages } from "../devices/disk/diskimages"
-import { handleSetDiskFromCloudData, handleSetDiskFromFile, handleSetDiskFromURL } from "../devices/disk/driveprops"
+import { handleSetDiskFromCloudData, handleSetDiskFromFile, handleSetDiskFromURL, handleSetDiskSwapperFromURLs, resetAllDiskDrives } from "../devices/disk/driveprops"
+import { handleSetVeraSdFromURL } from "../devices/vera/verasdicon"
 import { handleInputParams } from "../inputparams"
 import { DiskCollectionSortMode, getPreferenceDiskCollectionSort, getPreferenceVtocType } from "../localstorage"
 import { passSetRunMode } from "../main2worker"
@@ -85,6 +86,8 @@ export const sortDisks = (disks: DiskCollectionItem[], mode: DiskCollectionSortM
   return sorted
 }
 
+export { getPrimaryDiskUrl }
+
 // Recover the known byte size of a disk by matching its URL against the built-in
 // catalogs. Favorited disks are rebuilt from bookmarks that don't store a size,
 // so without this a favorited large disk (e.g. Total Replay) would report an
@@ -92,7 +95,7 @@ export const sortDisks = (disks: DiskCollectionItem[], mode: DiskCollectionSortM
 export const getKnownFileSizeForUrl = (newReleases: DiskCollectionItem[],
   diskUrl?: string): number | undefined => {
   if (!diskUrl) return undefined
-  const match = [...diskImages, ...newReleases].find(d => d.diskUrl?.toString() === diskUrl)
+  const match = [...diskImages, ...newReleases].find(d => (getPrimaryDiskUrl(d) || d.diskUrl?.toString()) === diskUrl)
   return match?.fileSize && match.fileSize > 0 ? match.fileSize : undefined
 }
 
@@ -117,7 +120,7 @@ const restoreCachedVtocType = (item: DiskCollectionItem) => {
     item.vtocVersion = undefined
   }
   if (item.vtocType !== undefined) return
-  const url = item.diskUrl?.toString() || ""
+  const url = getPrimaryDiskUrl(item)
   if (url.toLowerCase().split(/[?#]/)[0].endsWith(".hdv")) {
     item.vtocType = "prodos"
     item.vtocVersion = VTOC_REFRESH
@@ -175,6 +178,139 @@ export const getDiskCollection = (diskBookmarks: DiskBookmarks, newReleases: Dis
   return newDiskCollection
 }
 
+export interface ResolvedMultiDiskConfig {
+  isMultiDisk: boolean
+  isSwapper?: boolean
+  drives: Array<{ index: number; url: string; swapperUrls?: string[] }>
+  veraSdUrl?: string
+}
+
+export const getMultiDiskConfigFromItem = (
+  item: DiskCollectionItem,
+  requestedDriveIndex = -1,
+): ResolvedMultiDiskConfig => {
+  const driveMap = new Map<number, { url: string; swapperUrls?: string[] }>()
+  let veraSdUrl: string | undefined = undefined
+
+  const assignDrive = (index: number, urlOrUrls: string | string[] | undefined) => {
+    if (!urlOrUrls || driveMap.has(index)) return
+    if (Array.isArray(urlOrUrls)) {
+      if (urlOrUrls.length === 0) return
+      const resolved = resolveDiskSwapperUrls(urlOrUrls)
+      const primary = resolved[0]
+      if (primary) {
+        const cleanPrimary = separateUrlAndComment(primary).url
+        driveMap.set(index, { url: cleanPrimary, swapperUrls: resolved })
+      }
+    } else if (typeof urlOrUrls === "string" && urlOrUrls.trim().length > 0) {
+      const parsed = parseDiskSwapperParam(urlOrUrls)
+      if (parsed.length > 1) {
+        const cleanPrimary = separateUrlAndComment(parsed[0]).url
+        driveMap.set(index, { url: cleanPrimary, swapperUrls: parsed })
+      } else {
+        const clean = separateUrlAndComment(urlOrUrls).url
+        driveMap.set(index, { url: clean })
+      }
+    }
+  }
+
+  const assignVera = (url: string | undefined) => {
+    if (url && url.trim().length > 0 && !veraSdUrl) {
+      veraSdUrl = url.trim()
+    }
+  }
+
+  // 1. Process item.disks or item.diskUrl if provided as object or array
+  const diskSource = item.disks || item.diskUrl
+  if (typeof diskSource === "object" && diskSource) {
+    if (Array.isArray(diskSource)) {
+      diskSource.forEach((url, idx) => {
+        if (typeof url === "string" && url.trim().length > 0) {
+          if (idx === 0) {
+            const primaryIdx = requestedDriveIndex >= 0
+              ? requestedDriveIndex
+              : getDefaultDiskDriveIndex(url, item.fileSize || 0)
+            assignDrive(primaryIdx, url)
+          } else if (idx === 1) {
+            const primaryIdx = driveMap.keys().next().value ?? 2
+            const secondIdx = primaryIdx === 0 || primaryIdx === 1 ? 1 : 3
+            assignDrive(secondIdx, url)
+          }
+        }
+      })
+    } else {
+      for (const [rawKey, rawVal] of Object.entries(diskSource)) {
+        if (!rawVal) continue
+        const key = rawKey.toLowerCase()
+        if (key === "s7d1" || key === "hd1") assignDrive(0, rawVal)
+        else if (key === "s7d2" || key === "hd2") assignDrive(1, rawVal)
+        else if (key === "s6d1" || key === "d1") assignDrive(2, rawVal)
+        else if (key === "s6d2" || key === "d2") assignDrive(3, rawVal)
+        else if (key === "s2d1" || key === "s4d1" || key === "verasd" || key === "sd") {
+          if (typeof rawVal === "string") assignVera(rawVal)
+          else if (Array.isArray(rawVal) && rawVal[0]) assignVera(rawVal[0])
+        }
+      }
+    }
+  }
+
+  // 2. Process item.params (e.g. s6d2=..., s2d1=...)
+  if (item.params) {
+    try {
+      const searchParams = new URLSearchParams(item.params)
+      for (const [rawKey, rawVal] of searchParams.entries()) {
+        const key = rawKey.toLowerCase()
+        const val = rawVal.trim()
+        if (!val) continue
+        if (key === "s7d1" || key === "hd1") assignDrive(0, val)
+        else if (key === "s7d2" || key === "hd2") assignDrive(1, val)
+        else if (key === "s6d1" || key === "d1") assignDrive(2, val)
+        else if (key === "s6d2" || key === "d2") assignDrive(3, val)
+        else if (key === "s2d1" || key === "s4d1" || key === "verasd" || key === "sd") assignVera(val)
+      }
+    } catch {
+      // Ignore URLSearchParams parsing error
+    }
+  }
+
+  // 3. Fallback to primary disk if not already assigned
+  const primaryUrl = getPrimaryDiskUrl(item)
+  if (primaryUrl && primaryUrl.trim().length > 0) {
+    const primaryIdx = requestedDriveIndex >= 0
+      ? requestedDriveIndex
+      : getDefaultDiskDriveIndex(primaryUrl, item.fileSize || 0)
+    if (!driveMap.has(primaryIdx)) {
+      let alreadyPresent = false
+      for (const entry of driveMap.values()) {
+        if (entry.url === primaryUrl) {
+          alreadyPresent = true
+          break
+        }
+      }
+      if (!alreadyPresent) {
+        assignDrive(primaryIdx, primaryUrl)
+      }
+    }
+  }
+
+  const drives = Array.from(driveMap.entries()).map(([index, info]) => ({
+    index,
+    url: info.url,
+    swapperUrls: info.swapperUrls,
+  }))
+  drives.sort((a, b) => a.index - b.index)
+
+  const isSwapper = drives.some(d => !!d.swapperUrls && d.swapperUrls.length > 1)
+  const isMultiDisk = drives.length > 1 || (drives.length >= 1 && !!veraSdUrl) || isSwapper
+
+  return {
+    isMultiDisk,
+    isSwapper,
+    drives,
+    veraSdUrl,
+  }
+}
+
 export const loadDisk = (
   driveIndex: number,
   diskCollectionItem: DiskCollectionItem | undefined,
@@ -190,9 +326,65 @@ export const loadDisk = (
   }
 
   if (diskCollectionItem) {
+    const primaryUrl = getPrimaryDiskUrl(diskCollectionItem)
     const cloudData = diskCollectionItem.cloudData
       ? { ...diskCollectionItem.cloudData, title: diskCollectionItem.title }
       : undefined
+
+    if (!callback) {
+      const multiConfig = getMultiDiskConfigFromItem(diskCollectionItem, driveIndex)
+      if (multiConfig.isMultiDisk && (!preserveDriveIndex || driveIndex < 0)) {
+        if (!preserveDriveIndex) {
+          passSetRunMode(RUN_MODE.IDLE)
+        }
+        if (diskCollectionItem.params) {
+          handleInputParams(diskCollectionItem.params)
+        }
+        resetAllDiskDrives()
+
+        const promises: Promise<boolean>[] = []
+        for (const drive of multiConfig.drives) {
+          if (drive.swapperUrls && drive.swapperUrls.length > 1) {
+            promises.push(handleSetDiskSwapperFromURLs(
+              drive.swapperUrls,
+              updateDisplay,
+              drive.index,
+              true, // preserveDriveIndex
+              true, // noReset
+              true, // noBoot
+            ))
+          } else {
+            const load = handleSetDiskFromURL(
+              drive.url,
+              updateDisplay,
+              drive.index,
+              cloudData,
+              undefined,
+              undefined,
+              true, // preserveDriveIndex
+              false,
+              true, // noReset
+              true, // noBoot
+            )
+            promises.push(load)
+          }
+        }
+
+        if (multiConfig.veraSdUrl) {
+          promises.push(handleSetVeraSdFromURL(multiConfig.veraSdUrl))
+        }
+
+        void Promise.all(promises).then(results => {
+          const anyLoaded = results.some(r => r === true)
+          if (anyLoaded) {
+            passSetRunMode(RUN_MODE.NEED_BOOT)
+            onLoadSuccess?.()
+          }
+        })
+        return
+      }
+    }
+
     if (diskCollectionItem.type == DISK_COLLECTION_ITEM_TYPE.CLOUD_DRIVE && diskCollectionItem.cloudData) {
       if (preserveDriveIndex) {
         handleSetDiskFromCloudData(
@@ -205,10 +397,10 @@ export const loadDisk = (
       } else {
         handleSetDiskFromCloudData(cloudData!, driveIndex, callback, onLoadSuccess)
       }
-    } else if (diskCollectionItem.diskUrl && !diskCollectionItem.diskUrl.includes("://")) {
+    } else if (primaryUrl && !primaryUrl.includes("://")) {
       if (preserveDriveIndex) {
         handleSetDiskFromFile(
-          diskCollectionItem.diskUrl,
+          primaryUrl,
           updateDisplay,
           driveIndex,
           callback,
@@ -217,7 +409,7 @@ export const loadDisk = (
         )
       } else {
         handleSetDiskFromFile(
-          diskCollectionItem.diskUrl,
+          primaryUrl,
           updateDisplay,
           driveIndex,
           callback,
@@ -227,7 +419,7 @@ export const loadDisk = (
     } else {
       const load = preserveDriveIndex
         ? handleSetDiskFromURL(
-          diskCollectionItem.diskUrl || "",
+          primaryUrl || "",
           undefined,
           driveIndex,
           cloudData,
@@ -236,7 +428,7 @@ export const loadDisk = (
           true,
         )
         : handleSetDiskFromURL(
-          diskCollectionItem.diskUrl || "",
+          primaryUrl || "",
           undefined,
           driveIndex,
           cloudData,
@@ -272,7 +464,8 @@ export const getExportFilename = (diskCollectionItem: DiskCollectionItem, buffer
     return fromCloud
   }
 
-  const rawName = diskCollectionItem.diskUrl.split("/").pop() || diskCollectionItem.title || "disk"
+  const primaryUrl = getPrimaryDiskUrl(diskCollectionItem)
+  const rawName = primaryUrl.split("/").pop() || diskCollectionItem.title || "disk"
   const decodedName = decodeURIComponent(rawName)
   if (decodedName.includes(".")) {
     return decodedName
@@ -317,7 +510,7 @@ export const downloadExportHdv = (data: Uint8Array, filename: string) => {
 // Stable identity for a disk across re-renders (bookmark id, cloud item id,
 // disk URL, or finally the title).
 export const diskItemKey = (item: DiskCollectionItem): string =>
-  item.bookmarkId || item.cloudData?.itemId || item.diskUrl?.toString() || item.title
+  item.bookmarkId || item.cloudData?.itemId || getPrimaryDiskUrl(item) || item.title
 
 // Determine the export badge state and tooltip for a disk. Exportable disks show
 // a green badge; disks that cannot be exported show an orange badge explaining

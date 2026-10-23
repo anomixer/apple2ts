@@ -74,7 +74,7 @@ export const DefaultHelpContent = ({
     },
     {
       label: t("help.exampleLinks.a2Desktop"),
-      href: "https://apple2ts.com/?color=white&speed=fast#https://a2desktop.s3.amazonaws.com/A2DeskTop-1.4-en_800k.2mg",
+      href: "https://apple2ts.com/?color=color&speed=fast#https://a2desktop.s3.amazonaws.com/A2DeskTop-1.4-en_800k.2mg",
     },
     {
       label: t("help.exampleLinks.embeddedBasic"),
@@ -129,14 +129,16 @@ export const DefaultHelpContent = ({
         </span>
         : <span key="shortcuts-available" className="help-shortcuts-available">
           <ShortcutTable rows={shortcutRows} />
-          {"\n"}{t("help.controlPanelShortcut")}
-          {"\n\n"}{t("help.openAppleKey")}
+          {t("help.controlPanelShortcut")}
+          {"\n"}{t("help.openAppleKey")}
           {"\n"}{t("help.closedAppleKey")}
           {"\n"}{t("help.joystickKeys")}
           {"\n\n"}{t("help.onScreenKeyboard")}
         </span>}{"\n"}
     </>}
-    {"\n"}<b>{t("help.diskImages")}</b>{" "}hdv, 2mg, dsk, woz, po, do, bin, bas
+    {"\n"}<b>{t("help.diskImages")}</b>{" "}woz, 2mg, dsk, po, do, hdv, bin, bas
+    {"\n"}<b>{t("help.diskContainers")}</b>{" "}zip, 7z, gz
+    {"\n"}{t("help.multiDiskNotice")}
     {"\n\n"}<b>{t("help.urlParameters")}</b>{"\n"}
     {t("help.urlParametersBody")}
     {"\n\n"}<b>{t("help.examples")}</b>{"\n"}

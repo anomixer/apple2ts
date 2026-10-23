@@ -210,6 +210,7 @@ type Apple2SaveState = {
   extraRamSize: number,
   machineName: MACHINE_NAME,
   cardStates?: SlotCardSaveState[],
+  joystick?: {countStart: number},
   softSwitches: {[name: string]: boolean},
   stackDump: Array<string>,
   memvalid: string,
@@ -232,12 +233,12 @@ type DisplayProps = {
   ctrlKeyMode: number,
   openAppleKeyMode: number,
   closedAppleKeyMode: number,
-  showFileOpenDialog: {show: boolean, index: number},
+  showFileOpenDialog: {show: boolean, index: number, append?: boolean},
   updateDisplay: UpdateDisplay,
   handleCtrlDown: (mode: number) => void,
   handleOpenAppleDown: (mode: number) => void,
   handleClosedAppleDown: (mode: number) => void,
-  setShowFileOpenDialog: (show: boolean, index: number) => void,
+  setShowFileOpenDialog: (show: boolean, index: number, append?: boolean) => void,
 }
 
 type MACHINE_NAME = "APPLE2EU" | "APPLE2EE" | "APPLE2P" | "APPLE2GS"
@@ -278,9 +279,12 @@ type MachineState = {
   currentMemory: Uint8Array<ArrayBuffer>,
   extraRamSize: number,
   execution?: ExecutionSnapshot,
-  heatMap: Float64Array,
-  heatMapMax: { value: number, index: number },
-  heatMapState: HEATMAP_STATE,
+  heatMapCPU: Float64Array,
+  heatMapCPUMax: { value: number, index: number },
+  heatMapGetMem: Float64Array,
+  heatMapGetMemMax: { value: number, index: number },
+  heatMapSetMem: Float64Array,
+  heatMapSetMemMax: { value: number, index: number },
   hires: Uint8Array,
   iTempState: number,
   isDebugging: boolean,
@@ -357,6 +361,7 @@ type UIState = {
   colorMode: COLOR_MODE,
   crtDistortion: boolean,
   debugMode: boolean,
+  enableGamePatches: boolean,
   ghosting: boolean,
   helpText: string,
   hotReload: boolean,
@@ -385,11 +390,12 @@ type CloudData = {
   apiEndpoint: string,
   downloadUrl: string,
   detailsUrl: string,
-  fileSize: number
+  fileSize: number,
+  isArchive?: boolean
 }
 
 type CloudProvider = {
-  download(filter: string): Promise<[Blob, CloudData] | null>,
+  download(filter: string): Promise<Array<[Blob, CloudData]> | [Blob, CloudData] | null>,
   upload(fileName: string, blob: Blob): Promise<CloudData | null>,
   sync(blob: Blob, cloudData: CloudData): Promise<boolean>,
   requestAuthToken(callback: (authToken: string) => void): void,
@@ -635,12 +641,24 @@ type DisassemblyProps = {
 
 type VtocType = "dos" | "prodos" | "other" | "dosup" | "4cade"
 
+type MultiDiskMap = {
+  s6d1?: string | string[]
+  s6d2?: string | string[]
+  s7d1?: string | string[]
+  s7d2?: string | string[]
+  s2d1?: string | string[]
+  s4d1?: string | string[]
+  verasd?: string | string[]
+  [key: string]: string | string[] | undefined
+}
+
 type DiskCollectionItem = {
   type: "builtin" | "internet" | "new" | "cloud" | "demozoo",
   title: string,
   lastUpdated: Date,
   imageUrl?: string,
-  diskUrl: string,
+  diskUrl?: string | MultiDiskMap | string[],
+  disks?: MultiDiskMap | string[],
   helpFile?: string,
   detailsUrl?: string,
   bookmarkId?: string,
@@ -649,7 +667,7 @@ type DiskCollectionItem = {
   fileSize: number,
   vtocType?: VtocType,
   vtocVersion?: number,
-  exportDisabled?: boolean
+  exportDisabled?: boolean,
 }
 
 interface OpenerWindow {
