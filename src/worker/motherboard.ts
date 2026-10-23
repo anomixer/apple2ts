@@ -70,7 +70,7 @@ import { videoTerm, enableVideoTerm, disableVideoTerm } from "./devices/videoter
 import { vidhd } from "./devices/vidhd"
 import { enableMockingboard, resetMockingboard } from "./devices/mockingboard"
 import { clearSlotCardStateHandlers } from "./devices/slot_card_state"
-import { resetMouse, onMouseVBL } from "./devices/mouse"
+import { resetMouse, onMouseVBL, iigsMouseStep } from "./devices/mouse"
 import { enableDiskDrive, enableDiskDrive35, iwmResetTiming, processFloppyMotorTimeout } from "./devices/diskdata"
 import { advanceKeySequence, interruptKeySequence, pollKeyboardRepeat, sendPastedText } from "./devices/keyboard"
 import {
@@ -1330,6 +1330,8 @@ const doAdvance6502 = () => {
   let vblCycles = Math.round((isIIgs ? 12460 / 46727 : 4550 / 17030) * frameCycles)
   let cyclesPerLine = ((frameCycles - vblCycles) / 192) || 1
   let cachedSlowMode = isIigsSlowMode()
+  // Last emulated refresh the IIgs mouse sync ran on (see iigsMouseStep).
+  let lastMouseSyncFrame = -1
 
   for (;;) {
     let cycles = 0
@@ -1371,6 +1373,7 @@ const doAdvance6502 = () => {
       cyclesPerLine = ((frameCycles - vblCycles) / 192) || 1
     }
     const cycleInFrame = s6502.cycleCount % frameCycles
+    const nowFrame = frameCycles > 0 ? Math.floor(s6502.cycleCount / frameCycles) : 0
     if (cycleInFrame < vblCycles) {
       // Return "low" for 70 scan lines out of 262 (70 * 65 cycles = 4550)
       // Note that VBLINV is the inverse of the vertical blanking status,
@@ -1422,6 +1425,14 @@ const doAdvance6502 = () => {
     // IRQs fire mid-refresh and the driver can re-key the timer oscillator
     // before the next catch-up (see the block comment at ensoniqCatchUp).
     if (isIIgs) ensoniqCatchUp(false)
+    // Apple IIgs mouse: converge the guest's cursor on the host pointer once
+    // per emulated frame (gssquared does the same from its frame hook). Doing
+    // it per instruction would hammer the ADB; per frame is plenty because the
+    // guest only polls the mouse a handful of times inside a frame.
+    if (isIIgs && nowFrame !== lastMouseSyncFrame) {
+      lastMouseSyncFrame = nowFrame
+      iigsMouseStep()
+    }
     if (cyclesToRun > 0 && (s6502.cycleCount - cycleToRunStart) >= cyclesToRun) {
       cyclesToRun = 0
       doSetRunMode(RUN_MODE.PAUSED, true, undefined, {reason: "cycle-limit"})

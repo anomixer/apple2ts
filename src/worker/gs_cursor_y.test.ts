@@ -53,10 +53,11 @@ test("GSOS601: the cursor Y follows the pointer in both directions", () => {
     }
     console.log("[CURY] cursor vs pointer Y:\\n" + rows.join("\\n"))
 
-    // Same constant offset for every position -> exact mapping.
+    // Within the closed-loop deadband: cursor converges to within +/-1 count.
     const offsets = new Set(pairs.map((p) => p.hy - p.ty))
     console.log("[CURY] offset set:", [...offsets])
-    expect(offsets.size).toBe(1)
+    for (const o of offsets) expect(Math.abs(o)).toBeLessThanOrEqual(1)
+    expect(offsets.size).toBeLessThanOrEqual(3)
 
     // Both directions (increasing/decreasing) track monotonically.
     for (let i = 1; i < pairs.length; i++) {

@@ -1909,6 +1909,34 @@ const extractShrFromAux = (aux: Uint8Array): Uint8Array => {
   return vidhd.extractShrBuffer(linear, 0)
 }
 
+// Super Hi-Res display on ($C029 bit 7). Same bit the renderer gates on via
+// SWITCHES.NEWVIDEO, exposed here so the ADB cursor sync can choose between
+// closed-loop (SHR, pixel coordinates) and dead-reckoned relative deltas.
+export const isIigsShrActive = (): boolean => SWITCHES.NEWVIDEO.isSet
+
+// Super Hi-Res in 320-pixel mode: the line-0 scan control byte has bit 7 clear.
+// The IIgs mouse reports its position in screen pixels, so a 320-mode program
+// addresses half the horizontal counts a 640-mode one does. gssquared does the
+// same `ax >>= 1` in keygloo_mouse_sync.hpp host_to_a2().
+export const isIigsShr320 = (): boolean => {
+  if (!SWITCHES.NEWVIDEO.isSet) return false
+  const physical = isIigsAuxLinear() ? iigsAuxLinearToPhys(0x9d00) : 0x9d00
+  return (megaIIAux[physical] & 0x80) === 0
+}
+
+// The 65816 ROM's live mouse position, as the guest sees it. The ROM's ADB
+// accumulator writes it into the text-page screen holes ($047C/$057C = X,
+// $04FC/$05FC = Y) and also publishes a copy in the bank-$E1 scratch at
+// $00E9/$00EB, which is the one GS/OS reads. gssquared reads the holes for
+// ROM 01 and only uses the bank globals on ROM 03
+// (keygloo_mouse_sync.hpp em_mouse_pos_from_bank_globals()), and measurement
+// on GS/OS 6.0.1 + ROM 01 shows both mirrors carry the same value, so the
+// holes are a safe feedback source either way.
+export const getIigsMousePos = (): { x: number, y: number } => ({
+  x: memGet24(0x00047c) | (memGet24(0x00057c) << 8),
+  y: memGet24(0x0004fc) | (memGet24(0x0005fc) << 8),
+})
+
 export const getShr = (): Uint8Array => {
   if (gsROM && gsROM.length > 0) {
     return extractShrFromAux(megaIIAux)

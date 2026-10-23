@@ -412,6 +412,18 @@ export class IIGSADB {
       || this.buttonChanged;
   }
 
+  // True while the guest still owes us a read: either the latched device
+  // register holds an unread report, or motion is queued behind it. The IIgs
+  // closed-loop cursor sync (devices/mouse.ts iigsMouseStep) uses this as its
+  // "wait for the guest before injecting the next step" condition, the same
+  // role gssquared's `mouse_data_full` plays in keygloo_mouse_sync.hpp.
+  mouseReportPending(): boolean {
+    return this.mouseHasData
+      || this.reportInProgress
+      || this.pendingX !== 0
+      || this.pendingY !== 0
+  }
+
   // The report has to be in the device register too, because that is where
   // GS/OS reads it from.
   private latchMouseReport() {

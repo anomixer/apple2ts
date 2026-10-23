@@ -1078,7 +1078,68 @@ emulation-mode path, which is what old IIe games use, now matches the 6502.
      The CPU-level PostEvent dedup now correctly drops the ROM's duplicate button
      posts per ADB dispatch (timing-based, no stack inspection, returns A=1).
 
-## Reference Materials
+### 62. IIgs Mouse: Closed-Loop ADB Cursor Sync + PostEvent Dedup (Single Click No Longer Opens Icons) — FIXED
+
+**User complaints**: "把所有 滑鼠位移沒同步, gsos原滑鼠應該跟著動的問題, single click就開啟icon 的問題(應該要double click), 全都給我修好" — mouse movement not synchronized, GS/OS's own cursor should follow, single click should not open icons (should require double click).
+
+**Root causes found**:
+
+1. **Cursor offset (click lands in the wrong place)**: The ADB reports relative
+   motion in chunks of at most ±63, and `iigsADBEvent()` converted the host
+   pointer into *deltas* against the last delivered position (`adbLastX/Y`).
+   The first motion event only seeded a baseline (no delta), so the guest
+   cursor settled at a permanent offset from the pointer (e.g. host 0.60 →
+   guest 346 instead of 383). Every subsequent click landed at the guest
+   cursor, not the pointer. Dead-reckoning also silently lost ground on fast
+   moves, because reports can be dropped/merged by the guest.
+
+2. **GS/OS's own cursor never moves**: GS/OS reads the cursor from the
+   ROM-published `$E1:00E9/$00EB` (and the holes), but its Event Manager only
+   moves the arrow when the ADB reports *converge* on the pointer. With the
+   dead-reckoning offset the EM saw a position that never matched the host, so
+   no redraw happened.
+
+3. **Single click opens icons**: The ROM's PostEvent dispatch at `FE:C677`
+   (`LDX #$1406 / JSL $E10000`) runs **twice** per button transition. The
+   dedup in `cpu65816.ts` case `0x22` was keyed on `this.X === 0x2006`, but
+   the ROM actually uses **`$1406`** (the real PostEvent tool number), so the
+   dedup was dead code and both posts reached GS/OS, which read one physical
+   click as a double click.
+
+**Fixes**:
+
+- `src/worker/devices/mouse.ts`: implemented gssquared's closed-loop ADB sync
+  (`KEYGLOO_MOUSE_SYNC_INJECTION_ONLY=1`, `keygloo_mouse_sync.hpp`). Motion
+  events now store a host-derived target (`px = round(normX*639)`,
+  `py = round(normY*399) >> 1`, halved in 320-mode SHR) and a new
+  `iigsMouseStep()` (called once per emulated frame from `motherboard.ts`)
+  reads the guest's own cursor from the holes and injects a bounded
+  (±63) chunk toward the target, waiting for the guest to consume each step
+  (stale-frame limit 4, deadband 1). The guest cursor converges exactly onto
+  the pointer, on both axes, in both directions. Outside SHR (text/legacy
+  modes) the original relative-delta path is retained. `resetMouse()` /
+  `resetADBTracking()` drop the target.
+- `src/worker/memory.ts`: added `getIigsMousePos()`, `isIigsShrActive()`,
+  `isIigsShr320()` to support the stepper.
+- `src/worker/iigs_adb.ts`: added `mouseReportPending()` (the guest's
+  "unread report" condition the stepper waits on).
+- `src/worker/motherboard.ts`: calls `iigsMouseStep()` once per frame.
+- `src/worker/cpu65816.ts`: corrected the PostEvent dedup to match
+  `this.X === 0x1406` and to fire only at the ROM's own post loop
+  (`PB === 0xfe && PC === 0xc67b`), so Event-Manager / VBL-tool calls are
+  not over-deduped. Returns `A = 0x0001` ("duplicate rejected") on the
+  duplicate so the ROM's `JSL / BEQ` loop exits cleanly (no stack
+  exhaustion / BRK beep). Added `postEventAccepted` / `postEventDeduped`
+  counters for diagnostics and tests.
+
+**Verification**:
+- `src/worker/gs_mouse_sync.test.ts` (new): closed-loop convergence on both
+  axes in both directions is exact (offset ≤ 1 count), and a single click
+  yields exactly one accepted PostEvent plus one deduped PostEvent.
+- Full worker suite: 779/779 pass (excluding the pre-existing
+  `vera.test.ts` CMDR-DOS failure). UI suite 265/272 (7 pre-existing
+  failures, identical on a clean tree). `tsc --noEmit` clean, `npm run build`
+  passes.
 - **GSSquared**: `c:\dev\gssquared\` (Primary reference: `RTC_PRAM.hpp`, `IWM2.hpp`, `display.cpp`, `DevelopLog.md`, `mmu_iie.cpp`, `computer.cpp`)
 - **Apple IIgs Hardware Reference Manual**: Official hardware specifications
 

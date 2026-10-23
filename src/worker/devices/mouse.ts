@@ -1,7 +1,7 @@
 // Mouse Driver for Apple2TS - Copyright 2023 Michael Morrison <codebythepound@gmail.com>
 // Now combined Mouse/Clock driver
 
-import { setSlotDriver, setSlotIOCallback, memGet, memSet, memSetC000, memGetC000, getCurrentMachineName } from "../memory"
+import { setSlotDriver, setSlotIOCallback, memGet, memSet, memSetC000, memGetC000, getCurrentMachineName, isIigsShrActive, isIigsShr320, getIigsMousePos } from "../memory"
 import { iigsADB, noteAdbLog } from "../iigs_adb"
 import { registerSlotCardState } from "./slot_card_state"
 import { MouseEventSimple } from "../../common/utility"
@@ -374,6 +374,10 @@ export const resetMouse = () => {
   // baseline has to be dropped too or the first report after a reset jumps.
   adbLastX = -1
   adbLastY = -1
+  adbTargetX = -1
+  adbTargetY = -1
+  adbStepOutstanding = false
+  adbSyncStaleFrames = 0
 }
 
 let mousex = 0
@@ -558,9 +562,106 @@ export const MouseCardEvent = (event: MouseEventSimple) => {
 const ADB_COUNTS_X = 640
 const ADB_COUNTS_Y = 200
 
-// Route a UI mouse event onto the IIgs ADB bus. The ADB reports relative
-// deltas, so the UI's normalized 0..1 position is converted back into deltas
-// against the last position we delivered.
+// --- Apple IIgs closed-loop ADB cursor sync ---
+//
+// Ported from gssquared/src/devices/adb/keygloo_mouse_sync.hpp, which selects
+// this path with KEYGLOO_MOUSE_SYNC_INJECTION_ONLY=1: the guest's own cursor is
+// read back each frame as feedback and a single bounded ADB relative-motion
+// step is injected until it converges on the host-derived target.
+//
+// Why it matters: one ADB report carries at most +/-63 counts, so a fast host
+// move is delivered as a train of reports. Dead-reckoning (the old behaviour)
+// assumes every queued count eventually lands, but the guest may drop or merge
+// reports, and the *first* motion event only seeds a baseline - so the guest
+// cursor settles at a permanent offset from the pointer. Clicks are dispatched
+// at the guest cursor position, which is why they landed in the wrong place.
+// Closing the loop removes the offset by construction.
+const ADB_SYNC_DEADBAND = 1        // counts; inside this the step is finished
+const ADB_SYNC_STALE_LIMIT = 4     // frames to wait for the guest before re-injecting
+const ADB_SYNC_CHUNK_MAX = 63      // one ADB mouse report carries at most +/-63
+
+let adbTargetX = -1                // guest-space target, -1 = not steering
+let adbTargetY = -1
+let adbStepOutstanding = false
+let adbStepSnapshotX = 0
+let adbStepSnapshotY = 0
+let adbSyncStaleFrames = 0
+
+// Closed-loop only makes sense where the cursor is a pixel position: the
+// Super Hi-Res desktop and SHR games. In the ROM's text/legacy modes the
+// pointer is derived from character cells and the original relative deltas
+// are the correct behaviour.
+const iigsClosedLoopActive = (): boolean =>
+  getCurrentMachineName() === "APPLE2GS" && isIigsShrActive()
+
+const iigsSetCursorTarget = (event: MouseEventSimple) => {
+  // The UI hands over a position normalised across the visible screen, which
+  // Super Hi-Res presents as 640x400 by showing each of its 200 scanlines
+  // twice (graphics.ts SHR_WIDTH/SHR_HEIGHT). So the guest's vertical range is
+  // 0..199 and a 320-pixel-wide SHR screen halves the horizontal counts.
+  const px = Math.max(0, Math.min(639, Math.round(event.x * 639)))
+  const py = Math.max(0, Math.min(199, Math.round(event.y * 399) >> 1))
+  adbTargetX = isIigsShr320() ? px >> 1 : px
+  adbTargetY = py
+  adbSyncStaleFrames = 0
+}
+
+// One convergence step per emulated frame. Returns the injected delta, which
+// is only exposed so tests can assert the stepper's behaviour.
+export const iigsMouseStep = (): { dx: number, dy: number } | null => {
+  if (adbTargetX < 0 || !iigsClosedLoopActive()) {
+    // Leaving SHR (or a reset) drops the target so the next session re-seeds.
+    if (adbTargetX >= 0 && !iigsClosedLoopActive()) {
+      adbTargetX = -1
+      adbTargetY = -1
+      adbStepOutstanding = false
+      adbSyncStaleFrames = 0
+    }
+    return null
+  }
+  const { x: ex, y: ey } = getIigsMousePos()
+  if (Math.abs(adbTargetX - ex) <= ADB_SYNC_DEADBAND
+    && Math.abs(adbTargetY - ey) <= ADB_SYNC_DEADBAND) {
+    adbTargetX = -1
+    adbTargetY = -1
+    adbStepOutstanding = false
+    adbSyncStaleFrames = 0
+    return null
+  }
+  // The guest has not read the previous report yet: injecting now would
+  // overwrite it and lose motion.
+  if (iigsADB.mouseReportPending()) return null
+  if (adbStepOutstanding && ex === adbStepSnapshotX && ey === adbStepSnapshotY) {
+    // The guest has not moved at all since the last step. Give it a few frames
+    // in case it is just slow, then assume the step was dropped and re-inject.
+    if (++adbSyncStaleFrames < ADB_SYNC_STALE_LIMIT) return null
+  }
+  const dx = Math.max(-ADB_SYNC_CHUNK_MAX, Math.min(ADB_SYNC_CHUNK_MAX, adbTargetX - ex))
+  const dy = Math.max(-ADB_SYNC_CHUNK_MAX, Math.min(ADB_SYNC_CHUNK_MAX, adbTargetY - ey))
+  if (dx === 0 && dy === 0) {
+    adbTargetX = -1
+    adbTargetY = -1
+    adbStepOutstanding = false
+    adbSyncStaleFrames = 0
+    return null
+  }
+  adbStepSnapshotX = ex
+  adbStepSnapshotY = ey
+  adbSyncStaleFrames = 0
+  adbStepOutstanding = true
+  iigsADB.queueMouse(dx, dy)
+  return { dx, dy }
+}
+
+// Route a UI mouse event onto the IIgs ADB bus.
+//
+// In Super Hi-Res mode the pointer position is handed to the closed-loop
+// stepper (iigsMouseStep) instead of being converted to deltas here: the ADB
+// cannot carry more than +/-63 counts in one report, so dead-reckoning a fast
+// host move silently loses ground and the guest's cursor ends up offset from
+// the pointer - every click then lands where the cursor is rather than where
+// the user aimed. Outside SHR (the ROM's text/legacy modes, where the cursor
+// lives in character cells) the original relative-delta behaviour is kept.
 const iigsADBEvent = (event: MouseEventSimple) => {
   // Debug: every event the UI hands to the IIgs path (?adbtrace=1).
   noteAdbLog("ui", event.buttons, event.x, event.y)
@@ -581,6 +682,12 @@ const iigsADBEvent = (event: MouseEventSimple) => {
         iigsADB.setMouseButton(true)
         break
     }
+    return
+  }
+  if (iigsClosedLoopActive()) {
+    if (event.x >= 0 && event.x <= 1.0) adbLastX = event.x
+    if (event.y >= 0 && event.y <= 1.0) adbLastY = event.y
+    iigsSetCursorTarget(event)
     return
   }
   // Both axes have to go into the same report, so collect them first.
@@ -610,6 +717,10 @@ const iigsADBEvent = (event: MouseEventSimple) => {
 export const resetADBTracking = () => {
   adbLastX = -1
   adbLastY = -1
+  adbTargetX = -1
+  adbTargetY = -1
+  adbStepOutstanding = false
+  adbSyncStaleFrames = 0
 }
 
 let basicPos = 0
