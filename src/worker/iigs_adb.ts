@@ -164,7 +164,16 @@ export class IIGSADB {
   // $C024 mouse report staging
   private pendingX = 0;
   private pendingY = 0;
-  private mouseButton = false;
+  // The two buttons live in *different* bytes of register 0 (gssquared
+  // ADB_Mouse::update_button_down: byte 0 is button 1 / RIGHT, byte 1 is
+  // button 0 / LEFT). Both default to 0x80 ("released"); 0x00 means pressed.
+  // The IIgs ROM reads them apart - FF:9D31 "TYA / ROL A" takes the LEFT
+  // button from the Y byte's bit 7 and FF:9D33 "TXA / BMI" takes the RIGHT
+  // button from the X byte's bit 7 - so putting the same state in both bytes
+  // makes one physical click look like two, which GS/OS reads as a double
+  // click.
+  private button0Down = 0x80;   // LEFT
+  private button1Down = 0x80;   // RIGHT
   private buttonChanged = false;
   private reportInProgress = false;
 
@@ -175,14 +184,19 @@ export class IIGSADB {
   private cmd: number[] = [];
   private argumentsExpected = 0;
 
-  // Cycle stamp of the last $C027/$C024 read made from inside the ROM ADB task
-  // (see ROM_ADB_TASK_PC_*). A near-fresh stamp means the guest's own cursor
-  // driver is running and the UI must not paint a pointer overlay.
-  private romTaskReadCycle = -1e15;
+  // Cycle stamp of the last *polling* $C027 read made from inside the ROM ADB
+  // task (see ROM_ADB_TASK_PC_*): a read with nothing to report.
+  //
+  // Reading $C027 from the task is not by itself evidence of anything. A guest
+  // that draws its own pointer (Tass Times) sits in the task's loop asking
+  // forever, while GS/OS only runs the task when a report was latched, so it
+  // reads $C027 with data available and never polls. Stamping every read made
+  // the UI pointer overlay flicker off for a few frames after each report.
+  private romTaskPollCycle = -1e15;
 
-  // True while the guest's classic ROM cursor/mouse machinery is running.
+  // True while the guest's classic ROM cursor/mouse machinery is polling.
   romAdbTaskActive(): boolean {
-    return s6502.cycleCount - this.romTaskReadCycle < 100000;
+    return s6502.cycleCount - this.romTaskPollCycle < 100000;
   }
 
   // --- Status / data registers ---
@@ -196,8 +210,9 @@ export class IIGSADB {
     status |= this.interruptEnables;
     noteAdbLog("stat", status);
     const pc = getCpuPc();
-    if (pc >= ROM_ADB_TASK_PC_LO && pc < ROM_ADB_TASK_PC_HI) {
-      this.romTaskReadCycle = s6502.cycleCount;
+    if (pc >= ROM_ADB_TASK_PC_LO && pc < ROM_ADB_TASK_PC_HI
+      && (status & (STATUS_MOUSE_DATA | STATUS_MOUSE_Y_NEXT)) === 0) {
+      this.romTaskPollCycle = s6502.cycleCount;
     }
     return status;
   }
@@ -433,7 +448,6 @@ export class IIGSADB {
     // Only replace the register when there is something new to report, so an
     // unread report is not wiped out.
     if (dx === 0 && dy === 0 && !this.buttonChanged) return;
-    const buttonBit = this.mouseButton ? 0x00 : 0x80;
     this.pendingX -= dx;
     this.pendingY -= dy;    // Bits 6-0 are a *seven-bit two's complement* displacement, not a direction
     // bit plus a magnitude. gssquared encodes it as (delta & 0x3F) with bit 6
@@ -445,11 +459,12 @@ export class IIGSADB {
     // the absolute magnitude made every negative report arrive as
     // (magnitude - 64): a -63 move read as -1 and a -1 move as -63, so
     // leftward motion was essentially lost and the cursor only ever climbed.
-    this.mouseRegs[0] = (dx & 0x3f) | (dx < 0 ? 0x40 : 0x00) | buttonBit;
-    this.mouseRegs[1] = (dy & 0x3f) | (dy < 0 ? 0x40 : 0x00) | buttonBit;
+    this.mouseRegs[0] = (dx & 0x3f) | (dx < 0 ? 0x40 : 0x00);
+    this.mouseRegs[1] = (dy & 0x3f) | (dy < 0 ? 0x40 : 0x00);
     this.mouseHasData = true;
     this.buttonChanged = false;
-    noteAdbLog("latch", dx, dy, buttonBit);
+    this.updateButtonDown();
+    noteAdbLog("latch", dx, dy, this.mouseRegs[0]);
   }
 
   // The OS has just finished a report (both $C024 bytes, or a poll of device
@@ -462,6 +477,12 @@ export class IIGSADB {
     this.latchMouseReport();
   }
 
+  // Read-back for tests/diagnostics: the live register 0 pair. Byte 0 carries
+  // the RIGHT button in bit 7, byte 1 the LEFT button (gssquared layout).
+  getMouseRegisters(): { x: number, y: number } {
+    return { x: this.mouseRegs[0], y: this.mouseRegs[1] }
+  }
+
   // $C024 returns one byte per read: the X byte first, then the Y byte on the
   // following read (the ROM at FF:C4D2 gates on $C027 bit 7 and uses $C027
   // bit 1 to know the second read is the Y byte). The format is the standard
@@ -471,11 +492,6 @@ export class IIGSADB {
   // so the displacement decodes as: (byte & 0x7F) with 0x40 subtracted when
   // that bit is set. -63 is $41, -1 is $7F, +63 is $3F.
   readMouseData(): number {
-    // Track ROM-task callers here too: the task reads $C024 at FF:C4D9/C4E6.
-    const romTaskPc = getCpuPc();
-    if (romTaskPc >= ROM_ADB_TASK_PC_LO && romTaskPc < ROM_ADB_TASK_PC_HI) {
-      this.romTaskReadCycle = s6502.cycleCount;
-    }
     // KEGs's adb_read_c024() returns 0 when the mouse is off, rather than
     // whatever happens to be latched.
     if (!this.hasMouseData()) {
@@ -512,9 +528,14 @@ export class IIGSADB {
   // a long move leaves in pendingX/pendingY, so after "move then click" the
   // guest kept reading stale button-up reports and the click was lost.
   private patchReportButton() {
-    const buttonBit = this.mouseButton ? 0x00 : 0x80;
-    this.mouseRegs[0] = (this.mouseRegs[0] & 0x7f) | buttonBit;
-    this.mouseRegs[1] = (this.mouseRegs[1] & 0x7f) | buttonBit;
+    this.updateButtonDown();
+  }
+
+  // gssquared ADB_Mouse::update_button_down, verbatim: the RIGHT button goes
+  // in byte 0 and the LEFT button in byte 1, leaving the motion bits alone.
+  private updateButtonDown() {
+    this.mouseRegs[0] = this.button1Down | (this.mouseRegs[0] & 0x7f);
+    this.mouseRegs[1] = this.button0Down | (this.mouseRegs[1] & 0x7f);
   }
 
   queueMouse(dx: number, dy: number) {
@@ -526,10 +547,17 @@ export class IIGSADB {
     this.latchMouseReport();
   }
 
-  setMouseButton(pressed: boolean) {
-    noteAdbLog("button", pressed ? 1 : 0);
-    if (pressed === this.mouseButton) return;
-    this.mouseButton = pressed;
+  // button: 0 = left (button 0), 1 = right (button 1).
+  setMouseButton(button: 0 | 1, pressed: boolean) {
+    noteAdbLog("button", button, pressed ? 1 : 0);
+    const value = pressed ? 0x00 : 0x80;
+    if (button === 0) {
+      if (this.button0Down === value) return;
+      this.button0Down = value;
+    } else {
+      if (this.button1Down === value) return;
+      this.button1Down = value;
+    }
     if (this.mouseHasData && !this.reportInProgress) {
       // A motion report is sitting unread in the register. gssquared lets the
       // latest event win: ADB_Mouse::process_event updates register 0 on every
@@ -614,7 +642,8 @@ export class IIGSADB {
     this.initDeviceRegisters();
     this.pendingX = 0;
     this.pendingY = 0;
-    this.mouseButton = false;
+    this.button0Down = 0x80;
+    this.button1Down = 0x80;
     this.buttonChanged = false;
     this.reportInProgress = false;
     this.modifiers = 0;

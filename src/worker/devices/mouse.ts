@@ -587,6 +587,16 @@ let adbStepSnapshotX = 0
 let adbStepSnapshotY = 0
 let adbSyncStaleFrames = 0
 
+// Button transitions taken while the cursor is still catching up. The ROM
+// dispatches a click at the cursor position it has published, so delivering a
+// press mid-convergence would fire it at a stale position. Holding it until the
+// cursor reaches the pointer makes "click where you aimed" exact; the timeout
+// only exists so a guest that stops polling cannot swallow the click entirely.
+const ADB_CLICK_TIMEOUT_FRAMES = 20
+const adbClickQueue: Array<{ button: 0 | 1, pressed: boolean }> = []
+let adbClickWaitFrames = 0
+let adbClickAwaitConsume = false
+
 // Closed-loop only makes sense where the cursor is a pixel position: the
 // Super Hi-Res desktop and SHR games. In the ROM's text/legacy modes the
 // pointer is derived from character cells and the original relative deltas
@@ -606,9 +616,35 @@ const iigsSetCursorTarget = (event: MouseEventSimple) => {
   adbSyncStaleFrames = 0
 }
 
+// Hand over one queued button transition per frame. A press and its release
+// must never land in the same report - setMouseButton patches an unread report
+// instead of queueing behind it, so a same-frame pair would swallow the press.
+const drainIigsClicks = () => {
+  if (adbClickQueue.length === 0) return
+  if (!iigsClosedLoopActive()) {
+    for (const t of adbClickQueue) iigsADB.setMouseButton(t.button, t.pressed)
+    adbClickQueue.length = 0
+    adbClickWaitFrames = 0
+    adbClickAwaitConsume = false
+    return
+  }
+  if (adbTargetX >= 0 || adbClickAwaitConsume) {
+    const settled = adbTargetX < 0 && !iigsADB.mouseReportPending()
+    if (!settled && adbClickWaitFrames < ADB_CLICK_TIMEOUT_FRAMES) {
+      adbClickWaitFrames++
+      return
+    }
+  }
+  const t = adbClickQueue.shift() as { button: 0 | 1, pressed: boolean }
+  iigsADB.setMouseButton(t.button, t.pressed)
+  adbClickAwaitConsume = t.pressed
+  adbClickWaitFrames = 0
+}
+
 // One convergence step per emulated frame. Returns the injected delta, which
 // is only exposed so tests can assert the stepper's behaviour.
 export const iigsMouseStep = (): { dx: number, dy: number } | null => {
+  drainIigsClicks()
   if (adbTargetX < 0 || !iigsClosedLoopActive()) {
     // Leaving SHR (or a reset) drops the target so the next session re-seeds.
     if (adbTargetX >= 0 && !iigsClosedLoopActive()) {
@@ -666,22 +702,26 @@ const iigsADBEvent = (event: MouseEventSimple) => {
   // Debug: every event the UI hands to the IIgs path (?adbtrace=1).
   noteAdbLog("ui", event.buttons, event.x, event.y)
   if (event.buttons >= 0) {
+    let button: 0 | 1 = 0
+    let pressed = false
     // See comments in the firmware code for the bit values for
     // the interrupt status byte and mode byte.
     switch (event.buttons) {
-      case 0x00:  // button 0 up
-        iigsADB.setMouseButton(false)
-        break
-      case 0x10:  // button 0 down
-        iigsADB.setMouseButton(true)
-        break
-      case 0x01:  // button 1 up
-        iigsADB.setMouseButton(false)
-        break
-      case 0x11:  // button 1 down
-        iigsADB.setMouseButton(true)
-        break
+      case 0x00: button = 0; pressed = false; break   // button 0 (left) up
+      case 0x10: button = 0; pressed = true; break    // button 0 (left) down
+      case 0x01: button = 1; pressed = false; break   // button 1 (right) up
+      case 0x11: button = 1; pressed = true; break    // button 1 (right) down
+      default: return
     }
+    if (iigsClosedLoopActive()) {
+      // The click is dispatched at the guest cursor, so steer it to the
+      // position the UI reported and hold the transition until it arrives.
+      if (event.x >= 0 && event.y >= 0) iigsSetCursorTarget(event)
+      adbClickQueue.push({ button, pressed })
+      adbClickWaitFrames = 0
+      return
+    }
+    iigsADB.setMouseButton(button, pressed)
     return
   }
   if (iigsClosedLoopActive()) {
@@ -721,6 +761,9 @@ export const resetADBTracking = () => {
   adbTargetY = -1
   adbStepOutstanding = false
   adbSyncStaleFrames = 0
+  adbClickQueue.length = 0
+  adbClickWaitFrames = 0
+  adbClickAwaitConsume = false
 }
 
 let basicPos = 0

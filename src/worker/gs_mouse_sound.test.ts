@@ -18,10 +18,13 @@ test("IIgs UI mouse events reach the ADB bus", () => {
     iigsADB.reset()
 
     const adb = iigsADB as unknown as {
-      mouseButton: boolean, hasMouseData: () => boolean, readMouseData: () => number
+      hasMouseData: () => boolean, readMouseData: () => number,
+      getMouseRegisters: () => { x: number, y: number },
     }
     // Consume one full report: the X byte then the Y byte. Bits 6-0 are a
     // seven-bit two's complement displacement, so decode rather than mask.
+    // The buttons are split: RIGHT lives in the X byte's bit 7, LEFT in the Y
+    // byte's (gssquared ADB_Mouse::update_button_down).
     const readReport = () => {
       const x = adb.readMouseData()
       const y = adb.readMouseData()
@@ -32,7 +35,7 @@ test("IIgs UI mouse events reach the ADB bus", () => {
       return {
         x: disp(x), y: disp(y),
         xNeg: (x & 0x40) !== 0, yNeg: (y & 0x40) !== 0,
-        buttonUp: (x & 0x80) !== 0,
+        leftUp: (y & 0x80) !== 0, rightUp: (x & 0x80) !== 0,
       }
     }
     expect(adb.hasMouseData()).toBe(false)
@@ -50,7 +53,7 @@ test("IIgs UI mouse events reach the ADB bus", () => {
     expect(fwd.y).toBeGreaterThan(0)
     expect(fwd.xNeg).toBe(false)
     expect(fwd.yNeg).toBe(false)
-    expect(fwd.buttonUp).toBe(true)
+    expect(fwd.leftUp).toBe(true)
 
     // Moving back must produce the same displacement with the opposite sign.
     // The raw low six bits are the *complement* of a negative displacement,
@@ -64,13 +67,17 @@ test("IIgs UI mouse events reach the ADB bus", () => {
     expect(back.xNeg).toBe(true)
     expect(back.yNeg).toBe(true)
 
-    // A button press has to register too: bit 7 of the report clears.
+    // A button press has to register too: bit 7 of the LEFT byte clears while
+    // the RIGHT byte keeps its released state.
     MouseCardEvent({ x: 0, y: 0, buttons: 0x10 })
-    expect(adb.mouseButton).toBe(true)
-    expect(readReport().buttonUp).toBe(false)
+    expect(adb.getMouseRegisters().y & 0x80).toBe(0x00)
+    expect(adb.getMouseRegisters().x & 0x80).toBe(0x80)
+    const down = readReport()
+    expect(down.leftUp).toBe(false)
+    expect(down.rightUp).toBe(true)
     MouseCardEvent({ x: 0, y: 0, buttons: 0x00 })
-    expect(adb.mouseButton).toBe(false)
-    expect(readReport().buttonUp).toBe(true)
+    expect(adb.getMouseRegisters().y & 0x80).toBe(0x80)
+    expect(readReport().leftUp).toBe(true)
 
     // A reset drops the tracking baseline, so the next report only
     // re-establishes it instead of jumping the cursor into a corner.

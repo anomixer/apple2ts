@@ -16,8 +16,6 @@ import {
   handleGetSoftSwitches,
   handleGetSpeedMode,
   handleGetTextPage,
-  handleGetCursorX,
-  handleGetCursorY,
 } from "./main2worker"
 import { ARROW, RUN_MODE, convertAppleKey, MouseEventSimple, UI_THEME } from "../common/utility"
 import { ProcessDisplay, getCanvasSize, handleGetOverrideHires, canvasCoordToNormScreenCoord, xmargin, ymargin, setHostCursorNorm } from "./graphics"
@@ -521,18 +519,12 @@ const Apple2Canvas = (props: DisplayProps) => {
     return { x, y, buttons: -1 }
   }
 
-  // For APPLE2GS, use the guest cursor position (from ADB holes) for clicks
-  // so the click lands where the overlay arrow is drawn, not at the raw host
-  // pointer (which can drift due to ADB delta clamping). Other machines use
-  // the host pointer position via scaleMouseEvent().
+  // Clicks carry the host pointer position on every machine. The IIgs used to
+  // substitute the guest cursor here, but that cursor lags the pointer while
+  // the ADB closed loop catches up, so a fast move-then-click landed where the
+  // cursor still was. The worker now steers the guest cursor to this position
+  // and holds the button transition until it arrives.
   const getClickEvent = (event: ReactMouseEvent<HTMLCanvasElement>, buttons: number): MouseEventSimple | null => {
-    const machine = handleGetMachineName()
-    if (machine === "APPLE2GS") {
-      // Guest cursor is in 640x200 coordinates (ADB_COUNTS_X/Y).
-      const gx = handleGetCursorX()
-      const gy = handleGetCursorY()
-      return { x: gx / 640, y: gy / 200, buttons }
-    }
     const evt = scaleMouseEvent(event)
     if (!evt) return null
     evt.buttons = buttons

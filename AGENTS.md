@@ -614,6 +614,13 @@ there.
 
 ### 27. Apple IIgs Mouse (ADB) & Speaker ($C030) — DATA PATH FIXED, CURSOR STILL PARTIAL
 
+> **Status: fully resolved later.** A–D below are still accurate as the initial
+> data-path work. The "cursor still partial" part was closed by §42 (report
+> magnitude encoding), §43 (65816 V flag), §62 (closed-loop sync) and §63
+> (button layout + click deferral). The section's closing claim that the break
+> is "a ROM/GS/OS interaction rather than emulator plumbing" was wrong — every
+> fault was in our emulation.
+
 **Reported symptoms**: after mounting `GSOS601.po` on S7,D1 and booting to the
 Finder, the mouse pointer never moved and the machine was silent.
 
@@ -811,6 +818,10 @@ Two things that were checked and are *not* the cause:
   `mousePressed`/`mouseReleased` over a volume icon in headless Chrome does not
   select it, so this is not a "movement threshold" or "only fires while moving"
   problem — the event never reaches GS/OS at all.
+  **CORRECTED (section 63):** the event *was* reaching GS/OS, twice per click;
+  the single button bit shared by both report bytes made the Finder read one
+  click as a double click, which from the outside looks like "nothing selects,
+  things open by themselves". Fixed in §63a.
 - **The reports are delivered.** `hasMouseData()` reads 0 for 30 consecutive
   frames after motion, so the IRQ line is not latched and there is no interrupt
   starvation.
@@ -879,6 +890,14 @@ to touch the mouse globals is satisfied here, it is simply not the mechanism.
 **Conclusion**: the ADB emulation, the `$C024`/`$C027` handshake, the interrupt
 line and the cursor storage are all correct and equivalent to gssquared. The
 missing piece is entirely inside GS/OS's own event delivery.
+
+> **CORRECTED (section 63) — this conclusion was half right.** The ADB layer was
+> indeed fine, but three separate faults sat *below* the event manager and were
+> fixed later: the report magnitude encoding (§42), the 65816 ADC overflow flag
+> (§43), and — the one this section could not have seen — a single button bit
+> written into **both** ADB report bytes, which made one physical click look
+> like two transitions. Clicks now reach the Finder normally (select, open,
+> menus); nothing had to change inside GS/OS.
 
 **Regression tests**: `src/worker/gs_mouse_sound.test.ts` (mouse event routing,
 report direction/magnitude/button encoding, speaker output) and the existing
@@ -1028,14 +1047,15 @@ emulation-mode path, which is what old IIe games use, now matches the 6502.
 - **CDP In-Browser Screenshots**: Automated Chrome screenshot capture via DevTools Protocol to visually verify boot screens.
 
 ## Key Files Modified
-- `src/worker/cpu65816.ts`: 65816 CPU emulation, stack normalization, IRQ sampling, peripheral `specialJumpTable` execution, 65816 ADC/SBC decimal mode, and full WDC cycle accounting (bus-access counting plus per-addressing-mode internal cycles) so 8-bit code runs at 6502 speed.
-- `src/worker/memory.ts`: Memory mapping for Bank E0/E1, dedicated `megaIIMain` and `megaIIAux` (64KB each), Bank FE/FF ROM, IWM registers ($C0E0-$C0EF), State Register ($C068), Slot Register ($C02D), interrupt flags ($C046), slot C800 strobe management, and Fast RAM vs Mega II Language Card isolation.
+- `src/worker/cpu65816.ts`: 65816 CPU emulation, stack normalization, IRQ sampling, peripheral `specialJumpTable` execution, 65816 ADC/SBC decimal mode, and full WDC cycle accounting (bus-access counting plus per-addressing-mode internal cycles) so 8-bit code runs at 6502 speed. **The temporary PostEvent dedup in `case 0x22` was removed in §63.**
+- `src/worker/memory.ts`: Memory mapping for Bank E0/E1, dedicated `megaIIMain` and `megaIIAux` (64KB each), Bank FE/FF ROM, IWM registers ($C0E0-$C0EF), State Register ($C068), Slot Register ($C02D), interrupt flags ($C046), slot C800 strobe management, Fast RAM vs Mega II Language Card isolation, the `$C02E`/`$C02F` video counter, and the Mega II text-page source used by the renderer.
 - `src/worker/devices/harddrivedata.ts`: SmartPort and ProDOS hard drive block hooks ($C7C0/$C7C3), block read/write operations for GS/OS.
-- `src/worker/iigs_adb.ts`: ADB controller emulation.
+- `src/worker/iigs_adb.ts`: ADB controller emulation — micro-controller command framing, device model, **two independent button latches (RIGHT = register byte 0 bit 7, LEFT = byte 1 bit 7, per gssquared `ADB_Mouse::update_button_down`)**, report latching/patching, `mouseReportPending()`, and the `romAdbTaskActive()` poll-only discriminator for the UI cursor overlay.
+- `src/worker/devices/mouse.ts`: IIgs ADB event routing — closed-loop cursor sync (`iigsMouseStep`), click deferral (`adbClickQueue` / `drainIigsClicks`) so a press is delivered only after the guest cursor reaches the pointer, and the legacy relative-delta path for non-SHR modes.
 - `src/worker/iigs_clock.ts`: Full RTC and 256-byte Battery RAM state machine from `gssquared`.
-- `src/worker/motherboard.ts`: CPU cycle accounting, VBL→IRQ gated triggering for IIgs, separation of cold boot memory init from warm reset.
-- `src/ui/graphics.ts`: MouseText decoding and inverse-attribute handling for `APPLE2GS`; renders Super Hi-Res at 640x400 (200 SHR scanlines doubled) so the IIgs desktop is not stretched.
-- `src/ui/canvas.tsx`: hidden canvas sized 640x400 to hold either the legacy 560x384 image or the Apple IIgs 640x400 Super Hi-Res screen.
+- `src/worker/motherboard.ts`: CPU cycle accounting, VBL→IRQ gated triggering for IIgs, separation of cold boot memory init from warm reset, per-instruction housekeeping, and the cycle-anchored Ensoniq catch-up.
+- `src/ui/graphics.ts`: MouseText decoding and inverse-attribute handling for `APPLE2GS`; renders Super Hi-Res at 640x400 (200 SHR scanlines doubled) so the IIgs desktop is not stretched; draws the pointer overlay from the host pointer position.
+- `src/ui/canvas.tsx`: hidden canvas sized 640x400 to hold either the legacy 560x384 image or the Apple IIgs 640x400 Super Hi-Res screen; mouse events are sent with the real pointer position (the worker steers the guest cursor and holds the click).
 - `src/ui/copycanvas.ts`: Enabled MouseText support for `APPLE2GS` during screen copying.
 - `src/ui/inputparams.ts`: URL query parameter support for `?machine=apple2gs`, `?boot=true`, and syncing slot changes to the worker.
 - `src/ui/controls/speeddropdown.tsx`: Speed dropdown display mappings for IIgs (1.02 MHz, 2.8 MHz, 7.1 MHz, 14.3 MHz).
@@ -1070,13 +1090,18 @@ emulation-mode path, which is what old IIe games use, now matches the 6502.
      reconciliation then treated every leftward move as out of bounds and clamped
      it to 639. Both fixed; gs_cursor_draw.test.ts verifies the position is an
      exact affine function of the pointer (offset -102) across interleaved
-     left/right moves. The remaining open piece is the GS/OS event-manager side
-     (turning that motion into a visible arrow redraw / a usable click target),
-     not the position tracking itself.
-   - **Mouse click events work correctly (section 61):**
-     The BRK/beep on disk click and the single-click→double-click misfire are fixed.
-     The CPU-level PostEvent dedup now correctly drops the ROM's duplicate button
-     posts per ADB dispatch (timing-based, no stack inspection, returns A=1).
+     left/right moves.
+   - **The host pointer maps 1:1 onto guest pixels, and clicks land where the
+     user aimed (section 63).** Measured in headless Chrome: requested guest
+     pixels are reached within one count on both axes, edges included. A click
+     is now held until the closed-loop cursor arrives, so it can never dispatch
+     at a stale position.
+   - **Single click selects, double click opens (section 63).** The old report
+     put the same button bit in both ADB bytes, so one physical click looked
+     like two transitions and the Finder read it as a double click. Fixed with
+     gssquared's two-button model (RIGHT in byte 0, LEFT in byte 1); the
+     §56/§61/§62 CPU-level PostEvent dedup became unnecessary and was removed.
+     No BRK/beep on click in GS/OS or MYCRATE.
 
 ### 62. IIgs Mouse: Closed-Loop ADB Cursor Sync + PostEvent Dedup (Single Click No Longer Opens Icons) — FIXED
 
@@ -1140,6 +1165,15 @@ emulation-mode path, which is what old IIe games use, now matches the 6502.
   `vera.test.ts` CMDR-DOS failure). UI suite 265/272 (7 pre-existing
   failures, identical on a clean tree). `tsc --noEmit` clean, `npm run build`
   passes.
+
+> **SUPERSEDED in two places by section 63.** (1) The `cpu65816.ts` PostEvent
+> dedup described above has been **removed**; the duplicate post was a symptom
+> of the single button bit being replicated in both ADB report bytes, and it
+> disappeared once the gssquared two-button model was implemented. (2) The
+> `$1406` vs `$2006` note is also moot for the same reason. Everything else in
+> this section (closed-loop cursor sync, `mouseReportPending()`, the stepper
+> constants) is still current.
+
 - **GSSquared**: `c:\dev\gssquared\` (Primary reference: `RTC_PRAM.hpp`, `IWM2.hpp`, `display.cpp`, `DevelopLog.md`, `mmu_iie.cpp`, `computer.cpp`)
 - **Apple IIgs Hardware Reference Manual**: Official hardware specifications
 
@@ -1238,6 +1272,13 @@ gssquared's `iigs_aux_linear_to_phys`, and `is_aux_linear()` there returns
 `$C029` bit 6 does.
 
 ### 32. IIgs Events Never Reach Applications - OPEN (blocks Finder mouse and MCS)
+
+> **RESOLVED — historical record only.** Everything below is kept because the
+> ruled-out table is still useful, but the symptom set is gone: the root causes
+> were the ADB report magnitude encoding (§42), the 65816 ADC overflow flag
+> (§43), and the button bit replicated in both report bytes (§63). The
+> "likely mechanism" paragraphs in this and the next two sections were
+> refuted at the time and must not be revived.
 
 **Symptom set**, all from the same root cause:
 
@@ -1390,6 +1431,10 @@ be chased inside GS/OS's own EventManager, and it must be measured in the browse
 return address for the ROM's registered user hook
 (`LDA $E1:1021 / PHA / LDA $E1:1020 / PHA / RTS`), and it is zero at runtime, so nothing
 has registered through that mechanism.
+
+> **SUPERSEDED — the EventManager was never broken.** Sections 41–43 and 63 found the
+> faults in the ADB report encoding, the 65816 V flag and the button-bit layout. The
+> `$E1:1020` lead was never followed because it was not needed.
 
 **Tooling note**: the 65816 disassembler used for the ROM scans is
 `C:\Users\USER\AppData\Local\Temp\opencode\dis2.cjs`. Its long-operand byte order is
@@ -1815,6 +1860,13 @@ configuration command GS/OS sends during a boot.
 
 ### 38. The VBL path is NOT the problem - measured properly this time
 
+> **Partly corrected by section 41.** The VBL conclusion stands, but the
+> "cursor holes never leave zero / nothing reads `$C024`" measurement below was
+> taken from runs that stopped at 1100 frames, before the Finder was up. At
+> ~4000 frames the ROM ADB task runs and the holes track the pointer; the
+> remaining bug was the sign of negative motion (§42/§43). The table and the
+> "unclaimed stub" reasoning are still valid for the phases they covered.
+
 Section 33 measured the ROM's VBL path as dead, but that was on `mcs.2mg`, where
 the machine never got past the ProDOS 8 banner. `gs_vbl_path.test.ts` repeats the
 measurement on **GS/OS 6.0.1 all the way to the Finder**, with an injected mouse
@@ -1863,6 +1915,14 @@ thing that ever writes `$047c`, `$057c`, `$04fc`, `$05fc` and `$E1/10190-10193`
 Event Manager being active. gssquared calls the same thing "the KEGS-style
 MMU-write (dead-reckoning) path" and keeps it behind
 `KEYGLOO_MOUSE_SYNC_INJECTION_ONLY=1`.
+
+> **CORRECTED (section 41) — the "hole stays at zero" observation was an
+> artifact of stopping at 1100 frames.** With the Finder fully up (~4000 frames)
+> the ROM's ADB task *does* run, GS/OS polls `$C027`, and the holes track the
+> pointer. The real fault was the sign of negative motion: the report magnitude
+> was encoded as an absolute value instead of seven-bit two's complement (§42),
+> compounded by the 65816 V flag (§43). "Nothing reads `$C024`" was never true.
+
 
 **Next step**: find out who reads `$C024` under GS/OS 6.0.1 on a real machine, and
 if it is GS/OS rather than the ROM, instrument every 24-bit read of `$C024` with the
@@ -2040,6 +2100,13 @@ so nothing downstream can produce an event.
 ---
 
 ### 41. Negative mouse motion is lost - narrowed to leftover ADB motion, fix NOT shipped
+
+> **Shipped in section 42 (and completed by 43).** The report magnitude was an
+> absolute value where the guest decodes a seven-bit two's complement; the
+> `$AA`/native-mode lead in here was a dead end, and the `$9Dxx`-is-at-fault
+> lead was disproved by the byte sweep in this same section. Read the section
+> for the measurement methodology (and the three measurement traps at the end),
+> not for its conclusions.
 
 The Apple IIgs cursor still never appears, and now that the desktop renders
 (section 39) that is the only thing left. `gs_mouse_who.test.ts` measures it, and
@@ -2456,6 +2523,13 @@ for them (`window.__ensoniqDebug.playCalls` answers that directly).
 
 ### 45. ADB mouse click chain: $E10034 vector install + the single-click->double-click question — PARTIAL
 
+> **Completed by section 63.** The `$E10034` vector install is real and still
+> needed. The "two posts per dispatch" question at the end is answered: the
+> second transition came from the **report layout**, not from the ROM's loop
+> logic — the same button bit was written into both bytes of ADB register 0.
+> Fixed in §63a, after which the CPU-level dedup became unnecessary and was
+> removed.
+
 **What was fixed (committed this section)**: `iigsInitInterrupts()`
 (`src/worker/memory.ts`) now installs `$E1:0034 = JML $FEC5C8`. The ROM never
 writes `$E10034` itself, so before this the ADB mouse dispatch at `FF:B97F`
@@ -2618,6 +2692,10 @@ serviced and the title screen music never started.
 
 ### 47. IIgs Keyboard via ADB + Sound Cadence Fix + Mono Mirror — IN PROGRESS
 
+> **A, B and C are all in the tree and tested.** What remains from this section
+> is only the manual play-through items in "Still open" (Silpheed pitch, Tass
+> Times keyboard in-game) — see §63e for what the mouse work closed.
+
 **Symptoms (user report, 2026-10-18)**: Tass Times music plays but sounds slow;
 Silpheed plays at the right speed but the pitch is "weird"; in-game keyboard
 and mouse do not respond (title screen works).
@@ -2701,6 +2779,11 @@ failure, which also fails on a clean tree). `tsc --noEmit` clean. UI suite
 ---
 
 ### 48. Apple IIgs Native-Mode CPU Speed (2.8 MHz) — IMPLEMENTED
+
+> **REMOVED — see §60b.** The native-mode speed factor described below was
+> deleted in commit `76d9f58b`. It is the wrong model: on real hardware the
+> 65816 runs at 2.8 MHz in *both* modes, and only `$C036` bit 7 (slow mode)
+> drops it to 1.024 MHz. Kept for the measurement notes; do not re-implement.
 
 **Root cause of slow Tass Times music**: The IIgs 65816 runs at 1.02 MHz in
 emulation mode (E=1) and 2.8 MHz in native mode (E=0), unless slow mode is
@@ -3112,6 +3195,14 @@ is dead — see §38 and the measurements above), so menu highlight, icon
 selection and click dispatch need the in-guest event delivery fixed; the
 pointer under-cursor refinement and that work belong together.
 
+> **BOTH GAPS CLOSED by section 63.** The overlay now uses the host pointer
+> position (`setHostCursorNorm`) so it coincides with the arrow the user is
+> looking at, and the guest holes are steered to the same pixels (measured
+> within one count, edges included). The Event Manager was never dead: clicks
+> and menus work once the ADB button layout is right. `drawIigsCursor()` no
+> longer reads the holes for positioning — they are still read in tests to
+> verify convergence.
+
 **Build hygiene**: `npm run build` (which runs plain `tsc` over all of `src/`,
 tests included) failed with 16 pre-existing errors in
 `src/worker/gs_tass_timer_probe.test.ts` — the §49 debug probe's prototype
@@ -3126,6 +3217,13 @@ removed the dead `shift` placeholder and unused `distinctVol`/`megaIIAux`/
 ---
 
 ### 54. IIgs: overlay cursor gated on the guest's own ROM mouse task; keyboard now ALSO drives the legacy $C000 register
+
+> **The overlay gate changed in §63d.** Stamping `$C027` on *every* ROM-task
+> read made the overlay blink off for a few frames after each report, because
+> GS/OS also runs that task to consume reports. It now stamps only genuine
+> polls (nothing to report), which keeps GS/OS at 0 active frames while idle,
+> moving and clicking, and Tass Times at 120/120. The keyboard part of this
+> section is unchanged.
 
 **User feedback after §53**: (1) in Tass Times three cursors were visible -
 host + the game's own big arrow (correctly placed) + our small overlay arrow
@@ -3191,10 +3289,21 @@ events (menu highlight / icon selection / clicks - unchanged from §53), and
 the overlay's exact-under-pointer mapping (bezel-inset screen rect vs full
 window, §53).
 
+> **Both closed in §63.** The Event Manager was never the problem: one physical
+> click was arriving as two transitions because the button bit was written into
+> both ADB report bytes. Menus, selection and double-click all work now, and the
+> overlay is drawn at the host pointer while the guest holes are steered to the
+> same pixels.
+
 
 ---
 
 ### 56. IIgs Mouse Single Click Registered as Double Click — FIXED (CPU-level PostEvent dedup)
+
+> **SUPERSEDED by section 63 — do not restore this dedup.** The duplicate
+> PostEvent was a symptom of the single button bit being written into *both*
+> ADB report bytes. With gssquared's two-button layout the ROM posts once per
+> transition and the CPU-side skip has been removed.
 
 **Symptom**: in GS/OS 6.0.1 a single physical click on a volume icon opened it
 (as if double-clicked). The user reported "滑鼠點一下, 還是 double click 啊!".
@@ -3233,6 +3342,15 @@ into a single PostEvent per button transition.
 
 ### 55. IIgs Event Pipeline Verified End-to-End; ADB Cursor Drift Identified as Root Cause of Menu Non-Highlight
 
+> **The diagnosis is right, the fix was reverted, and the cause was narrower.**
+> The dead-reckoning drift was real for large moves, but section 62 solved it
+> properly with a closed-loop stepper, and section 63 showed that the
+> non-highlighting menus were mostly the **click landing twice** (button bit in
+> both report bytes). The `$E1:00E9` write described under "Fix applied" below
+> was **removed again in §57A** — gssquared never pokes guest memory from a UI
+> callback, and doing so can corrupt the ROM's interrupt scratch page mid-boot.
+> The measurements in "What was verified" are still accurate and useful.
+
 **Investigation (2026-10-20)**: deep probe of the menus do not highlight symptom.
 
 #### What was verified (all by measurement, not guess)
@@ -3269,6 +3387,12 @@ So clicks land on the wrong UI element (often the desktop or Apple logo),
 producing no visible menu highlight.
 
 #### Fix applied
+
+> **REVERTED in §57A — do not re-add.** The async Mega II aux poke has been
+> removed from `iigsADBEvent`. The cursor is steered correctly by the
+> closed-loop stepper (§62) instead, and the click is held until the cursor
+> arrives (§63b), which makes the event record's cursor field correct without
+> touching guest memory.
 
 Changed `iigsADBEvent` in `src/worker/devices/mouse.ts` to **publish the host
 pointer position to Mega II aux RAM** (`$E1:00E9`/`$E1:00EA` for X,
@@ -3343,10 +3467,15 @@ set, and `passSetRunMode(NEED_BOOT)` fires from `handleFragment()` only after
   can starve the SmartPort block reads during boot. Needs a gssquared-style
   cycle-accurate scheduler comparison. The faithful reference is
   `c:\dev\gssquared\src\cpus\base_6502.cpp` + `computer.cpp` run loop.
+  **FIXED in §58** — it was the 8-instruction batch; housekeeping now runs
+  every instruction.
 - **Tass Times in-game input**: 禮47A wired the IIgs ADB keyboard dual path
   and 禮54 made keys also drive `$C000`. Needs a live browser play-through to
   confirm end-to-end (the title screen does not advance on CDP-dispatched keys
   in headless Chrome, so it cannot be verified automatically).
+  **Mouse side FIXED in §63** (the in-game `$C02E` spin that froze the game is
+  §52; the report encoding and button layout are §42/§63). The keyboard
+  play-through is still manual.
 - **Silpheed pitch**: requires a live `?ensoniqdbg=1` osc dump from a real
   browser run; the DOC model itself matches gssquared (march math, halt
   semantics, mix/8, signed int8, mono mirror).
@@ -3355,8 +3484,12 @@ set, and `passSetRunMode(NEED_BOOT)` fires from `handleFragment()` only after
   discrepancy in our ADB report latching / Event Manager state that makes
   PostEvent return 0 twice. The faithful fix is to make our ADB micro-controller
   match gssquared's `ADB_Micro.hpp` exactly so one press yields one dispatch.
+  **DONE in §63a** — that is exactly what turned out to be wrong (one button
+  bit in both report bytes). The dedup is gone.
 - **Overlay cursor exact-under-pointer mapping** (禮53/禮54): bezel-inset screen
-  rect vs. full window scale/offset.
+  rect vs. full window scale/offset. **CLOSED in §63c** — the overlay is drawn
+  at the host pointer and the guest holes converge to the same pixels (within
+  one count).
 - **`iigsHasAnyDiskMedia()` is a UI/worker-side heuristic**, not hardware.
   gssquared decides bootability from the IWM/SmartPort device status bytes; our
   `iigsHasFloppyMedia()`/`iigsHasHardDriveMedia()` mirror that intent but are
@@ -3546,6 +3679,14 @@ as a 2x-fast tune) rather than a tempo error.
 
 #### 60d. MYCRATE.2MG - GS/OS Finder freezes - OPEN, NOT a regression
 
+> **Status (section 63e): did not reproduce.** MYCRATE now boots to the Finder
+> with its volume window and survives single click, double click and a 1 s
+> press-hold with the canvas liveness hashes still changing. The "click and it
+> freezes" half of the report was the double mouseDown from the shared button
+> bit (§63a). Whether the original *idle* freeze of §60d is gone or merely not
+> retriggered in these runs is unproven — if it comes back, the `$C050-$C05D`
+> soft-switch analysis below is still the place to start.
+
 **Reproduced**: MYCRATE.2MG (32 MB) boots to the GS/OS Finder (291,023 lit
 pixels) and then the screen **stops updating** - the canvas hash is
 identical 25 s apart - while the CPU keeps executing (69 M instructions).
@@ -3594,12 +3735,19 @@ make the display follow the IIgs page register rather than
 
 ### 61. BRK/Beep on GS/OS Disk Click & Double-Click Fix — RESOLVED
 
+> **SUPERSEDED by section 63 — the dedup described below has been removed.**
+> The real cause was the ADB report layout (one button bit shared by both
+> bytes). The `$1406` vs `$2006` question is moot now: the ROM posts once per
+> transition, so there is no duplicate to reject.
+
 **Issue**: In GS/OS 6.0.1, clicking (mounting) a disk image triggered a guest BRK instruction followed by a speaker beep — the machine appeared to crash. Additionally, a single physical mouse click was registered as a double-click in the Finder (opening volumes instead of selecting them).
 
 **Root cause**: The IIgs ROM's mouse-button dispatch routine (`FE:C5C8`) calls the Toolbox `PostEvent` (tool `$1406`, invoked via `JSL $E10000` with `X=$2006`) **twice per ADB dispatch** — the ROM's post loop at `FE:C64B` re-enters because the Toolbox returns success (0) both times. GS/OS then sees two `mouseDown` events and treats one click as a double-click.
 
 Our original dedup in `cpu65816.ts` (`case 0x22` JSL) had three bugs:
 1. Checked `X === 0x1406` — never matched (the guest uses `X=$2006`), so the dedup was dead code.
+   *(Recorded as it was at the time. §62 later switched the check to `$1406`, and
+   §63 removed the dedup entirely; the ROM in fact uses `$1406` at `FE:C674`.)*
 2. Inspected the guest stack via `readMemory()` to extract the event code — this could land on a `$C0xx` soft switch and toggle it, corrupting guest state.
 3. On skipping the duplicate, returned `A=0` (success) — causing the ROM's `JSL PostEvent / BEQ loop` to spin forever, exhausting the stack and trapping into the BRK handler (which beeps).
 
@@ -3615,3 +3763,221 @@ Our original dedup in `cpu65816.ts` (`case 0x22` JSL) had three bugs:
 - 9 GS-specific tests (`gs_boot`, `gsos_boot`, `gs_ctrl_reset`, `gs_basic_sound`, `gs_tass_click_freeze`, `gs_mouse_sound`): all pass
 - Headless Chrome: `brk=0`, `clicks=93` throughout — no BRK, no extra beep
 - Single physical click now produces exactly one `mouseDown` + one `mouseUp`; no double-click misfire
+
+---
+
+### 63. IIgs mouse in a real browser: exact host→guest mapping, no click crash, single click no longer opens icons — RESOLVED
+
+**User complaints (verbatim)**:
+1. "最重要是因為他是browser-based emulator. 你host滑鼠點到的position, 就是要完美轉譯到模擬器裡面的正確position."
+2. "再來是gsos , mycrate 都要正常運作啊~ 現在點一下就當機."
+3. "滑鼠double click的物件, 像是磁碟機是要雙擊才會打開的. 現在是single click就打開了."
+
+All three are fixed. Two of them turned out to be **one** bug: the button bit.
+
+#### 63a. The single click / double click bug: both buttons shared one bit
+
+The old `latchMouseReport()` wrote the same button bit into **both** bytes of
+ADB register 0:
+
+```
+byte 0 (X) and byte 1 (Y) both:  bit7 = button  |  bits6-0 = motion
+```
+
+so one physical click produced **two** button-state transitions in the byte
+stream the guest reads (`$C024` alternates X, Y, X, Y). The ROM's dispatcher at
+`FE:C5C8` reacts per transition, so one click posted two `mouseDown` events and
+the GS/OS Finder's double-click detector fired: icons opened on a single click.
+
+That also explains the "one click and the machine beeps" report. It was **not**
+a guest crash: it was the `FE:C5C8` post loop being driven twice per click.
+Sections 56 and 62 tried to paper over it in the CPU (`cpu65816.ts` case `0x22`
+skipping the second `JSL`), including two guesses at the tool number
+(`$1406` vs `$2006`). **That dedup has been removed entirely** — with the
+correct report layout there is nothing left to dedup, and `case 0x22` is a plain
+JSL again.
+
+The fix is gssquared's model, `ADB_Mouse::update_button_down`, implemented
+verbatim in `src/worker/iigs_adb.ts`:
+
+```ts
+private updateButtonDown() {
+  this.mouseRegs[0] = this.button1Down | (this.mouseRegs[0] & 0x7f);  // RIGHT in byte 0
+  this.mouseRegs[1] = this.button0Down | (this.mouseRegs[1] & 0x7f);  // LEFT  in byte 1
+}
+```
+
+`0x80` = released, `0x00` = pressed, per button, and the motion bits are left
+alone. `button0Down` (LEFT) and `button1Down` (RIGHT) are separate latches;
+`setMouseButton(0 | 1, pressed)` sets one of them and `patchReportButton()` folds
+the live state into a report that is still waiting to be read (so a press that
+arrives while motion sits unread is not lost behind the leftover-motion chain).
+
+#### 63b. "Click where you aimed": the click is held until the cursor arrives
+
+GS/OS dispatches a click **at the cursor position the guest has published**, not
+at the host pointer. If the closed-loop stepper is still walking the cursor
+toward the pointer when the press arrives, the click lands at a stale position —
+which is how a click intended for a menu title ended up on the desktop.
+
+`src/worker/devices/mouse.ts` therefore queues button transitions instead of
+delivering them immediately:
+
+```ts
+const ADB_CLICK_TIMEOUT_FRAMES = 20
+const adbClickQueue: Array<{ button: 0 | 1, pressed: boolean }> = []
+```
+
+- `iigsADBEvent()` sets the cursor target from the event position and pushes the
+  transition onto the queue.
+- `drainIigsClicks()` (first thing in `iigsMouseStep()`, i.e. once per emulated
+  frame) delivers **one** transition per frame, only once the target is reached
+  (`adbTargetX < 0`) and no report is still unread (`!iigsADB.mouseReportPending()`).
+  One per frame is deliberate: a press and its release must never land in the
+  same report, because `setMouseButton` patches an unread report rather than
+  queueing behind it, which would swallow the press.
+- The 20-frame timeout only exists so a guest that stops polling cannot swallow
+  a click forever. Outside SHR (the ROM's text/legacy modes) the queue is
+  flushed immediately — those modes have no pixel cursor to converge.
+
+`src/ui/canvas.tsx` lost its old APPLE2GS "override the click position with the
+guest cursor holes" branch as a result: the worker now steers the cursor to the
+pointer and holds the transition until it gets there, so the UI must send the
+**real** pointer position and nothing else.
+
+#### 63c. Measured mapping accuracy (headless Chrome, CDP)
+
+`gsc18.cjs` drove the host pointer to requested **guest pixels** and read the
+guest holes back (`$047C|$057C<<8`, `$04FC|$05FC<<8`):
+
+```
+guest target  100,50  -> holes  100,50    d=0,0
+guest target  400,120 -> holes  400,120   d=0,0
+guest target  620,190 -> holes  619,190   d=-1,0
+guest target   20,10  -> holes   20,10    d=0,0
+guest target  320,100 -> holes  320,100   d=0,0
+```
+
+i.e. **within one count on both axes everywhere**, including the screen edges.
+The remainder is the ±1 deadband in `iigsMouseStep()`.
+
+Because the click is now deferred until convergence, the click target and the
+host pointer agree by construction; the test that pins this is
+`src/worker/gs_mouse_sync.test.ts` "a click is held until the cursor reaches the
+pointer".
+
+On hiding the host cursor (gssquared's F1): **not needed**. The UI overlay in
+`graphics.ts` is drawn at the host pointer position (`setHostCursorNorm`), so the
+two arrows coincide. The overlay is suppressed on a guest that draws its own
+pointer (`iigsADB.romAdbTaskActive()`, section 54) — Tass Times shows exactly
+one arrow, its own.
+
+#### 63d. `romAdbTaskActive()` must stamp polls, not reads
+
+The overlay discriminator (section 54) stamped `$C027` on **every** ROM-task
+read. But GS/OS legitimately runs the same ROM task to *consume* a latched
+report, so every mouse move stamped it and the overlay blinked off for a few
+frames. It now stamps only genuine **polls** — reads taken from the task's
+address range with nothing to report:
+
+```ts
+if (pc >= ROM_ADB_TASK_PC_LO && pc < ROM_ADB_TASK_PC_HI
+  && (status & (STATUS_MOUSE_DATA | STATUS_MOUSE_Y_NEXT)) === 0) {
+  this.romTaskPollCycle = s6502.cycleCount;
+}
+```
+
+`src/worker/gs_rom_adb_task.test.ts` pins the discrimination: GS/OS scores 0
+active frames while idle, moving **and** clicking; Tass Times scores 120/120.
+
+#### 63e. Verification
+
+Browser (headless Chrome, CDP, disks served from the port-6503 static server
+per section 40):
+
+| scenario | result |
+|---|---|
+| GS/OS 6.0.1: single click on MDVOL2 | selects only (label/icon drawn inverse), does **not** open |
+| GS/OS 6.0.1: double click on MDVOL2 | opens the volume window |
+| GS/OS 6.0.1: press-and-hold (1 s), in-window click, File menu press/hold + item select | all work, no BRK, no beep |
+| MYCRATE.2MG: boot -> Finder with the MYCRATE volume window | renders; `__audioDebug.clickCalls` stays at 93 across clicks |
+| MYCRATE.2MG: single click, double click, 1 s hold | no crash; canvas liveness hashes keep changing (the guest keeps drawing) |
+
+The "click beeps / freezes" symptom is gone in both disks; `clickCalls = 93` is
+the boot POST + Finder beeps, unchanged by clicking (a BRK loop would drive it
+up).
+
+Suites: worker **818/818** (79 suites), UI **335/335** (51 suites),
+`npx tsc --noEmit` clean. New/changed regression tests:
+`gs_mouse_sync.test.ts` (convergence + one clean report per click + deferred
+press), `gs_adb_button.test.ts` and `gs_mouse_sound.test.ts` (LEFT and RIGHT in
+different bytes), `gs_rom_adb_task.test.ts`, `gs_mouse_neg.test.ts`.
+
+#### 63f. Files touched
+
+- `src/worker/iigs_adb.ts` — two-button latches, `updateButtonDown()`,
+  `setMouseButton(button, pressed)`, `patchReportButton()`, poll-only
+  `romTaskPollCycle`; `mouseReportPending()` includes all pending motion.
+- `src/worker/devices/mouse.ts` — click-deferral queue, `iigsSetCursorTarget()`,
+  `drainIigsClicks()`, button mapping for both buttons.
+- `src/worker/cpu65816.ts` — CPU-level PostEvent dedup **removed**.
+- `src/ui/canvas.tsx` — click position is the real pointer position again.
+- Tests as listed in 63e.
+
+---
+
+### 64. Two rendering defects observed while verifying section 63 — OPEN, unrelated to input
+
+Both were seen in headless Chrome on GS/OS 6.0.1 and MYCRATE. Neither is caused
+by the mouse work, and neither blocks clicking.
+
+1. **Desktop-layer icons render as solid black bars.** MDVOL2, APPLEDISK5.25A/B,
+   GSHK, MYCRATE and the Trash appear as filled black rectangles on the Finder
+   desktop. The *same* icons drawn inside a volume window render correctly
+   (label, border, graphics), and selecting one inverts correctly. That points
+   at the desktop layer's QuickDraw II blit — most likely a masked/transparent
+   transfer being treated as an opaque fill — not at the icon data itself.
+2. **Grayed-out menu items render as garbage glyphs.** In a dropped-down menu,
+   enabled items render correctly while disabled/grayed items produce random
+   characters ("Open" -> `$&&`, "Rename" -> `Øiïêë`). Grayed text is normally
+   drawn through the 50%-gray dithered path, so this smells like the same
+   transfer-mode gap: a gray blit treating its source as text rather than as a
+   mask.
+
+Both need the QuickDraw II pattern/mask blit path (`TOOL034` / QD II copybits)
+inspected against gssquared's `display.cpp` transfer modes. Recorded so the next
+session does not mistake them for fallout from the pointer work.
+
+---
+
+### 65. Index of corrections made to earlier sections (2026-10-24)
+
+Earlier entries are kept as a historical record, so this is the audit trail for
+what in them is no longer true. Each entry was superseded by a later
+measurement; none of the corrections are speculative.
+
+| section | claim that was wrong | what is actually true | superseded by |
+|---|---|---|---|
+| 27 | "the break is a ROM/GS/OS interaction rather than emulator plumbing" | every fault was in our emulation: report encoding, V flag, button layout | 42, 43, 63 |
+| 27 | "the button path is dead, the event never reaches GS/OS" | it reached GS/OS twice per click (shared button bit) | 63a |
+| 29a | "the missing piece is entirely inside GS/OS's event delivery" | ADB layer was fine, but three faults sat below the event manager | 42, 43, 63 |
+| 32/33/34 | "events never reach applications", "Event Manager is dead" | events arrive; single click was read as a double click | 63 |
+| 33 | "watch `$E1:1020` / follow the EventManager" | never needed — the fault was the report | 41–43, 63 |
+| 34 | "no-keypress loader crash at `$00:F12E`" | withdrawn; it was nondeterministic bus noise | 35 |
+| 38 | "the cursor holes never leave zero, nothing reads `$C024`" | true only before the Finder is up (~1100 frames); at ~4000 frames they track | 41 |
+| 41 | "negative motion fix not shipped", "`$AA` executes as TAX" | shipped as the 7-bit two's-complement encoding; `$AA` = TAX is correct (gssquared agrees) | 42 |
+| 45 | "single→double click: open question" | answer: one button bit in both report bytes | 63a |
+| 48 | "native-mode 2.8 MHz speed factor implemented" | removed in `76d9f58b`; only `$C036` bit 7 selects 1.024 MHz | 60b |
+| 53 | "Event Manager never receives mouse events; clicks cannot be targeted" | both work; overlay is drawn at the host pointer | 63b, 63c |
+| 54 | overlay gate stamps every ROM-task `$C027` read | only genuine polls are stamped (GS/OS consumes reports) | 63d |
+| 55 | "publish the host pointer into `$E1:00E9`" | removed in `57A`; the closed-loop stepper does it properly | 57A, 62 |
+| 56/61/62 | "CPU-level PostEvent dedup is the fix" | dedup removed; the duplicate post was a symptom of the report layout | 63a |
+| 57E | "MCS -err 01 open", "PostEvent dedup is a hack", "overlay mapping open" | all closed | 58, 63a, 63c |
+| 60d | "MYCRATE freezes after boot" | did not reproduce in §63 runs; the click-freeze half was the double mouseDown | 63e |
+
+Still genuinely open (not corrected, just unresolved):
+
+- §60c SenseiPlay music "2x fast" — needs a live `?ensoniqdbg=1` oscillator dump.
+- §47 Silpheed pitch and the Tass Times in-game keyboard play-through.
+- §64 the two QuickDraw II rendering defects (black desktop-layer icons,
+  garbled grayed menu text).
