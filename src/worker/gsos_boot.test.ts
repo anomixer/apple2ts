@@ -173,7 +173,13 @@ test(`Apple IIgs boots GS/OS 6.0.1 from ${PO_PATH}`, () => {
     // along the top and a trash can along the bottom that are not flat fills.
     expect(colours.size).toBeGreaterThan(8)
     expect(scbSet.size).toBeGreaterThan(1)
-    expect(scanlineColours(0).size).toBeGreaterThan(1)
+    // The Finder leaves row 0 as the black border above its menu bar, so check
+    // the whole menu-bar band rather than a single row: it must carry the
+    // File/Edit/... titles, i.e. both the bar colour and ink.
+    const topBandColours = new Set<string>()
+    for (let y = 0; y < 16; y++) for (const c of scanlineColours(y)) topBandColours.add(c)
+    console.log(`menu-bar band colours: ${topBandColours.size}`)
+    expect(topBandColours.size).toBeGreaterThan(2)
     expect(scanlineColours(199).size).toBeGreaterThan(1)
     // Real ink on the screen: the menu bar titles and the disk icons are black.
     // A stalled or blanked boot has none, even though it still fills the buffer.
@@ -184,11 +190,8 @@ test(`Apple IIgs boots GS/OS 6.0.1 from ${PO_PATH}`, () => {
     console.log(`dark pixels: ${darkPixels}`)
     expect(darkPixels).toBeGreaterThan(500)
 
-    // And the menu bar must not be a flat fill across the whole top of the
-    // screen: it carries the File/Edit/... titles, so it has both white and ink.
-    const topRow = scanlineColours(0)
-    console.log(`top row colours: ${Array.from(topRow).join(" / ")}`)
-    expect(topRow.size).toBeGreaterThanOrEqual(2)
+    // And log the band so a regression names the colours it lost.
+    console.log(`top band colours: ${Array.from(topBandColours).join(" / ")}`)
   } finally {
     doSetRunMode(RUN_MODE.PAUSED, false)
     resetCpuSpeedForTesting()

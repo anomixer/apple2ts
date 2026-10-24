@@ -6,7 +6,6 @@ import { hiresAddressToLine, RUN_MODE, TEST_DEBUG, DEFAULT_SLOT_CONFIG, DEFAULT_
 import { resetFloppyDrives, doPauseDrive, getHardDriveState } from "./devices/drivestate"
 import { iigsEnsoniq } from "./devices/iigs_ensoniq"
 import { passEnsoniqSound } from "./worker2main"
-import { iigsADB } from "./iigs_adb"
 // import { slot_omni } from "./roms/slot_omni_cx00"
 import { SWITCHES, overrideSoftSwitch, resetSoftSwitches, setVideo7Override,
   restoreSoftSwitches, getSoftSwitchDescriptions, 
@@ -46,6 +45,8 @@ import { memory, memGet, getTextPage, getHires, memoryReset,
   iigsSignalVbl,
   iigsSignalQuarterSecond,
   iigsSignalOneSecond,
+  iigsSignalScanline,
+  iigsShrScb,
   iigsInterruptPending,
   iigsInitInterrupts,
   iigsClearInterrupts,
@@ -109,12 +110,20 @@ export const setIigsSpeedRegister = (v: number) => { iigsSpeedRegister = v }
 const isIigsSlowMode = () => !(iigsSpeedRegister & 0x80)
 // CPU cycles in one 1/60 s refresh at the 1.024 MHz slow-mode clock.
 const IIGS_SLOW_CYCLES_PER_REFRESH = 17030
-const effCyclesPerRefresh = () =>
-  (machineName === "APPLE2GS" && isIigsSlowMode()) ? IIGS_SLOW_CYCLES_PER_REFRESH : cpuCyclesPerRefresh
-export const getIigsSlowMode = isIigsSlowMode
-// The number of CPU cycles the machine actually executes per 1/60 s refresh,
-// which is the slow-mode 1.024 MHz figure when $C036 says slow.
-export const getEffectiveCyclesPerRefresh = effCyclesPerRefresh
+// The video scanner runs off the fixed 14 MHz master clock; $C036 bit 7 only
+// decides how many CPU cycles fit into one refresh. The ROM's interrupt manager
+// toggles $C036 on every interrupt entry and exit, so deriving the frame phase
+// from `cycleCount % frameCycles` let a divisor change step the beam backwards:
+// $C02E/$C02F could then never present the scanline a game waits for (the
+// `LDA $C02E / CMP #$E8 / BNE -6` spin of section 52), and the DOC catch-up and
+// mouse-stepper anchors inherited the jump. `iigsVideoClock` accumulates machine
+// time in refresh-relative units, where a slow-mode CPU cycle is worth
+// `frameUnits / 17030` units, so the frame phase depends only on elapsed
+// machine time. gssquared does the same by anchoring its scanner to the 14M rail.
+let iigsVideoClock = 0
+export const getIigsVideoClock = () => iigsVideoClock
+export const getIigsFrameUnits = () => cpuCyclesPerRefresh
+export const resetIigsVideoClock = () => { iigsVideoClock = 0 }
 let cpuSpeed = 0
 export let isDebugging = false
 let appMode = "default"
@@ -547,6 +556,7 @@ export const doBoot = () => {
 export const doReset = () => {
   clearInterrupts()
   resetSoftSwitches()
+  resetIigsVideoClock()
   // Reset banked RAM
   memGet(0xC082, false)
   cpu.reset()
@@ -636,6 +646,7 @@ export const doSetSpeedMode = (speedModeIn: number, operationId?: number) => {
   refreshTime = (speedMode === 4) ? 0 : 16.6881
   const cyclesTable = (machineName === "APPLE2GS") ? GS_CYCLES_PER_REFRESH : IIE_CYCLES_PER_REFRESH
   cpuCyclesPerRefresh = cyclesTable[speedMode + 2]
+  resetIigsVideoClock()
   resetRefreshCounter()
   updateExternalMachineState()
   if (operationId !== undefined) passWorkerOperationResult(operationId)
@@ -1156,12 +1167,6 @@ export const getExternalMachineState = () => {
     s6502: s6502,
     showDebugTab: showDebugTab,
     shr: getShr(),
-    cursorX: (memory[0x047C] | (memory[0x057C] << 8)),
-    cursorY: (memory[0x04FC] | (memory[0x05FC] << 8)),
-    // True while the guest's own ROM ADB cursor driver is running (ProDOS-8
-    // era software draws and positions its own pointer); the UI must then NOT
-    // paint its overlay arrow, or the game shows two guest cursors.
-    romMouseActive: iigsADB.romAdbTaskActive(),
     slotConfig: currentSlotConfig,
     softSwitches: getSoftSwitches(),
     speedMode: speedMode,
@@ -1260,7 +1265,9 @@ const doAdvance6502 = () => {
       }
       ensoniqOutCursor = endSample
     }
-    const refreshId = Math.floor(s6502.cycleCount / frameCycles)
+    // Video-clock position, not cycleCount: the DOC's sample clock is hardware
+    // time, so a $C036 slow-mode flip must not move it (see iigsVideoClock).
+    const refreshId = Math.floor(iigsVideoClock / frameCycles)
     if (refreshId !== ensoniqRefreshId) {
       // Refresh rollover: complete the elapsed refresh, post its block, then
       // zero the scratch for the next one.
@@ -1278,7 +1285,7 @@ const doAdvance6502 = () => {
     }
     if (ensoniqOutCursor >= ensoniqSamplesPerRefresh) return
     const due = Math.min(ensoniqSamplesPerRefresh,
-      Math.floor((s6502.cycleCount % frameCycles) * ensoniqSamplesPerRefresh / frameCycles))
+      Math.floor((iigsVideoClock % frameCycles) * ensoniqSamplesPerRefresh / frameCycles))
     genChunk(force ? ensoniqSamplesPerRefresh : due)
   }
 
@@ -1290,14 +1297,17 @@ const doAdvance6502 = () => {
   // V8 profile.
   const isIIgs = (machineName === "APPLE2GS")
   const traceCb = tracing ? updateTrace : null
-  // The frame budget is the number of CPU cycles the machine executes in one
-  // 1/60 s refresh. In IIgs slow mode ($C036 bit 7 clear) the CPU runs at
-  // 1.024 MHz, so the budget is the 17030-cycle figure regardless of the
-  // selected speed mode.
-  let frameCycles = isIIgs ? effCyclesPerRefresh() : 17030
+  // Frame length in video-clock units. On the IIgs this is the selected CPU
+  // rate's refresh budget and does NOT follow $C036 slow mode: slow mode makes
+  // each CPU cycle worth `slowUnitFactor` video units instead, so the video
+  // frame stays 1/60 s and the frame phase never jumps when the ROM's interrupt
+  // manager toggles $C036 (see iigsVideoClock).
+  let frameCycles = isIIgs ? cpuCyclesPerRefresh : 17030
   let vblCycles = Math.round((isIIgs ? 12460 / 46727 : 4550 / 17030) * frameCycles)
   let cyclesPerLine = ((frameCycles - vblCycles) / 192) || 1
   let cachedSlowMode = isIigsSlowMode()
+  let slowUnitFactor = cachedSlowMode ? frameCycles / IIGS_SLOW_CYCLES_PER_REFRESH : 1
+  const videoStart = isIIgs ? iigsVideoClock : s6502.cycleCount
   // Last emulated refresh the IIgs mouse sync ran on (see iigsMouseStep).
   let lastMouseSyncFrame = -1
 
@@ -1323,6 +1333,10 @@ const doAdvance6502 = () => {
       if (isIIgs) processCycleCountCallbacks()
       if (cycles < 0) break
     }
+    // Advance the video clock by the machine time this instruction consumed.
+    // A slow-mode CPU cycle is worth more video units, so the video frame is
+    // always 1/60 s regardless of which clock the CPU is on.
+    if (isIIgs) iigsVideoClock += cycles * slowUnitFactor
     // Floppy motor-off delay, measured in CPU cycles so it stays locked to the
     // emulated machine's clock rather than to wall time. See stopMotor() in
     // devices/diskdata.ts.
@@ -1336,12 +1350,14 @@ const doAdvance6502 = () => {
     if (cachedSpeedMode !== speedMode || cachedSlowMode !== isIigsSlowMode()) {
       cachedSpeedMode = speedMode
       cachedSlowMode = isIigsSlowMode()
-      frameCycles = isIIgs ? effCyclesPerRefresh() : 17030
+      frameCycles = isIIgs ? cpuCyclesPerRefresh : 17030
       vblCycles = Math.round((isIIgs ? 12460 / 46727 : 4550 / 17030) * frameCycles)
       cyclesPerLine = ((frameCycles - vblCycles) / 192) || 1
+      slowUnitFactor = cachedSlowMode ? frameCycles / IIGS_SLOW_CYCLES_PER_REFRESH : 1
     }
-    const cycleInFrame = s6502.cycleCount % frameCycles
-    const nowFrame = frameCycles > 0 ? Math.floor(s6502.cycleCount / frameCycles) : 0
+    const videoPos = isIIgs ? iigsVideoClock : s6502.cycleCount
+    const cycleInFrame = videoPos % frameCycles
+    const nowFrame = frameCycles > 0 ? Math.floor(videoPos / frameCycles) : 0
     if (cycleInFrame < vblCycles) {
       // Return "low" for 70 scan lines out of 262 (70 * 65 cycles = 4550)
       // Note that VBLINV is the inverse of the vertical blanking status,
@@ -1374,6 +1390,14 @@ const doAdvance6502 = () => {
       if (line !== currentLine && line < 192) {
         currentLine = line
         exportMemoryToHiresLine(line)
+        // IIgs SHR scanline interrupt: gssquared's VideoScannerIIgs raises the
+        // VGC scanline IRQ while scanning a line whose SCB has bit 6 set. GS/OS
+        // uses it to time its cursor draw/erase to the cursor's row, so without
+        // it the Event Manager never repaints the pointer and the factory
+        // cursor stays parked wherever it was first shown.
+        if (isIIgs && SWITCHES.NEWVIDEO.isSet && (iigsShrScb(line) & 0x40)) {
+          iigsSignalScanline()
+        }
       }
     }
     // The IIgs IRQ line is level-driven by $C046 bit 7 ("a source is pending
@@ -1406,7 +1430,8 @@ const doAdvance6502 = () => {
       doSetRunMode(RUN_MODE.PAUSED, true, undefined, {reason: "cycle-limit"})
       break
     }
-    if (cycleTotal >= (isIIgs ? effCyclesPerRefresh() : cpuCyclesPerRefresh)) {
+    if (isIIgs ? (iigsVideoClock - videoStart) >= frameCycles
+               : cycleTotal >= cpuCyclesPerRefresh) {
       break
     }
   }

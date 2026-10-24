@@ -14,7 +14,7 @@ import { noSlotClock } from "./nsc"
 import { adbLogEnabled, noteAdbLog } from "./iigs_adb"
 import { videoTerm } from "./devices/videoterm"
 import { vidhd } from "./devices/vidhd"
-import { isDebugging, setIigsSpeedRegister, getEffectiveCyclesPerRefresh } from "./motherboard"
+import { isDebugging, setIigsSpeedRegister, getIigsVideoClock, getIigsFrameUnits } from "./motherboard"
 import { iigsClock } from "./iigs_clock"
 import { iigsADB } from "./iigs_adb"
 import { iigsEnsoniq, docAccess } from "./devices/iigs_ensoniq"
@@ -202,9 +202,11 @@ export const iigsInterruptPending = (): boolean => {
 // are the VBL rows (that is what $C019/VBLIRQ are keyed to), then 192 visible
 // rows.
 const readIigsVideoCounter = (wantHorz: boolean): number => {
-  const frameCycles = getEffectiveCyclesPerRefresh();
+  // Video-clock position, not cycleCount: $C036 slow mode changes how many CPU
+  // cycles fit in a frame but must not move the beam (see iigsVideoClock).
+  const frameCycles = getIigsFrameUnits();
   const vblCycles = Math.round((12460 / 46727) * frameCycles);
-  const cyc = s6502.cycleCount % frameCycles;
+  const cyc = getIigsVideoClock() % frameCycles;
   let vert: number;
   if (cyc < vblCycles) {
     // VBL rows 192-261: 64 values at $1C0-$1FF then the 6-value wrap $1FA-$1FF.
@@ -1930,6 +1932,13 @@ const extractShrFromAux = (aux: Uint8Array): Uint8Array => {
 // SWITCHES.NEWVIDEO, exposed here so the ADB cursor sync can choose between
 // closed-loop (SHR, pixel coordinates) and dead-reckoned relative deltas.
 export const isIigsShrActive = (): boolean => SWITCHES.NEWVIDEO.isSet
+
+// SCB (scan line control byte) for an SHR line. Bit 6 is the scanline
+// interrupt enable: the VGC raises the scanline IRQ while it scans a line
+// whose SCB has that bit set (gssquared VideoScannerIIgs.cpp
+// `current_scb & 0x40`). GS/OS's Event Manager uses it to time its cursor
+// draw/erase to the cursor's own scanline.
+export const iigsShrScb = (line: number): number => memGet24(0xE19D00 + line)
 
 // Super Hi-Res in 320-pixel mode: the line-0 scan control byte has bit 7 clear.
 // The IIgs mouse reports its position in screen pixels, so a 320-mode program

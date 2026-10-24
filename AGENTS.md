@@ -1102,6 +1102,12 @@ emulation-mode path, which is what old IIe games use, now matches the 6502.
      gssquared's two-button model (RIGHT in byte 0, LEFT in byte 1); the
      §56/§61/§62 CPU-level PostEvent dedup became unnecessary and was removed.
      No BRK/beep on click in GS/OS or MYCRATE.
+   - **The guest draws its own cursor, and MYCRATE applications run (section 66).**
+     The video beam is now a function of machine time only — `$C036` toggling used
+     to move the frame phase backwards — and the SHR scanline interrupt lets GS/OS's
+     Event Manager erase and redraw its arrow, so the emulator's overlay cursor was
+     deleted. Silpheed launches and plays in a real browser instead of dying at its
+     title.
 
 ### 62. IIgs Mouse: Closed-Loop ADB Cursor Sync + PostEvent Dedup (Single Click No Longer Opens Icons) — FIXED
 
@@ -3974,10 +3980,165 @@ measurement; none of the corrections are speculative.
 | 56/61/62 | "CPU-level PostEvent dedup is the fix" | dedup removed; the duplicate post was a symptom of the report layout | 63a |
 | 57E | "MCS -err 01 open", "PostEvent dedup is a hack", "overlay mapping open" | all closed | 58, 63a, 63c |
 | 60d | "MYCRATE freezes after boot" | did not reproduce in §63 runs; the click-freeze half was the double mouseDown | 63e |
+| 53/54/63c | the UI paints an overlay arrow at the host pointer | the overlay is gone; GS/OS draws its own cursor once the SHR scanline IRQ exists | 66b |
+| 60b | "the frame budget is the slow-mode figure when $C036 says slow" | a video frame is always 1/60 s; slow mode changes what a CPU cycle is *worth*, via the video clock | 66a |
+| 60d | "`$E1:00FF` is the 80-column text-page register; `$C050-$C05D` stalls MYCRATE" | it is the ROM's interrupt-nesting counter, and the beam clock was the blocker | 66d, 66a |
 
 Still genuinely open (not corrected, just unresolved):
 
 - §60c SenseiPlay music "2x fast" — needs a live `?ensoniqdbg=1` oscillator dump.
+  The in-game 2.8x audio complaint of 2026-10-24 is the same thing and has to be
+  re-measured after §66a, because the DOC catch-up anchor moved to the video clock.
+- §66c SynthLab and the rest of the MYCRATE application library — never launched
+  in a verified run; Silpheed is the only MYCRATE app confirmed to start.
 - §47 Silpheed pitch and the Tass Times in-game keyboard play-through.
 - §64 the two QuickDraw II rendering defects (black desktop-layer icons,
   garbled grayed menu text).
+
+---
+
+### 66. The IIgs video beam must run off its own clock — `$C036` was moving the frame phase backwards; GS/OS now paints its own cursor — FIXED
+
+**User complaints (2026-10-24)**:
+
+1. "gsos 左上角那個原廠滑鼠游標一直停在那邊喔. 應該是這個游標跟隨host滑鼠走才對?
+   (你目前應該是軟體畫出來去對應host滑鼠)" — the *factory* arrow sat in the
+   top-left corner forever and the only pointer that moved was the one the
+   emulator painted. The guest's own cursor has to be the one that follows.
+2. "mycrate disk image裡面很多app點了都跑不起來. 像是 silpheed (title完之後就當),
+   synthLab (在title就當), 還有很多會當機." — many MYCRATE applications died.
+3. In-game audio ~2.8x fast (Tass Times pendulum, SenseiPlay800) — **not
+   addressed here**, still open (§60c, task #10).
+
+#### 66a. Root cause: `cycleCount % frameCycles` is not a frame phase
+
+`$C036` bit 7 selects the CPU clock (1 = 2.8 MHz, 0 = 1.024 MHz — gssquared
+`mmu_iigs.hpp:184`), and §60b had made the *frame length* follow it
+(`frameCycles = effCyclesPerRefresh()`, flipping 17030 and 46727). But the frame
+**phase** was `s6502.cycleCount % frameCycles`. Software — and the ROM's own
+speed-setting and interrupt firmware — writes `$C036`, so every flip changed the
+divisor under a running counter and the computed beam position jumped backwards by
+up to a whole frame. Anything waiting on a video event could then wait forever:
+
+- `$C02E/$C02F` (`readIigsVideoCounter`) reported a scanline that went backwards,
+  which is exactly the spin §52 documented for Tass Times (`LDA $C02E / CMP #$E8 /
+  BNE -6`); a backwards beam can simply never present the awaited value.
+- The scanline/VBL windows were re-scanned instead of advancing.
+- The Ensoniq catch-up anchor (§51) and the mouse stepper keyed off the same
+  phase, so the DOC's sample clock inherited the jump.
+
+**Fix** — `iigsVideoClock` in `src/worker/motherboard.ts`: a persistent counter
+that accumulates machine time in *refresh-relative* units. A CPU cycle is worth
+`slowUnitFactor = frameCycles / 17030` units, so in slow mode each cycle counts
+2.74x toward the beam and a video frame is always 1/60 s. `frameCycles` on the
+IIgs is now plain `cpuCyclesPerRefresh` and deliberately does **not** follow
+`$C036` — slow mode is expressed entirely through the unit factor. The frame
+phase (`cycleInFrame`, `nowFrame`), the loop's break condition,
+`readIigsVideoCounter()` in `memory.ts` (via `getIigsVideoClock()` /
+`getIigsFrameUnits()`) and the Ensoniq catch-up all read the video clock. It is
+reset in `doReset()` and `doSetSpeedMode()`. This is gssquared's model: its
+scanner is anchored to the constant 14 MHz rail and `$C036` only changes how many
+CPU cycles fit into a refresh.
+
+`effCyclesPerRefresh()` / `getEffectiveCyclesPerRefresh()` became unused and were
+deleted; `getIigsSlowMode()` too (the run loop reads `isIigsSlowMode()` directly).
+
+#### 66b. The factory cursor: the SHR scanline interrupt (SCB bit 6)
+
+GS/OS's Event Manager times the cursor draw/erase to the cursor's own scanline
+and waits for the VGC scanline IRQ. apple2ts never raised it, so the Event
+Manager never repainted and the arrow stayed wherever it was first shown. The
+video scanner now signals it while exporting a visible line:
+
+```ts
+if (isIIgs && SWITCHES.NEWVIDEO.isSet && (iigsShrScb(line) & 0x40)) {
+  iigsSignalScanline()
+}
+```
+
+`iigsShrScb(line)` is `memGet24(0xE19D00 + line)` — the SHR scan-line control
+bytes in Mega II aux RAM — matching gssquared `VideoScannerIIgs.cpp`
+(`current_scb & 0x40`). `iigsSignalScanline()` itself already existed (§52).
+
+**The UI overlay is therefore gone.** Removed: `drawIigsCursor()`, `CURSOR_ROWS`
+and `setHostCursorNorm()` from `src/ui/graphics.ts`; `cursorX`/`cursorY`/
+`romMouseActive` from `getExternalMachineState()` and from `MachineState` in
+`src/common/custom.d.ts`; `handleGetCursorX/Y` and `handleGetRomMouseActive` from
+`src/ui/main2worker.ts`; the `setHostCursorNorm` call in `src/ui/canvas.tsx`.
+That closes out the overlay line of §53/§54/§63c — what the user sees now is the
+guest's own arrow. `iigsADB.romAdbTaskActive()` (§54) survives only as the
+discriminator its own test asserts on.
+
+**Regression tests**
+
+- `src/worker/gs_cursor_repaint.test.ts` (new): boots GS/OS 6.0.1, moves the
+  pointer and asserts the cursor holes advance **and** that the changed SHR rows
+  cover both the old and the new cursor row — the guest can only do that by
+  erasing its arrow in one place and drawing it in the other.
+- `src/worker/gs_vbl_cadence.test.ts` (new): boots GS/OS 6.0.1, samples `$C036`
+  across the run (it really does flip both ways: `fast+slow`) and asserts
+  `vbls === refreshes`. Measured: **4074 VBLs / 4074 refreshes** over 4000 pumped
+  frames.
+- `src/worker/gsos_boot.test.ts`: the now-complete boot leaves SHR row 0 as the
+  black border, so the "menu bar is drawn" check moved from row 0 to the band
+  rows 0–15 (`topBandColours.size > 2`).
+
+#### 66c. Browser verification (headless Chrome, CDP, port-6503 disk server)
+
+- **MYCRATE.2MG → Games window → SILPHEED**: launches, plays the Sierra and
+  GAME ARTS logos and the "SILPHEED SUPER DOGFIGHTER" title and then waits at
+  its **own** prompt `PLEASE CENTER YOUR JOYSTICK AND PRESS A JOY BUTTON`. It
+  runs instead of dying at the title. The jest harness reaches the attract-mode
+  3D vector scene at ~68 s of emulated time with no input at all
+  (`fz-settle.png`), so the on-screen prompt is the game waiting for input, not
+  the emulator being stuck.
+- **GS/OS 6.0.1**: the guest's own arrow is on screen and follows the host
+  pointer (the overlay is gone and nothing replaced it).
+- **An input-path fact worth recording, because it looks like a hang**: in
+  apple2ts a *joystick button* is only Open Apple / Closed Apple (`AltLeft` /
+  `AltRight`, or Numpad `0`/`5` and `.`/`Enter`), a real gamepad button, or the
+  touch joystick (minimal theme only). The arrow keys and Numpad 8/2/4/6 are
+  **axes**, and only when "Use Arrow Keys as Joystick" is enabled. A game that
+  demands "press a joy button" therefore appears frozen if you only type.
+  (`k:AltLeft` through CDP did not register as a button in these runs — the
+  synthetic event shape is suspect, not the emulator path, which is correct by
+  inspection: `AltLeft → passAppleCommandKeyPress → setButtonState → PB0`.)
+- **SynthLab: NOT verified.** The scripted double-click missed the icon — all
+  three screenshots show the Finder with the MY.CRATE window still open. Do not
+  claim SynthLab works until someone actually launches it.
+
+#### 66d. Correction to §60d — `$E1:00FF` is not the 80-column text-page register
+
+§60d guessed that `$E1:00FF` was "the IIgs 80-column text page 1/2 register that
+the 80-column firmware maintains", and that the `FF:C054-C056` hot loop was the
+unimplemented `$C050-$C05D` soft switches stalling a guest that polled for a page
+flip. ROM 01 says otherwise — the `$C05x` firmware *is* the accessor:
+
+```
+FF:C054  68           PLX
+FF:C055  28           PL
+FF:C056  6B           RTL
+FF:C057  AF FF 00 E1  LDA $E1:00FF      ; read the counter
+FF:C05B  6B           RTL
+FF:C05C  08 78 48     PHP / SEI / PHA   ; interrupts off
+FF:C05F  AF FF 00 E1  LDA $E1:00FF
+FF:C063  1A           INC A
+FF:C064  8F FF 00 E1  STA $E1:00FF      ; increment it
+FF:C068  80 EA        BRA $C054
+```
+
+So `$E1:00FF` is a counter the ROM's own firmware increments with interrupts
+disabled — an interrupt-nesting / critical-section counter — and the
+`FF:C054-C056` hot PCs §60d measured are that firmware's epilogue being entered
+constantly, not a page-flip poll. The `$C050-$C05D` work §60d proposed as the
+next step is not what unstalled MYCRATE; 66a/66b is.
+
+#### 66e. Honest limit on 66a
+
+The "VBL re-fired with deltas of ~1,984 cycles" figure came from an interactive
+probe of a hanging MYCRATE app. A clean jest probe could **not** reproduce a VBL
+storm from the cycle-count phase alone (`gs_vbl_cadence.test.ts` gives 4074/4074
+either way), so the *demonstrated* consequences of the old derivation are the
+backwards `$C02E/$C02F` beam, the scanline window and the DOC/mouse anchors — not
+a VBL multiplier. Treat the storm wording as unproven; the fix stands on the beam
+being a function of machine time only.

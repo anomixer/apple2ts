@@ -3,9 +3,6 @@ import { handleGetAltCharSet, handleGetTextPage,
   handleGetMachineName,
   handleGetShr,
   handleGetVidhdActive,
-  handleGetCursorX,
-  handleGetCursorY,
-  handleGetRomMouseActive,
   handleGetSoftSwitches } from "./main2worker"
 import { convertTextPageValueToASCII, COLOR_MODE, TEST_GRAPHICS, hiresLineToAddress, toHex, MONITOR_MODE } from "../common/utility"
 import { convertColorsToRGBA, getHiresColors, getHiresGreen } from "./graphicshgr"
@@ -958,81 +955,7 @@ const processSuperHiRes = (hiddenContext: CanvasRenderingContext2D, colorMode: C
 
     const imageData = new ImageData(shrRgbaBuffer, outWidth, outHeight)
     hiddenContext.putImageData(imageData, 0, 0)
-    drawIigsCursor(hiddenContext)
     return true
-}
-
-// Apple IIgs pointer cursor, drawn by the UI on top of the decoded SHR image.
-//
-// Under GS/OS the guest's Event Manager is the only thing that turns mouse
-// motion into a visible cursor redraw, and its VBL/event path never runs in
-// emulation (the ROM's interrupt manager $FFB7CC sees no IRQs after boot --
-// see AGENTS.md sections 33/38), so the sprite is never blitted into the SHR
-// page even though the pointer holes $047C/$057C/$04FC/$05FC track motion
-// correctly (verified by measurement, sections 41-43). This overlay paints the
-// cursor at the hole position so the pointer visibly tracks the mouse without
-// touching guest memory.
-const CURSOR_ROWS = [
-  "k.........",
-  "kk........",
-  "kwk.......",
-  "kwwk......",
-  "kwwwk.....",
-  "kwwwwk....",
-  "kwwwwwk...",
-  "kwwwwwwk..",
-  "kwwwwwwwk.",
-  "kwwwwwwwwk",
-  "kwwwkkkkk.",
-  "kwkwwk....",
-  "kk.kwwk...",
-  "...kwwk...",
-  "....kk....",
-]
-
-// Host pointer position (normalized 0..1) for the overlay cursor. Updated by
-// canvas.tsx on every mouse move so the overlay tracks the host pointer
-// exactly, regardless of the guest's ADB-accumulated cursor position.
-let hostCursorNormX = -1
-let hostCursorNormY = -1
-export const setHostCursorNorm = (x: number, y: number) => {
-  hostCursorNormX = x
-  hostCursorNormY = y
-}
-
-const drawIigsCursor = (ctx: CanvasRenderingContext2D) => {
-  if (!isSuperHiResScreen()) return
-  if (handleGetRomMouseActive()) return
-  // Prefer the host pointer position for exact tracking. Fall back to the
-  // guest's cursor holes when no host position has been recorded yet.
-  let cx: number
-  let cy: number
-  if (hostCursorNormX >= 0 && hostCursorNormX <= 1.0 && hostCursorNormY >= 0 && hostCursorNormY <= 1.0) {
-    cx = Math.round(hostCursorNormX * (SHR_WIDTH - 1))
-    cy = Math.round(hostCursorNormY * (SHR_SOURCE_HEIGHT - 1))
-  } else {
-    cx = handleGetCursorX()
-    cy = handleGetCursorY()
-    if (cx === 0 && cy === 0) return // no mouse activity yet
-  }
-  if (cx < 0 || cx >= SHR_WIDTH || cy < 0 || cy >= SHR_SOURCE_HEIGHT) return
-  const baseY = cy * 2 // SHR scanlines are emitted doubled (200 -> 400)
-  for (const color of ["white", "black"]) {
-    ctx.fillStyle = color
-    ctx.beginPath()
-    for (let dy = 0; dy < CURSOR_ROWS.length; dy++) {
-      const row = CURSOR_ROWS[dy]
-      for (let dx = 0; dx < row.length; dx++) {
-        const glyph = row[dx]
-        if (!(dx === 0 ? glyph === 'k' : glyph === (color === "black" ? 'k' : 'w'))) continue
-        const px = cx + dx
-        const py = baseY + dy * 2
-        if (px < 0 || px >= SHR_WIDTH || py < 0 || py >= SHR_HEIGHT) continue
-        ctx.rect(px, py, 1, 2)
-      }
-    }
-    ctx.fill()
-  }
 }
 
 export const ProcessDisplay = (ctx: CanvasRenderingContext2D,
