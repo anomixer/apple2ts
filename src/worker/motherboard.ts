@@ -121,9 +121,33 @@ const IIGS_SLOW_CYCLES_PER_REFRESH = 17030
 // `frameUnits / 17030` units, so the frame phase depends only on elapsed
 // machine time. gssquared does the same by anchoring its scanner to the 14M rail.
 let iigsVideoClock = 0
+
+// ---- Ensoniq DOC catch-up state ----
+// This lives at module scope on purpose. The run loop (doAdvance6502) is entered
+// once per refresh, but the DOC's sample clock is anchored to machine time, not
+// to the loop call: its refresh phase, its cursor inside the current refresh's
+// output block and that block's length must persist between calls. They used to
+// be declared inside doAdvance6502, so every call started with `refreshId = -1`
+// and immediately re-ran the rollover: it generated a look-ahead block at the
+// end of the call, then threw it away at the start of the next, advancing the
+// DOC march ~1.5 refreshes per refresh. Posted audio stayed 1x (439 frames per
+// block), so SenseiPlay's NTP player ran its timer oscillator at ~76 Hz instead
+// of 50 Hz — everything 1.5x too fast with correct pitch.
+let ensoniqRefreshId = -1
+let ensoniqOutCursor = 0
+let ensoniqSamplesPerRefresh = 0
+let ensoniqScratch = new Int16Array(2048 * 2)
+
 export const getIigsVideoClock = () => iigsVideoClock
 export const getIigsFrameUnits = () => cpuCyclesPerRefresh
-export const resetIigsVideoClock = () => { iigsVideoClock = 0 }
+export const resetIigsVideoClock = () => {
+  iigsVideoClock = 0
+  // The DOC catch-up is phased against this clock, so its anchor has to restart
+  // with it (boot, Ctrl-Reset and speed-mode changes all reset the clock).
+  ensoniqRefreshId = -1
+  ensoniqOutCursor = 0
+  ensoniqSamplesPerRefresh = 0
+}
 let cpuSpeed = 0
 export let isDebugging = false
 let appMode = "default"
@@ -1247,22 +1271,25 @@ const doAdvance6502 = () => {
   // capped at 60/s and every sequencer running off it played at half tempo —
   // Tass Times title music measured exactly 2.0x slower than real hardware
   // (bassline motif cycle 4.0s vs 2.0s) while every pitch stayed correct.
-  let ensoniqRefreshId = -1
-  let ensoniqOutCursor = 0
-  let ensoniqSamplesPerRefresh = 0
-  let ensoniqScratch = new Int16Array(2048 * 2)
-  // Write one chunk of DOC output owed by elapsed cycles; force=true completes
-  // the current refresh boundary (used at refresh rollover and after the loop).
-  const ensoniqCatchUp = (force: boolean) => {
+  //
+  // The state (ensoniqRefreshId / ensoniqOutCursor / ensoniqSamplesPerRefresh /
+  // ensoniqScratch) is module-scoped: see its declaration. Keep it that way.
+  // Write one chunk of DOC output owed by elapsed cycles. Never generates past
+  // the current refresh boundary: the march must stay at exactly the machine's
+  // sample clock, otherwise sequencer tempo scales with the look-ahead.
+  const ensoniqCatchUp = () => {
     const genChunk = (endSample: number) => {
       const n = endSample - ensoniqOutCursor
       if (n <= 0) return
-      if (iigsEnsoniq.hasActiveOscillators()) {
-        iigsEnsoniq.lastCyc = s6502.cycleCount
-        iigsEnsoniq.lastCyclesPerRefresh = frameCycles
-        iigsEnsoniq.lastSpeedMode = speedMode
-        iigsEnsoniq.generateSamples(n, ensoniqScratch.subarray(ensoniqOutCursor * 2))
-      }
+      // Always march, even when every oscillator is halted: generateSamples'
+      // silence path keeps the chip's sample clock (and therefore the GUI's
+      // block timing) running. Gating the call on "an oscillator is active"
+      // paused the DOC clock whenever all voices happened to halt — about a
+      // quarter of every tracker refresh — and the music played ~0.76x.
+      iigsEnsoniq.lastCyc = s6502.cycleCount
+      iigsEnsoniq.lastCyclesPerRefresh = frameCycles
+      iigsEnsoniq.lastSpeedMode = speedMode
+      iigsEnsoniq.generateSamples(n, ensoniqScratch.subarray(ensoniqOutCursor * 2))
       ensoniqOutCursor = endSample
     }
     // Video-clock position, not cycleCount: the DOC's sample clock is hardware
@@ -1286,7 +1313,7 @@ const doAdvance6502 = () => {
     if (ensoniqOutCursor >= ensoniqSamplesPerRefresh) return
     const due = Math.min(ensoniqSamplesPerRefresh,
       Math.floor((iigsVideoClock % frameCycles) * ensoniqSamplesPerRefresh / frameCycles))
-    genChunk(force ? ensoniqSamplesPerRefresh : due)
+    genChunk(due)
   }
 
 
@@ -1416,7 +1443,7 @@ const doAdvance6502 = () => {
     // Ensoniq: catch the DOC march up to the elapsed emulated time so halt
     // IRQs fire mid-refresh and the driver can re-key the timer oscillator
     // before the next catch-up (see the block comment at ensoniqCatchUp).
-    if (isIIgs) ensoniqCatchUp(false)
+    if (isIIgs) ensoniqCatchUp()
     // Apple IIgs mouse: converge the guest's cursor on the host pointer once
     // per emulated frame (gssquared does the same from its frame hook). Doing
     // it per instruction would hammer the ADB; per frame is plenty because the
@@ -1444,15 +1471,17 @@ const doAdvance6502 = () => {
   cpuSpeed = (speedInCyclesPerMS < 10000) ? Math.round(speedInCyclesPerMS / 10) / 100 :
     Math.round(speedInCyclesPerMS / 100) / 10
   
-  // Apple IIgs Ensoniq ES5503: the run loop now generates the DOC output in
-  // cycle-anchored chunks (see ensoniqCatchUp above). Block delivery stays
-  // gated on refresh rollover — the next catch-up call completes the elapsed
-  // refresh, fills the tail into the scratch buffer and posts the whole
-  // outRate/60 block, so the UI transport still sees 439-frame per-refresh
-  // posts while halts can re-key mid-refresh.
+  // Apple IIgs Ensoniq ES5503: the run loop generates the DOC output in
+  // cycle-anchored chunks (see ensoniqCatchUp above). Block delivery is gated on
+  // refresh rollover — the next catch-up call completes the elapsed refresh and
+  // posts the whole outRate/60 block, so the UI transport still sees 439-frame
+  // per-refresh posts while halts can re-key mid-refresh. This trailing call
+  // only catches up to the *elapsed* time (the loop can break without having run
+  // its own catch-up, e.g. on `cycles < 0`); it must not generate ahead of the
+  // machine clock, or the DOC march outruns the audio we post and tempo rises.
   if (isIIgs) {
     try {
-      ensoniqCatchUp(true)
+      ensoniqCatchUp()
     } catch (e) {
       console.error("ensoniq frame gen error", e)
     }

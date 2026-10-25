@@ -247,8 +247,8 @@ Rules that are easy to get wrong:
 - **The per-refresh budget *is* the tempo.** `ensoniqSamplesPerRefresh =
   outputRate/60` (439 at `osce=32`); generating more than that per refresh clocks
   the whole march fast, so both the TN #23 timer tick and streamed samples speed
-  up together. SenseiPlay currently measures ~667 generated samples per refresh —
-  see §11.2 before "fixing" the chunking.
+  up together. The 667/refresh overshoot was the module-state lookahead bug; the
+  333/refresh shortfall was the active-oscillator gate. Both are fixed (see §11.2).
 - UI transport: `iigs_ensoniq_audio.ts` queues blocks with
   `nextTime += frames / rate`, and the gain is **1.0** (unity, as gssquared's
   `apply_volume=false` stream). Open: `$00-$FF` of DOC RAM must be non-zero
@@ -456,39 +456,36 @@ Cursor position lives in the text-page holes `$047C/$057C` (X) and `$04FC/$05FC`
    MCS's real main event loop (`01:a64c`). Whether real hardware needs that key
    is the open question — if not, the fault is upstream in whatever sets up that
    wait.
-2. **SenseiPlay music too fast — reproduced, root cause narrowed to the DOC
-   sample budget.** Measured in jest with the temporary `gs_probe_sensei.test.ts`
-   (boot `senseiplay800.2mg` in slot 7 → SONGS → EVERYWAY.NTP → play):
-   - Ground truth is the player's own screen: its `Pos: nn C Pat: nn` line
-     advances **exactly 37 rows/s** (7→44→17→54→27→64 across consecutive seconds).
-   - Engine (`ninjatrackerplus.s`): `setup_music` sets `tempo = 6`;
-     `tracker_interrupt` ("it's the 50Hz interrupt") bumps `timer` and moves a row
-     when `timer >= tempo`; effect `Fxx`: 0 = stop, < $20 = ticks/row, ≥ $20 = new
-     timer frequency from `bpm_to_freq`. EVERYWAY pattern 0 is `2b 07 0f 03` at
-     row 0 and `00 00 0f 02` at row 3 → the authored average is ~2.05 ticks/row,
-     i.e. **~24.5 rows/s** at a correct 50 Hz tick. 37 is 1.5x that.
-   - The DOC's *pitch/phase* maths is fine: timer osc31 (`freq=249`, 256-byte
-     wave, `osce=32`) halts every **524.5 generated samples** = 50.18 wraps per
-     DOC-second, identical to KEGS (12,800 B/s ÷ 256). Mix level fine (peak 0.074,
-     no clipping). Nothing wrong in `resshift`/`accmasks`/`wavemasks`.
-   - **The bug is in wall time**: generation runs at **40,004 samples/s** while
-     `outputRate()` reports 26,320 — ~667 samples per emulated refresh instead of
-     `rate/60 = 439` (1.52x). The march is therefore clocked 1.52x fast, which
-     scales the timer tick *and* every streamed sample together → exactly the
-     "everything is a bit too fast" the user hears. Block posting is correct
-     (60 blocks/s), so the overshoot is inside `ensoniqCatchUp`'s chunking (or
-     `osce` moving mid-window), not the UI transport.
-   - Double-dispatch of the DOC IRQ is **no longer the leading theory**: the ROM
-     manager (`FF:B8F6`…`B935`) saves `$C03C`/`$C03E`, writes `$E0` to `$C03E`,
-     reads `$C03D` twice (`B915`/`B918`), stashes to `$E1:00CC`, `BMI B938` on
-     bit 7, else one `JSL $E1:002C` — one dispatch per pass, so two would need
-     two IRQ entries. Still unmeasured.
-   - Next step: per-second counters for generated frames vs posted frames vs
-     `osce`/`outputRate()` per refresh, and `readDoc($E0)` bit-7-clear returns
-     (real dispatches) vs osc31 halts, both per *wall* second. Fix must be
-     cross-checked against gssquared `ensoniq_catch_up` / KEGS `doc.c` and then
-     confirmed by ear on a WAV, not by these numbers alone.
-   - Related UI gap: the ProDOS 16 file browser still needs mouse selection.
+2. **SenseiPlay music too fast — RESOLVED.** Two stacked bugs, both in the run
+   loop's Ensoniq catch-up:
+   - The catch-up state (`ensoniqRefreshId`/`ensoniqOutCursor`/
+     `ensoniqSamplesPerRefresh`/`ensoniqScratch`) was declared *inside*
+     `doAdvance6502`, so every call started with `refreshId = -1`, re-ran the
+     rollover, generated a look-ahead block at the end of the call that the next
+     call threw away, and advanced the DOC march ~1.5 refreshes per refresh
+     (measured 40004 generated samples/s against a 26320 Hz chip — ~667 per
+     refresh instead of 439). Posted audio stayed 1x (439 frames per block), so
+     the timer oscillator ticked at ~76 Hz and the tracker ran 1.5x fast with
+     correct pitch.
+   - Gating generation on `hasActiveOscillators()` (commit `bd90c7d4`) then
+     paused the DOC clock whenever all voices momentarily halted — about a
+     quarter of every tracker refresh — so with the lookahead gone the march
+     ran ~0.76x and the music dragged. The chip's sample clock must advance
+     every refresh regardless of activity (the silence path fills zeros but
+     keeps `samplesGenerated` moving).
+   Fix: hoist the catch-up state to module scope, drop the `force` look-ahead
+   (generate only up to elapsed time), and always generate (silence fast path).
+   Verified: generated = 26343 samples/s = 439/refresh exactly (was 40004 then
+   20003); the TN #23 timer voice now ticks at 50.2 Hz and the player's
+   `Pos:` line advances ~18.3 rows/s.
+   - Corrected ground truth: the authored average is **2.735 ticks/row** (pattern
+     0 is 3,3,3,2 repeating = 2.75; the song overall 2.81), not 2.05 — the
+     earlier 2.05 came from reading only rows 0 and 3 of pattern 0, and the
+     "37 rows/s" was the broken (1.5x) build's measurement. At 50.2 Hz that is
+     17.8-18.3 rows/s, which is what the fixed build produces.
+   - Regression tests: `gs_ensoniq.test.ts` (silence path keeps the clock moving;
+     TN #23 timer ticks at the chip's own rate) and `gs_doc_clock.test.ts`
+     (run loop: exactly one outRate/60 block per refresh).
 3. **Silpheed pitch** — same instrumentation, during playback.
 4. **MYCRATE app library** — Silpheed is the only app confirmed to launch
    (reaches its "PRESS A JOY BUTTON" prompt). SynthLab and others: the Finder
@@ -524,7 +521,7 @@ Cursor position lives in the text-page holes `$047C/$057C` (X) and `$04FC/$05FC`
 | Replacing `$C050-$C05D` with gssquared's explicit bits is an improvement | Changed the palette and broke six suites |
 | `extractShrBuffer` was fine, the caller forgot to check | It silently adds `$2000`; the buffer was clamped short |
 | An 8-instruction batch is a free perf win | Starved SmartPort reads in the browser only |
-| SenseiPlay's 37 rows/s is the authored tempo | Wrong NTP pattern offset (a stray `p++` in the header walk) made the tempo look self-consistent; the real average is ~2.05 ticks/row |
+| SenseiPlay's 37 rows/s is the authored tempo | Wrong NTP pattern offset (a stray `p++` in the header walk) made the tempo look self-consistent; the real average is ~2.735 ticks/row (~18.3 rows/s at 50 Hz). The 37 rows/s came from a build whose DOC march ran 1.5x fast; the (also wrong) 2.05-ticks/row estimate read only rows 0 and 3 of pattern 0 |
 
 ---
 

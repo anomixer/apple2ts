@@ -204,6 +204,66 @@ test("a halted oscillator produces silence", () => {
   }
 })
 
+test("the sample clock keeps running while every oscillator is halted", () => {
+  // reset() leaves all 32 oscillators halted, i.e. the chip is silent. The
+  // output sample clock must still advance: the run loop posts exactly one
+  // outRate/60 block per refresh, and sequencer tempo is measured in DOC
+  // samples (the Apple TN #23 timer voice halts at a fixed sample count), so
+  // freezing the clock whenever all voices momentarily halt makes music play
+  // slow and lands every timer tick late.
+  const rate = iigsEnsoniq.outputRate()
+  const perRefresh = Math.round(rate / 60)
+  const before = iigsEnsoniq.samplesGenerated
+  for (let r = 0; r < 60; r++) {
+    const block = iigsEnsoniq.generateSamples(perRefresh)
+    expect(block.some((v) => v !== 0)).toBe(false)
+  }
+  expect(iigsEnsoniq.hasActiveOscillators()).toBe(false)
+  expect(iigsEnsoniq.samplesGenerated - before).toBe(60 * perRefresh)
+})
+
+test("TN #23 timer oscillator ticks at the chip's own sample rate", () => {
+  // The canonical IIgs timer voice: zero volume, free-run, IRQ enabled, a
+  // 249-step over a 256-byte wave. One wrap spans 255 * 2^9 / 249 = 524.3
+  // samples, so with 32 oscillators enabled (26320 samples/s) it must tick
+  // 50.2 times per DOC second. A driver re-keys it from the IRQ; emulate that
+  // with zero latency so this measures the march, not the guest's latency.
+  set(0xC03C, 0x40 | 0x20)   // RAM mode + auto-increment
+  set(0xC03E, 0x00)
+  set(0xC03F, 0x00)
+  for (let i = 0; i < 256; i++) {
+    set(0xC03D, 0x80)        // non-zero bytes: no zero-byte halt
+  }
+  writeReg(0xe1, 0x3e)       // 32 oscillators enabled
+  writeReg(0x00 + 31, 249)   // frequency
+  writeReg(0x20 + 31, 0)
+  writeReg(0x40 + 31, 0)     // volume 0
+  writeReg(0x80 + 31, 0)     // wave page 0
+  writeReg(0xc0 + 31, 0)     // 256-byte wave, resolution 0
+  writeReg(0xa0 + 31, 0x08)  // free-run + IRQ enable
+
+  const rate = iigsEnsoniq.outputRate()
+  expect(rate).toBe(26320)
+
+  let ticks = 0
+  const prevCallback = iigsEnsoniq.irqCallback
+  iigsEnsoniq.setIrqCallback((state) => {
+    if (!state) return
+    ticks++
+    writeReg(0xa0 + 31, 0x08)   // driver re-keys the timer
+  })
+  const before = iigsEnsoniq.samplesGenerated
+  try {
+    iigsEnsoniq.generateSamples(rate)   // exactly one DOC second
+  } finally {
+    iigsEnsoniq.setIrqCallback(prevCallback!)
+  }
+
+  expect(iigsEnsoniq.samplesGenerated - before).toBe(rate)
+  expect(ticks).toBeGreaterThan(49)
+  expect(ticks).toBeLessThan(52)
+})
+
 test("$C03D reads are pipelined: priming read then data read", () => {
   // Wave RAM at $0200/$0201 hold two distinct values.
   set(0xC03C, 0x40)          // RAM mode, no auto-increment

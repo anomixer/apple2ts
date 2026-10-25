@@ -436,6 +436,17 @@ export class IigsEnsoniq {
     const mix = this.mixBuf
     mix.fill(0, 0, numFrames * chan)
     this.samplesGenerated += numFrames
+    // Silence fast path: the chip's sample clock must keep advancing (see the
+    // caller — sequencer tempo is measured in DOC samples), but with every
+    // enabled oscillator halted there is nothing to mix. Do NOT make this a
+    // "don't generate at all" gate: skipping samples pauses the march, so a
+    // tracker whose voices momentarily all halt plays slow and every timer
+    // tick lands late.
+    if (!this.hasActiveOscillators()) {
+      buffer.fill(0, 0, numFrames * chan)
+      if (buffer !== out) this.recordBlock(numFrames, false)
+      return buffer
+    }
     for (let ch = 0; ch < chan; ch++) {
       for (let osc = 0; osc < ossecs; osc++) {
         const o = this.oscillators[osc]
@@ -517,14 +528,20 @@ export class IigsEnsoniq {
       // every 1-3 sample chunk in the block ring would push out real blocks.
       return buffer
     }
+    this.recordBlock(numFrames)
+    return buffer
+  }
+
+  // Block ring entry (?ensoniqdbg=1). Shared by the mixed and silence paths.
+  private recordBlock(numFrames: number, mirrored?: boolean) {
     const mirrorBefore = this.mirrorCountAtGenStart
     this.mirrorCountAtGenStart = this.monoMirrorCount
     this.blocks.unshift({
       cyc: this.lastCyc, osce: this.osce, rate: this.outputRate(),
-      frames: numFrames, mirrored: this.monoMirrorCount > mirrorBefore,
+      frames: numFrames,
+      mirrored: mirrored ?? (this.monoMirrorCount > mirrorBefore),
     })
     if (this.blocks.length > 12) this.blocks.pop()
-    return buffer
   }
 
   // Ported from gssquared soundglu.cpp ensoniq_mirror_mono_to_stereo, logic
