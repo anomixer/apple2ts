@@ -461,12 +461,59 @@ export const passSetRomTraceEnabled = (enabled: boolean) => {
   }
   if (romTraceTimer) return
   const poll = () => doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST,
-    romTracePeek.length ? { enable: true, peek: romTracePeek } : { enable: true })
+    romTracePeek.length
+      ? { enable: true, peek: romTracePeek, shrDbg: true }
+      : { enable: true, shrDbg: true })
   poll()
   romTraceTimer = window.setInterval(poll, 1000)
 }
 export const passResetRomTrace = () => {
   doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST, { clear: true })
+}
+
+// One immediate trace sample, with the SHR write census and optionally a reset of
+// its counters. Used to bracket a measurement window: reset, let the guest run,
+// read window.__romTrace.shrDbg. Rides the same request/response channel as the
+// periodic poll for the reason recorded in AGENTS.md §26b.
+export const passShrDbgRequest = (reset: boolean = false) => {
+  doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST, { shrDbg: true, shrDbgReset: reset })
+}
+
+// Ask for the bytes at these bank:offset addresses to ride on the next census
+// sample (window.__romTrace.codeBlocks). Code addresses come out of the SHR write
+// census, so reading them back needs no new channel and no sticky worker state.
+export const passShrCodeRequest = (addrs: number[]) => {
+  doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST, { shrDbg: true, codeAt: addrs })
+}
+
+// And a whole routine at once: the census gives a 256-byte straddle around each
+// storing instruction, which is not enough to read a draw/erase pair that live in
+// different routines. Answers accumulate on window.__shrCodeResult (see the
+// ROM_TRACE handler) rather than window.__romTrace, which the 1 Hz poll replaces.
+export const passShrWindowRequest = (regions: Array<{ a: number, n: number }>) => {
+  if (typeof window !== "undefined") {
+    const w = window as unknown as { __shrCodeResult?: Array<{ addr: string, bytes: number[] }> }
+    if (!w.__shrCodeResult) w.__shrCodeResult = []
+  }
+  doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST, { shrDbg: true, codeWindows: regions })
+}
+
+// Turn the per-instruction SHR-window write tally on or off in the worker. It is
+// a map lookup per store, so it stays off unless asked for; once on, the existing
+// 1 Hz census poll carries the result on window.__romTrace.shrDbg.writers.
+export const passShrTraceRequest = (on: boolean) => {
+  doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST, { shrDbg: true, traceWriters: on })
+}
+
+// Ask for one raw dump of the SHR buffer the renderer displays, alongside the
+// census. The answer is parked on window.__shrDumpResult as {len, scb, b64}
+// rather than left on window.__romTrace, because the 1 Hz poll replaces that
+// object wholesale and would erase it within a second.
+export const passShrDumpRequest = (reset: boolean = false) => {
+  if (typeof window !== "undefined") {
+    (window as unknown as { __shrDumpResult?: unknown }).__shrDumpResult = null
+  }
+  doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST, { shrDbg: true, wantShr: true, shrDbgReset: reset })
 }
 
 // ?romtrace=1 only: ask the worker to include these 24-bit addresses in every
@@ -476,6 +523,16 @@ let romTracePeek: number[] = []
 export const passSetRomTracePeek = (addrs: number[]) => {
   romTracePeek = addrs.slice(0, 64)
   doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST, { enable: true, peek: romTracePeek })
+}
+
+// TEMP probe: keep the 200 program counters leading into the first hits on these
+// 24-bit addresses, so a jump into a specific address names its cause.
+export const passSetRomTraceWatch = (addrs: number[], ranges: number[] = []) => {
+  doPostMessage(MSG_MAIN.ROM_TRACE_REQUEST, {
+    enable: true,
+    watch: addrs.slice(0, 8),
+    watchRange: ranges.slice(0, 16),
+  })
 }
 
 export const passSetSoftSwitches = (addresses: Array<number> | null) => {
@@ -684,6 +741,26 @@ export const doOnMessage = (e: MessageEvent): {speed: number, helptext: string} 
     case MSG_WORKER.ROM_TRACE: {
       lastRomTrace = e.data.payload
       if (typeof window !== "undefined") {
+        // A raw SHR dump arrives on the same channel as the periodic sample, and
+        // the sample replaces window.__romTrace every second. Park the dump on its
+        // own key so a caller polling at any later time still finds it.
+        const dump = (lastRomTrace as { shrDump?: unknown })?.shrDump
+        if (dump) {
+          ;(window as unknown as { __shrDumpResult?: unknown }).__shrDumpResult = dump
+        }
+        // Code windows arrive on the same channel and get erased by the next
+        // sample for the same reason the dumps did, so accumulate them on their
+        // own key: a caller can then make several requests and read one object.
+        const windows = (lastRomTrace as { codeWindows?: Array<{ addr: string, bytes: number[] }> })?.codeWindows
+        if (windows) {
+          const w = window as unknown as { __shrCodeResult?: Array<{ addr: string, bytes: number[] }> }
+          if (!w.__shrCodeResult) w.__shrCodeResult = []
+          for (const win of windows) {
+            const seen = w.__shrCodeResult.find((e) => e.addr === win.addr)
+            if (seen) seen.bytes = win.bytes
+            else w.__shrCodeResult.push(win)
+          }
+        }
         ;(window as unknown as { __romTrace?: unknown }).__romTrace = lastRomTrace
       }
       break

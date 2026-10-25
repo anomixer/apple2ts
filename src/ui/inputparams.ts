@@ -1,6 +1,6 @@
 import { COLOR_MODE, MONITOR_MODE, RUN_MODE, UI_THEMES, parseDiskSwapperParam } from "../common/utility"
 import { useGlobalContext } from "./globalcontext"
-import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging, passSetSlotConfig, passSetIwmStatsEnabled, passSetRomTraceEnabled, passResetRomTrace, passSetRomTracePeek, passSetAdbTraceEnabled, clearAdbTrace, setMouseEventLog, passSetEnsoniqDebugEnabled, passEnableGamePatches } from "./main2worker"
+import { passSpeedMode, passSetRamWorks, passPasteText, handleGetState6502, passSetShowDebugTab, passSetMachineName, passSetBinaryBlock, handleGetSpeedMode, passSetAppMode, passSetRunMode, passSetIsDebugging, passSetSlotConfig, passSetIwmStatsEnabled, passSetRomTraceEnabled, passResetRomTrace, passSetRomTracePeek, passSetRomTraceWatch, passShrDbgRequest, passShrCodeRequest, passShrWindowRequest, passShrDumpRequest, passShrTraceRequest, passSetAdbTraceEnabled, clearAdbTrace, setMouseEventLog, passSetEnsoniqDebugEnabled, passEnableGamePatches } from "./main2worker"
 import { setDefaultBinaryAddress, handleSetDiskFromURL, handleSetDiskSwapperFromURLs, resetAllDiskDrives } from "./devices/disk/driveprops"
 import { handleSetVeraSdFromURL } from "./devices/vera/verasdicon"
 import { loadOneDriveScript } from "./devices/disk/cloudscriptloader"
@@ -58,12 +58,40 @@ export const handleInputParams = (paramString = "") => {
       const w = window as unknown as {
         __romTraceReset?: () => void
         __romTracePeek?: (addrs: number[]) => void
+        __romTraceWatch?: (addrs: number[], ranges?: number[]) => void
+        __shrDbgReset?: () => void
+        __shrDump?: (reset?: boolean) => void
+        __shrTrace?: (on: boolean) => void
+        __shrCode?: (addrs: number[]) => void
+        __shrWindow?: (regions: Array<{ a: number, n: number }>) => void
       }
       w.__romTraceReset = () => passResetRomTrace()
       // Ask the worker for specific 24-bit addresses alongside each trace sample.
       // The answer lands in window.__romTrace.peekValues, which is the only way to
       // read emulator memory from the browser without a dedicated request.
       w.__romTracePeek = (addrs: number[]) => passSetRomTracePeek(addrs)
+      // Capture the last 200 PCs before the first N executions of each watched
+      // 24-bit address, so a jump into unexpected memory names its branch site.
+      w.__romTraceWatch = (addrs: number[], ranges?: number[]) => passSetRomTraceWatch(addrs, ranges)
+      // Zero the SHR write census so the next sample covers only the window between
+      // the reset and the read. window.__romTrace.shrDbg carries the answer.
+      w.__shrDbgReset = () => passShrDbgRequest(true)
+      // Grab the raw displayed SHR buffer once, as {len, scb, b64}, in
+      // window.__romTrace.shrDump. Pass true to zero the census at the same time.
+      w.__shrDump = (reset?: boolean) => passShrDumpRequest(reset === true)
+      // Attribute every store into the displayed SHR window to the instruction
+      // that issued it, so "the erase never runs" and "the erase runs at the
+      // wrong address" can be told apart. Results: __romTrace.shrDbg.writers.
+      w.__shrTrace = (on: boolean) => passShrTraceRequest(on !== false)
+      // Fetch guest code bytes by 24-bit address; the answer lands in
+      // window.__romTrace.codeBlocks. Pairs with the write census: the census names
+      // the storing instruction, this reads it.
+      w.__shrCode = (addrs: number[]) => passShrCodeRequest(addrs)
+      // Or whole routines at once: the answers accumulate on
+      // window.__shrCodeResult as [{addr, bytes}], which is how a draw/erase pair
+      // spread over two routines gets read in one round trip instead of one
+      // 256-byte straddle at a time.
+      w.__shrWindow = (regions) => passShrWindowRequest(regions)
     }
   }
 

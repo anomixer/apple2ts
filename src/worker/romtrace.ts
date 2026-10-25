@@ -29,7 +29,13 @@ export interface RomTrace {
   timeline: number[]
   hist: Record<string, number>
   foreign: ForeignEntry[]
+  // TEMP: lead-in context for the first hits on the watched PCs / ranges.
+  watches: ForeignEntry[]
 }
+
+const WATCH_PCS: number[] = []
+// Flat pairs of [lo, hi) 24-bit addresses.
+const WATCH_RANGES: number[] = []
 
 // Large enough to cover a whole boot scan (the harness runs ~9M instructions
 // between a reset and ProDOS), which is what makes an automatic diff against
@@ -49,6 +55,7 @@ const first: number[] = []
 const last: number[] = []
 const hist = new Map<number, number>()
 const foreign: ForeignEntry[] = []
+const watches: ForeignEntry[] = []
 const timeline: number[] = []
 
 // On an Apple IIgs only banks $D0-$FF are ROM; $00 is where the 65816 comes up.
@@ -59,12 +66,21 @@ const isExpectedBank = (bank: number) => bank === 0x00 || bank >= 0xd0
 
 export const setRomTraceEnabled = (value: boolean) => { enabled = value }
 
+export const setRomTraceWatch = (pcs: number[], ranges: number[] = []) => {
+  WATCH_PCS.length = 0
+  for (const p of pcs) WATCH_PCS.push(p >>> 0)
+  WATCH_RANGES.length = 0
+  for (const r of ranges) WATCH_RANGES.push(r >>> 0)
+  watches.length = 0
+}
+
 export const clearRomTrace = () => {
   instructions = 0
   first.length = 0
   last.length = 0
   hist.clear()
   foreign.length = 0
+  watches.length = 0
   timeline.length = 0
 }
 
@@ -93,6 +109,21 @@ export const recordRomPc = (pc24: number) => {
       context: last.slice(Math.max(0, last.length - 1 - FOREIGN_CONTEXT), last.length - 1),
     })
   }
+  // TEMP probe: keep the lead-in to a watched PC so a jump into a specific
+  // address names the instruction that made it.
+  let watched = WATCH_PCS.includes(pc24)
+  if (!watched) {
+    for (let i = 0; i + 1 < WATCH_RANGES.length; i += 2) {
+      if (pc24 >= WATCH_RANGES[i] && pc24 < WATCH_RANGES[i + 1]) { watched = true; break }
+    }
+  }
+  if (watched && watches.length < 6) {
+    watches.push({
+      pc: pc24,
+      bank,
+      context: last.slice(Math.max(0, last.length - 1 - 200), last.length - 1),
+    })
+  }
 }
 
 export const getRomTrace = (): RomTrace => {
@@ -101,5 +132,5 @@ export const getRomTrace = (): RomTrace => {
     .slice(0, MAX_HIST)
   const histOut: Record<string, number> = {}
   for (const [pc, count] of entries) histOut[pc.toString(16)] = count
-  return { enabled, instructions, first, last, timeline, hist: histOut, foreign }
+  return { enabled, instructions, first, last, timeline, hist: histOut, foreign, watches }
 }

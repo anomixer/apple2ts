@@ -42,11 +42,11 @@ import { receiveCommData } from "./devices/superserial/serial"
 import { setTraceSettings } from "./tracelog"
 import { doGotoTimeTravelIndex, doSetThumbnailImage, doGetSaveStateWithSnapshots, doGetSaveState, doGoBackInTime, doGoForwardInTime, doRestoreSaveState } from "./save_restore"
 import { setSiriusJoyport } from "./devices/sirius_joyport"
-import { getCurrentMemory, memGet24, getCurrentMachineName } from "./memory"
+import { getCurrentMemory, memGet24, getCurrentMachineName, getShrDbg, getShrDump, resetShrDbg, setShrDbgTrace } from "./memory"
 import { getIwmReadStats } from "./devices/diskdata"
 import { getAdbLog, setAdbLogEnabled, clearAdbLog } from "./iigs_adb"
 import { iigsEnsoniq, docAccess } from "./devices/iigs_ensoniq"
-import { getRomTrace, setRomTraceEnabled, clearRomTrace } from "./romtrace"
+import { getRomTrace, setRomTraceEnabled, setRomTraceWatch, clearRomTrace } from "./romtrace"
 import { enableGamePatches } from "./games/game_mappings"
 
 // This file must have worker types, but not DOM types.
@@ -601,8 +601,9 @@ if (typeof self !== "undefined") {
         // Payload: {enable?: boolean, clear?: boolean, peek?: number[]}.
         // Enabling and clearing travel with the request rather than living in a
         // sticky worker flag, which a module re-evaluation would silently reset.
-        const req = (e.data.payload ?? {}) as { enable?: boolean, clear?: boolean, peek?: number[] }
+        const req = (e.data.payload ?? {}) as { enable?: boolean, clear?: boolean, peek?: number[], watch?: number[], watchRange?: number[], shrDbg?: boolean, shrDbgReset?: boolean, wantShr?: boolean, traceWriters?: boolean, codeAt?: number[], codeWindows?: Array<{ a: number, n: number }> }
         if (req.enable !== undefined) setRomTraceEnabled(req.enable)
+        if (req.watch) setRomTraceWatch(req.watch, req.watchRange)
         if (req.clear) clearRomTrace()
         const trace = getRomTrace() as unknown as Record<string, unknown>
         // A PC histogram says where the machine is spinning but not what it is
@@ -621,6 +622,35 @@ if (typeof self !== "undefined") {
         if (req.peek) {
           trace.peekValues = req.peek.map((addr) => memGet24(addr >>> 0))
         }
+        // The write census names the instruction storing into the displayed window;
+        // this fetches the code around it so the sprite draw and its erase can be
+        // read rather than guessed at. The key is (PB << 16) | PC, so bank and
+        // offset have to be split again for memGet24.
+        const fetchCode = (addr: number, len: number) => {
+          const bank = (addr >>> 16) & 0xff
+          const start = addr & 0xffff
+          const bytes: number[] = []
+          for (let k = 0; k < len; k++) bytes.push(memGet24((bank << 16) | ((start + k) & 0xffff)))
+          return { addr: bank.toString(16) + ":" + start.toString(16), bytes }
+        }
+        if (req.codeAt) {
+          trace.codeBlocks = req.codeAt.map((addr) => fetchCode(addr, 256))
+        }
+        // A whole routine, not a 256-byte straddle: the census names the storing
+        // instruction but the erase that surrounds it can sit two streets away, and
+        // re-running a boot to get another 256 bytes costs minutes.
+        if (req.codeWindows) {
+          trace.codeWindows = req.codeWindows.map((w) => fetchCode(w.a, Math.min(Math.max(w.n | 0, 16), 4096)))
+        }
+        // A game that leaves stale sprites is either being displayed from a buffer
+        // it is not redrawing or redrawing the one we show without erasing. Those
+        // look identical on the canvas and differ only in where the writes land,
+        // so the SHR write census rides along with the trace poll.
+        if (req.traceWriters !== undefined) setShrDbgTrace(req.traceWriters)
+        trace.vbls = getIigsVblCount()
+        trace.shrDbg = req.shrDbg ? getShrDbg() : undefined
+        if (req.wantShr) trace.shrDump = getShrDump()
+        if (req.shrDbgReset) resetShrDbg()
         passRomTrace(trace)
         break
       }
