@@ -1,7 +1,7 @@
 // Mouse Driver for Apple2TS - Copyright 2023 Michael Morrison <codebythepound@gmail.com>
 // Now combined Mouse/Clock driver
 
-import { setSlotDriver, setSlotIOCallback, memGet, memSet, memSetC000, memGetC000, getCurrentMachineName, isIigsShrActive, isIigsShr320, getIigsMousePos } from "../memory"
+import { setSlotDriver, setSlotIOCallback, memGet, memSet, memSetC000, memGetC000, getCurrentMachineName, isIigsShr320, getIigsMousePos, iigsEventManagerActive } from "../memory"
 import { iigsADB, noteAdbLog } from "../iigs_adb"
 import { registerSlotCardState } from "./slot_card_state"
 import { MouseEventSimple } from "../../common/utility"
@@ -350,8 +350,8 @@ const setMode = (value: number) => {
   passShowAppleMouse(value ? true  : false)
 }
 
-// The IIgs ADB path derives relative deltas from the last UI position, so this
-// baseline is state that a reset has to clear. -1 means "no report yet".
+// The IIgs ADB path dead-reckons a guest-space position, so this is the last
+// position it believes the guest cursor is at, in ADB counts. -1 = unseeded.
 let adbLastX = -1
 let adbLastY = -1
 
@@ -370,8 +370,8 @@ export const resetMouse = () => {
   tmpmousey = 0
   servestatus = 0
   clampidx = 0
-  // The IIgs ADB path derives relative deltas from the last UI position, so the
-  // baseline has to be dropped too or the first report after a reset jumps.
+  // The IIgs ADB path dead-reckons a guest-space position, so the baseline has
+  // to be dropped too or the first report after a reset jumps.
   adbLastX = -1
   adbLastY = -1
   adbTargetX = -1
@@ -556,11 +556,16 @@ export const MouseCardEvent = (event: MouseEventSimple) => {
 }
 
 // The ADB reports motion as a relative count per read, and the OS adds those
-// counts straight onto the cursor position. So a full-width move of the host
-// pointer should traverse the full Super Hi-Res screen: 640 x 200 counts.
-// (ADB_Mouse.hpp clamps each report to +/-63.)
-const ADB_COUNTS_X = 640
-const ADB_COUNTS_Y = 200
+// counts straight onto the cursor position, so the host pointer is converted to
+// a guest-space position and only the difference is injected. gssquared does the
+// same in keygloo_mouse_sync.hpp host_to_a2: Super Hi-Res presents 640x400 by
+// showing each of its 200 scanlines twice, and a 320-mode SHR screen halves the
+// horizontal counts. (ADB_Mouse.hpp clamps each report to +/-63.)
+const iigsGuestTarget = (event: MouseEventSimple) => {
+  const px = Math.max(0, Math.min(639, Math.round(event.x * 639)))
+  const py = Math.max(0, Math.min(199, Math.round(event.y * 399) >> 1))
+  return { x: isIigsShr320() ? px >> 1 : px, y: py }
+}
 
 // --- Apple IIgs closed-loop ADB cursor sync ---
 //
@@ -597,22 +602,20 @@ const adbClickQueue: Array<{ button: 0 | 1, pressed: boolean }> = []
 let adbClickWaitFrames = 0
 let adbClickAwaitConsume = false
 
-// Closed-loop only makes sense where the cursor is a pixel position: the
-// Super Hi-Res desktop and SHR games. In the ROM's text/legacy modes the
-// pointer is derived from character cells and the original relative deltas
-// are the correct behaviour.
+// Closed-loop only makes sense where the cursor is a pixel position that the
+// guest publishes back to us: the Super Hi-Res desktop, where the Event Manager
+// keeps it in the ROM screen holes. gssquared gates its stepper the same way
+// (keygloo_mouse_sync.hpp compute_em_active): no Event Manager, no feedback, so
+// a program that keeps its own cursor (MCS, Tass Times) must get the plain
+// relative deltas its own code expects instead of being steered against a
+// position it never maintains.
 const iigsClosedLoopActive = (): boolean =>
-  getCurrentMachineName() === "APPLE2GS" && isIigsShrActive()
+  getCurrentMachineName() === "APPLE2GS" && iigsEventManagerActive()
 
 const iigsSetCursorTarget = (event: MouseEventSimple) => {
-  // The UI hands over a position normalised across the visible screen, which
-  // Super Hi-Res presents as 640x400 by showing each of its 200 scanlines
-  // twice (graphics.ts SHR_WIDTH/SHR_HEIGHT). So the guest's vertical range is
-  // 0..199 and a 320-pixel-wide SHR screen halves the horizontal counts.
-  const px = Math.max(0, Math.min(639, Math.round(event.x * 639)))
-  const py = Math.max(0, Math.min(199, Math.round(event.y * 399) >> 1))
-  adbTargetX = isIigsShr320() ? px >> 1 : px
-  adbTargetY = py
+  const target = iigsGuestTarget(event)
+  adbTargetX = target.x
+  adbTargetY = target.y
   adbSyncStaleFrames = 0
 }
 
@@ -691,13 +694,16 @@ export const iigsMouseStep = (): { dx: number, dy: number } | null => {
 
 // Route a UI mouse event onto the IIgs ADB bus.
 //
-// In Super Hi-Res mode the pointer position is handed to the closed-loop
-// stepper (iigsMouseStep) instead of being converted to deltas here: the ADB
-// cannot carry more than +/-63 counts in one report, so dead-reckoning a fast
-// host move silently loses ground and the guest's cursor ends up offset from
-// the pointer - every click then lands where the cursor is rather than where
-// the user aimed. Outside SHR (the ROM's text/legacy modes, where the cursor
-// lives in character cells) the original relative-delta behaviour is kept.
+// When the guest's Event Manager is running (the Super Hi-Res desktop) the
+// pointer position is handed to the closed-loop stepper (iigsMouseStep): the ADB
+// cannot carry more than +/-63 counts in one report, so plain dead reckoning
+// loses ground on fast moves and the guest's cursor ends up offset from the
+// pointer - every click then lands where the cursor is rather than where the
+// user aimed. Programs that keep their own cursor (ProDOS 8-era software such as
+// Music Construction Set) never publish a position to read back, so they get
+// gssquared's host_to_a2 conversion plus dead reckoning instead: the host
+// position becomes a guest-space target and only the difference since the last
+// target is injected.
 const iigsADBEvent = (event: MouseEventSimple) => {
   // Debug: every event the UI hands to the IIgs path (?adbtrace=1).
   noteAdbLog("ui", event.buttons, event.x, event.y)
@@ -724,33 +730,27 @@ const iigsADBEvent = (event: MouseEventSimple) => {
     iigsADB.setMouseButton(button, pressed)
     return
   }
+  if (event.x < 0 || event.x > 1.0 || event.y < 0 || event.y > 1.0) return
   if (iigsClosedLoopActive()) {
-    if (event.x >= 0 && event.x <= 1.0) adbLastX = event.x
-    if (event.y >= 0 && event.y <= 1.0) adbLastY = event.y
+    adbLastX = -1
+    adbLastY = -1
     iigsSetCursorTarget(event)
     return
   }
-  // Both axes have to go into the same report, so collect them first.
-  let dx = 0
-  let dy = 0
-  if (event.x >= 0 && event.x <= 1.0) {
-    if (adbLastX < 0) {
-      // First report only establishes a baseline; a delta from an unknown
-      // origin would jump the pointer to a corner.
-      adbLastX = event.x
-    } else {
-      dx = Math.round((event.x - adbLastX) * ADB_COUNTS_X)
-      adbLastX = event.x
-    }
+  // Dead reckoning: inject the distance from the position we last told the
+  // guest about, so a dropped report is corrected on the next move.
+  const target = iigsGuestTarget(event)
+  if (adbLastX < 0) {
+    // First report only establishes a baseline; a delta from an unknown origin
+    // would jump the pointer to a corner.
+    adbLastX = target.x
+    adbLastY = target.y
+    return
   }
-  if (event.y >= 0 && event.y <= 1.0) {
-    if (adbLastY < 0) {
-      adbLastY = event.y
-    } else {
-      dy = Math.round((event.y - adbLastY) * ADB_COUNTS_Y)
-      adbLastY = event.y
-    }
-  }
+  const dx = target.x - adbLastX
+  const dy = target.y - adbLastY
+  adbLastX = target.x
+  adbLastY = target.y
   if (dx !== 0 || dy !== 0) iigsADB.queueMouse(dx, dy)
 }
 

@@ -12,6 +12,7 @@ import { RamWorksMemoryStart, RamWorksPage, ROMpage, ROMmemoryStart, hiresLineTo
 import { isWatchpoint, observeMemoryWrite, setWatchpointBreak } from "./cpu6502"
 import { noSlotClock } from "./nsc"
 import { adbLogEnabled, noteAdbLog } from "./iigs_adb"
+import { getCpuPc } from "./cpu_pc"
 import { videoTerm } from "./devices/videoterm"
 import { vidhd } from "./devices/vidhd"
 import { isDebugging, setIigsSpeedRegister, getIigsVideoClock, getIigsFrameUnits } from "./motherboard"
@@ -201,6 +202,11 @@ export const iigsInterruptPending = (): boolean => {
 // The frame layout mirrors motherboard.ts: the first vblCycles of every frame
 // are the VBL rows (that is what $C019/VBLIRQ are keyed to), then 192 visible
 // rows.
+function noteVcountRead(v: number): void {
+  shrDbg.vcountReads++;
+  if (shrDbg.trace && shrDbg.vcountVals.size < 512) shrDbg.vcountVals.add(v);
+}
+
 const readIigsVideoCounter = (wantHorz: boolean): number => {
   // Video-clock position, not cycleCount: $C036 slow mode changes how many CPU
   // cycles fit in a frame but must not move the beam (see iigsVideoClock).
@@ -223,9 +229,13 @@ const readIigsVideoCounter = (wantHorz: boolean): number => {
     const h = Math.floor(cyc % cyclesPerLine);
     const hstep = Math.floor(h * 65 / cyclesPerLine);
     const horz = hstep === 0 ? 0 : Math.min(0x7f, 0x40 + hstep - 1);
-    return ((vert & 1) << 7) | horz;
+    const v = ((vert & 1) << 7) | horz;
+    noteVcountRead(v);
+    return v;
   }
-  return (vert >> 1) & 0xff;
+  const v = (vert >> 1) & 0xff;
+  noteVcountRead(v);
+  return v;
 };
 
 // IWM (Integrated Woz Machine) state for Apple IIgs ($C0E0-$C0EF)
@@ -476,6 +486,7 @@ export const memSet24 = (address: number, data: number) => {
             return;
         }
         megaIIMain[offset] = data;
+        if (offset >= 0x2000 && offset < 0xa000) shrDbg.e0++
         return;
     }
 
@@ -499,6 +510,10 @@ export const memSet24 = (address: number, data: number) => {
         // The SHR window is linearized in CPU space but interleaved in the
         // physical Mega II aux array, so direct bank $E1 accesses have to be
         // folded back. gssquared's megaiiRead/megaiiWrite do exactly this.
+        if (offset >= 0x2000 && offset < 0xa000) {
+            shrDbg.e1++
+            if (shrDbg.trace) noteShrWrite(getCpuPc(), offset)
+        }
         megaIIAux[isIigsAuxLinear() ? iigsAuxLinearToPhys(offset) : offset] = data;
         return;
     }
@@ -512,8 +527,10 @@ export const memSet24 = (address: number, data: number) => {
             megaIIMain[offset] = data;
         } else if (offset >= 0x2000 && offset < 0x4000 && !(iigsRegisters[0x35] & 0x02)) {
             megaIIMain[offset] = data;
+            shrDbg.b00++
         } else if (offset >= 0x4000 && offset < 0x6000 && !(iigsRegisters[0x35] & 0x04)) {
             megaIIMain[offset] = data;
+            shrDbg.b00++
         }
         return;
     }
@@ -537,6 +554,7 @@ export const memSet24 = (address: number, data: number) => {
         // window is linearized in CPU space and interleaved physically, so the
         // shadow target has to be folded like a direct $E1 access.
         if (offset >= 0x2000 && offset < 0xA000 && !(iigsRegisters[0x35] & 0x08)) {
+            shrDbg.b01++
             megaIIAux[isIigsAuxLinear() ? iigsAuxLinearToPhys(offset) : offset] = data;
         }
         return;
@@ -1333,10 +1351,22 @@ export const memGetRaw = (addr: number): number => {
 }
 
 const memSetSoftSwitch = (addr: number, value: number) => {
+    if (currentMachineName === "APPLE2GS" && addr >= 0xC0B0 && addr <= 0xC0BF) {
+      // The IIgs Video Out Controller owns $C0B0-$C0BF. $C0B1 bits 4-5 select the
+      // SHR source and, with bit 7 of $C0B5, enable 640x400 interlace, where the
+      // second field is scanned from Mega II *main* RAM (gssquared
+      // src/devices/voc/voc.cpp: interlace_enabled() is `(reg[1] & 0x30) == 0x30
+      // && (reg[5] & 0x80)`, and voc_frame() composites E0 with E1). Nothing here
+      // implements it yet, so record every write that would.
+      if (shrDbg.voc.length < 128) shrDbg.voc.push((addr & 0xff), value)
+    }
     // C029 (NEWVIDEO) - used by both Apple IIgs and VidHD
     if (addr === 0xC029) {
       if (vidhd.enabled || (gsROM && gsROM.length > 0)) {
         vidhd.writeSoftSwitch(value)
+      }
+      if (currentMachineName === "APPLE2GS" && shrDbg.newvideo.length < 64) {
+        shrDbg.newvideo.push(value)
       }
       SWITCHES.NEWVIDEO.isSet = (value & 0x80) !== 0
       iigsRegisters[0x29] = value
@@ -1962,6 +1992,282 @@ export const getIigsMousePos = (): { x: number, y: number } => ({
   x: memGet24(0x00047c) | (memGet24(0x00057c) << 8),
   y: memGet24(0x0004fc) | (memGet24(0x0005fc) << 8),
 })
+
+// Is the guest's Event Manager running? gssquared uses this to decide whether
+// its closed-loop mouse synchronisation is meaningful at all
+// (keygloo_mouse_sync.hpp compute_em_active): the Tool Locator pointer at
+// $E1/03C8 leads to the tool table, and the word at tool+24 is the Event
+// Manager's "active" flag. Programs written for ProDOS 8 keep their own cursor
+// and never install a Tool Locator, so the holes getIigsMousePos() reads stay
+// at zero and steering against them walks their cursor off screen.
+const TOOL_LOCATOR_ACTIVE_OFFSET = 6 * 4
+
+export const iigsEventManagerActive = (): boolean => {
+  if (!SWITCHES.NEWVIDEO.isSet) return false
+  const toolStart = megaIIAux[0x03c8] | (megaIIAux[0x03c9] << 8) | (megaIIAux[0x03ca] << 16)
+  if (toolStart < 0x20000 || toolStart >= 0x7fffe4) return false
+  const addr = toolStart + TOOL_LOCATOR_ACTIVE_OFFSET
+  const bank = (addr >>> 16) & 0xff
+  const offset = addr & 0xffff
+  // Never let a bogus pointer read a $C0xx soft switch.
+  if (bank === 0 && offset >= 0xc000 && offset < 0xc100) return false
+  return (memGet24(addr) | (memGet24(addr + 1) << 8)) !== 0
+}
+
+// ---- Debug-only SHR write census -------------------------------------------------
+//
+// A game that leaves stale sprites on screen is in one of two states, and they look
+// identical from the canvas: either the emulator is displaying a buffer the game is
+// not redrawing, or the game *is* redrawing the buffer we show and its own erase
+// never runs. The only way to tell them apart is where the writes actually land, so
+// count them. Four integers and a bounded log; polled through the existing
+// ?romtrace=1 request/response path rather than pushed (AGENTS.md §26b).
+export const shrDbg = {
+  e1: 0,   // direct bank $E1 writes into the displayed $2000-$9FFF window
+  e0: 0,   // direct bank $E0 (Mega II main) writes into that window
+  b01: 0,  // bank $01 fast-RAM writes that shadowed into the SHR window
+  b00: 0,  // bank $00 writes that shadowed into Mega II main
+  voc: [] as number[],   // $C0B0-$C0BF writes as addr,value pairs (VOC interlace)
+  newvideo: [] as number[], // every $C029 write, oldest first
+  // A sprite that never gets erased is often a sprite whose erase is scheduled
+  // against the raster and never reaches its slot. $C02E/$C02F are the only way
+  // software can see the beam, so the read count says whether a program is
+  // raster-syncing at all and the value set says whether it ever gets the
+  // scanline it is waiting for.
+  vcountReads: 0,
+  vcountVals: new Set<number>(),
+  // Which instruction is storing into the displayed window, and over what
+  // address range. A stale sprite is either "the erase never runs" or "the
+  // erase runs somewhere else", and only the caller plus its destination span
+  // separates those two. Off unless setShrDbgTrace(true) is asked for, because
+  // the map lookup costs more than the four integer counters above.
+  trace: false,
+  writers: new Map<number, { id: number; n: number; lo: number; hi: number }>(),
+  // Per-byte write count within the displayed window, saturating at 255, so a
+  // pixel can be classified by how often it was stored to: 1 means the sprite
+  // was drawn and never written again (no erase), 2 means something did come
+  // back and wrote it (so an erase exists and either targets the wrong bytes or
+  // carries the wrong data), and many means it is part of a repeatedly redrawn
+  // background. The writer census cannot separate those: it only says which
+  // instruction stored, summed over the whole window.
+  hits: new Uint8Array(0x8000),
+  // Which site stored into a byte *last*. The write count says a byte was drawn
+  // and never restored; only attribution says by what. Two bytes that both end
+  // up wrong can be "draw site, no erase" or "erase site, wrong data", and the
+  // fix is different for each, so record the site id of the final store per byte.
+  last: new Uint16Array(0x8000),
+  // ... and the site that stored into it *first*. The last writer alone cannot
+  // tell a redrawn pixel from a restored one; the (first, last) pair can, and it
+  // is the only way to name the erase routine instead of guessing at it.
+  first: new Uint16Array(0x8000),
+  nextSiteId: 1,
+  // The displayed window as it looked at the first dump since the last reset, so
+  // "still wrong" has a fixed meaning: the picture before the sprite started
+  // moving, not the previous frame.
+  ref: null as Uint8Array | null,
+}
+
+export const setShrDbgTrace = (on: boolean) => {
+  shrDbg.trace = on
+  if (!on) {
+    shrDbg.writers.clear()
+    shrDbg.nextSiteId = 1
+    shrDbg.last.fill(0)
+    shrDbg.first.fill(0)
+    shrDbg.hits.fill(0)
+    shrDbg.ref = null
+  }
+}
+
+const noteShrWrite = (pc: number, offset: number) => {
+  const index = offset - 0x2000
+  const h = shrDbg.hits[index]
+  let w = shrDbg.writers.get(pc)
+  if (!w) {
+    if (shrDbg.writers.size > 512) return
+    w = { id: shrDbg.nextSiteId++, n: 0, lo: offset, hi: offset }
+    shrDbg.writers.set(pc, w)
+  }
+  if (h === 0) shrDbg.first[index] = w.id
+  if (h < 255) shrDbg.hits[index] = h + 1
+  shrDbg.last[index] = w.id
+  w.n++
+  if (offset < w.lo) w.lo = offset
+  if (offset > w.hi) w.hi = offset
+}
+
+const shrWindowHash = (arr: Uint8Array): number => {
+  let h = 0x811c9dc5
+  for (let i = 0x2000; i < 0xa000; i++) {
+    h ^= arr[i]
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h >>> 0
+}
+
+export const getShrDbg = () => ({
+  e1: shrDbg.e1,
+  e0: shrDbg.e0,
+  b01: shrDbg.b01,
+  b00: shrDbg.b00,
+  voc: shrDbg.voc.slice(),
+  newvideo: shrDbg.newvideo.slice(),
+  auxHash: shrWindowHash(megaIIAux),
+  mainHash: shrWindowHash(megaIIMain),
+  c029: iigsRegisters[0x29],
+  c035: iigsRegisters[0x35],
+  linear: isIigsAuxLinear(),
+  shrOn: SWITCHES.NEWVIDEO.isSet,
+  // Raster-sync evidence: how often the beam was read, and (with the trace on)
+  // which scanline values the reader actually saw.
+  vcountReads: shrDbg.vcountReads,
+  vcountVals: shrDbg.trace ? Array.from(shrDbg.vcountVals).sort((a, b) => a - b) : undefined,
+  // Hottest storing instructions: {pc, writes, low/high offset within the window}
+  // 64 sites because at 24 the census covered barely half of a busy game's
+  // window writes, and the sprite draw/erase pair sits in the tail.
+  writerTotal: shrDbg.e1,
+  writerSites: shrDbg.writers.size,
+  writers: shrDbg.trace
+    ? Array.from(shrDbg.writers.entries())
+        .sort((a, b) => b[1].n - a[1].n)
+        .slice(0, 64)
+        .map(([pc, w]) => ({ id: w.id, pc: pc.toString(16), n: w.n, lo: w.lo.toString(16), hi: w.hi.toString(16) }))
+    : undefined,
+})
+
+export const resetShrDbg = () => {
+  shrDbg.e1 = 0
+  shrDbg.e0 = 0
+  shrDbg.b01 = 0
+  shrDbg.b00 = 0
+  shrDbg.voc.length = 0
+  shrDbg.newvideo.length = 0
+  shrDbg.writers.clear()
+  shrDbg.vcountReads = 0
+  shrDbg.vcountVals.clear()
+  shrDbg.hits.fill(0)
+  shrDbg.last.fill(0)
+  shrDbg.first.fill(0)
+  shrDbg.nextSiteId = 1
+  shrDbg.ref = null
+}
+
+// One-shot raw dump of the buffer the renderer actually displays. The counters
+// above say whether writes arrive; this says what the displayed pixels really
+// are, so a stale sprite can be blamed on the guest or on us without anyone
+// having to look at a screenshot.
+export const getShrDump = () => {
+  const shr = getShr()
+  const scb: number[] = []
+  // getShr() is the $2000-$9FFF window, so index 0 is $2000: the scan-line
+  // control bytes at CPU $9D00 are at index $7D00 and the palettes at $9E00
+  // are at $7E00 (gssquared generate/AppleII.cpp:452).
+  for (let y = 0; y < 200; y++) scb.push(shr[0x7d00 + y])
+  let bin = ""
+  for (let i = 0; i < shr.length; i += 8192) {
+    bin += String.fromCharCode.apply(null, Array.from(shr.subarray(i, i + 8192)))
+  }
+  // The per-byte write census since the trace was armed, alongside the picture
+  // it describes: comparing two dumps says which bytes changed, and this says
+  // how often each was stored to, which is what separates "never erased" from
+  // "erased with the wrong data".
+  let hits = ""
+  if (shrDbg.trace) {
+    for (let i = 0; i < shrDbg.hits.length; i += 8192) {
+      hits += String.fromCharCode.apply(null, Array.from(shrDbg.hits.subarray(i, i + 8192)))
+    }
+  }
+  // Per-site attribution of the bytes that are still wrong relative to the first
+  // dump taken since the census was reset. "This byte changed and was written
+  // once" is only half the diagnosis: the fix differs between a draw instruction
+  // whose erase never runs and an erase instruction that restores the wrong data,
+  // and only the identity of the *last* storing site separates them. Computed
+  // here rather than shipped as a per-byte table because the answer is ~40 rows
+  // and the table would be 64KB.
+  let attrib: Array<{ id: number; pc: string; from: number; n: number; lo: string; hi: string; ch1: number; ch2: number; chN: number; same: number; code: number[] }> | undefined
+  let pairs: Array<{ a: string; b: string; n: number }> | undefined
+  if (shrDbg.trace) {
+    if (!shrDbg.ref) shrDbg.ref = shr.slice(0, 0x7d00)
+    const tally = new Map<number, { ch1: number; ch2: number; chN: number; same: number }>()
+    // A byte written more than once and still wrong has an *other* writer, and
+    // naming it is the whole point: the first writer is the draw, the last is
+    // whatever came back over it. If the second one is a restore, its code is
+    // the bug; if it is the same sprite drawn again at the same place, no erase
+    // exists and the game is waiting on an event that never arrives.
+    const pairTally = new Map<string, number>()
+    for (let i = 0; i < 0x7d00; i++) {
+      if (shr[i] === shrDbg.ref[i]) continue
+      const id = shrDbg.last[i]
+      if (!id) continue
+      let t = tally.get(id)
+      if (!t) {
+        t = { ch1: 0, ch2: 0, chN: 0, same: 0 }
+        tally.set(id, t)
+      }
+      const h = shrDbg.hits[i]
+      if (h <= 1) t.ch1++
+      else {
+        if (h === 2) t.ch2++
+        else t.chN++
+        const f = shrDbg.first[i]
+        // "same" is the accumulation proof: this site wrote the byte at least
+        // twice and nothing else ever came back over it, so the byte is not a
+        // live sprite under the current drawing position but a stale image that
+        // the site's own erase should have reclaimed. ch1 alone cannot say that,
+        // because the byte under the sprite right now also looks like ch1.
+        if (f === id) t.same++
+        else {
+          const key = f + ":" + id
+          pairTally.set(key, (pairTally.get(key) ?? 0) + 1)
+        }
+      }
+    }
+    const pcOf = new Map<number, number>()
+    for (const [pc, w] of shrDbg.writers) pcOf.set(w.id, pc)
+    const hex = (id: number) => {
+      const pc = pcOf.get(id)
+      return pc === undefined ? "?" : (pc >>> 16).toString(16) + ":" + (pc & 0xffff).toString(16)
+    }
+    pairs = Array.from(pairTally.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 32)
+      .map(([key, n]) => {
+        const [f, l] = key.split(":")
+        return { a: hex(Number(f)), b: hex(Number(l)), n }
+      })
+    // Every site that owns a still-wrong byte, ranked by ghost weight rather than
+    // total writes: the .slice(0, 12) on the summed sort covered only 112 of the
+    // 394 single-write bytes, i.e. the actual ghost owners were in the tail. Code
+    // windows ship for the top 40 only, because that is what has to be read.
+    attrib = Array.from(shrDbg.writers.entries())
+      .filter(([, w]) => tally.has(w.id))
+      .map(([pc, w]) => {
+        const t = tally.get(w.id)!
+        return { id: w.id, pc: pc.toString(16), from: (pc - 96) & 0xffff, n: w.n, lo: w.lo.toString(16), hi: w.hi.toString(16), ch1: t.ch1, ch2: t.ch2, chN: t.chN, same: t.same, code: [] as number[] }
+      })
+      // Ghost weight, not write count: a site that owns never-erased bytes is the
+      // suspect even when it writes far less than the field refresh does.
+      .sort((a, b) => ((b.ch1 + b.same) * 2 + b.ch2) - ((a.ch1 + a.same) * 2 + a.ch2) || (b.ch1 + b.ch2 + b.chN) - (a.ch1 + a.ch2 + a.chN))
+      .slice(0, 64)
+    attrib.slice(0, 40).forEach((row) => {
+      // The census PC is the address *after* the operand fetch (AGENTS.md §46), so
+      // the bytes of the storing instruction sit before it. A window straddling it
+      // is enough to find the instruction boundary and the loop around it offline,
+      // and shipping it here saves a whole browser round trip.
+      const pc = parseInt(row.pc, 16)
+      const bank = (pc >>> 16) & 0xff
+      for (let k = 0; k < 256; k++) row.code.push(memGet24((bank << 16) | ((pc - 96 + k) & 0xffff)))
+    })
+  }
+  return {
+    len: shr.length,
+    scb,
+    b64: btoa(bin),
+    hitsB64: shrDbg.trace ? btoa(hits) : undefined,
+    attrib,
+    pairs,
+  }
+}
 
 export const getShr = (): Uint8Array => {
   if (gsROM && gsROM.length > 0) {
