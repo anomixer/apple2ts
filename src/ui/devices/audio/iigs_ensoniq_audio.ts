@@ -11,11 +11,21 @@ import { isAudioEnabled, registerAudioContext } from "./speaker"
 let audioContext: AudioContext | null = null
 let outputNode: GainNode | null = null
 let nextTime = 0
+// True once at least one block has been scheduled, so the very first block -
+// which always finds `nextTime` at or behind the clock because the context was
+// only just created - is not counted as an underrun.
+let streaming = false
 let unregister: (() => void) | undefined
 // How many blocks have actually reached playback. The DOC only renders when an
 // oscillator is active, so a silent machine and a broken transport look identical
 // from here unless the blocks are counted. Mirrors getSpeakerClickCount().
 let blocksPlayed = 0
+
+// Reserve to (re-)prime the schedule with, and the backlog at which we stop
+// buffering and skip ahead. 60ms absorbs main-thread jitter (React render,
+// paint, message backlog) without adding audible latency to a live machine.
+const minLead = 0.06
+const maxLead = 0.5
 
 export const getEnsoniqBlocksPlayed = (): number => blocksPlayed
 
@@ -29,6 +39,13 @@ const ensoniqDebug = {
   resumeFailures: 0,
   lastResumeError: "",
   playCalls: 0,
+  // Transport health. `underruns` counts how often the schedule ran dry and
+  // `gapSeconds` sums the silence that cost, so "the music is a little choppy"
+  // becomes a number: gapSeconds / wallSeconds is the fraction of audio lost.
+  underruns: 0,
+  gapSeconds: 0,
+  blocksScheduled: 0,
+  lastLeadSeconds: 0,
 }
 export const getEnsoniqDebug = () => ensoniqDebug
 const noteEnsoniqDebug = () => {
@@ -47,7 +64,14 @@ const ensureContext = (): AudioContext | null => {
     if (!Ctor) return null
     const ctx = new Ctor()
     const gain = ctx.createGain()
-    gain.gain.value = 0.6
+    // Unity, matching gssquared: its DOC stream is created with
+    // apply_volume=false, so nothing scales the chip's output after the
+    // int16 mix. 0.6 here measured 1.66x (-3.7 dB) quieter than the
+    // pre-signed-int8 build once the unsigned mix's DC offset is filtered
+    // out, and that drop is what made the Tass Times title bass and drums
+    // disappear by ear. The DOC mix peaks at ~0.51 of full scale, so unity
+    // still leaves 6 dB of headroom.
+    gain.gain.value = 1.0
     gain.connect(ctx.destination)
     audioContext = ctx
     outputNode = gain
@@ -122,25 +146,41 @@ export const playEnsoniqSamples = (samples: Int16Array, sampleRate: number) => {
   // If we have fallen behind (worker paused, tab throttled) resync instead of
   // building an ever-growing backlog, which would grow without bound.
   const now = ctx.currentTime
-  if (nextTime < now) nextTime = now
-  // Keep a small reserve in front of the clock. Blocks arrive per worker
-  // refresh (every ~16.7ms) and only cover their own duration, so the queue
-  // sits at zero depth: any main-thread delay longer than one block (React
-  // render, paint, another message in flight) gaps the stream and forces a
-  // resync — audible as lag/stutter. A ~60ms lead buffers through that jitter
-  // and costs nothing except start latency. The upstream cap still bounds the
-  // backlog if the worker ever sprints ahead.
-  const minLead = 0.06
-  if (nextTime < now + minLead) nextTime = now + minLead
-  if (nextTime > now + 0.5) nextTime = now
+  const duration = frameCount / sampleRate
+  // The lead is a floor with hysteresis, NOT a target to top up on every block.
+  // Blocks arrive once per emulated refresh and cover exactly their own
+  // duration, so the queue depth only changes when the emulator runs above or
+  // below realtime. Re-priming whenever the lead dipped below the reserve
+  // punched a hole in the stream on *every* block once the queue settled at the
+  // reserve, and that is what sounds like "a little choppy": with the emulator
+  // even 8% below realtime the hole is ~1.4ms per block, ~8% of the audio,
+  // spread as a discontinuity 60 times a second. So only a queue that has
+  // genuinely run dry gets re-primed; in between, blocks are scheduled back to
+  // back and the stream is contiguous by construction.
+  if (nextTime <= now) {
+    if (streaming) {
+      ensoniqDebug.underruns++
+      ensoniqDebug.gapSeconds += Math.min(now - nextTime, 1)
+    }
+    nextTime = now + minLead
+  } else if (nextTime > now + maxLead) {
+    // The worker sprinted ahead (a catch-up run). Skip forward rather than
+    // letting the backlog grow without bound; this loses audio by design.
+    ensoniqDebug.underruns++
+    nextTime = now + minLead
+  }
+  streaming = true
+  ensoniqDebug.lastLeadSeconds = nextTime - now
   source.start(nextTime)
-  nextTime += frameCount / sampleRate
+  nextTime += duration
+  ensoniqDebug.blocksScheduled++
   noteEnsoniqDebug()
 }
 
 export const resetEnsoniqAudio = () => {
   if (!audioContext) return
   nextTime = audioContext.currentTime
+  streaming = false
   unregister?.()
   unregister = undefined
   void audioContext.close()
@@ -152,6 +192,10 @@ export const resetEnsoniqAudio = () => {
   ensoniqDebug.resumeFailures = 0
   ensoniqDebug.lastResumeError = ""
   ensoniqDebug.playCalls = 0
+  ensoniqDebug.underruns = 0
+  ensoniqDebug.gapSeconds = 0
+  ensoniqDebug.blocksScheduled = 0
+  ensoniqDebug.lastLeadSeconds = 0
   if (typeof window !== "undefined") {
     ;(window as unknown as { __ensoniqBlocks?: number }).__ensoniqBlocks = 0
   }

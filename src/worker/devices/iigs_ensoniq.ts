@@ -69,11 +69,11 @@ export class IigsEnsoniq {
   // $C03D is a pipeline: see readData(). Tracks whether $E0 was already
   // fetched in the current transaction so the two-read idiom cannot ack twice.
   e0FetchedThisTxn = false
-  // Analog system volume from the low nibble of $C03C, 0..1. Slewed rather
-  // than applied instantly: firmware and demos flip the nibble around DOC
-  // accesses and a step change would chop the waveform (audible LF distortion).
+  // Analog system volume from the low nibble of $C03C, 0..1. Reported for
+  // diagnostics only: gssquared does not attenuate the DOC stream with it
+  // (its per-sample slew is compiled out behind `#if 0` and its DOC audio
+  // stream is created with apply_volume=false), so neither do we.
   systemVolume = 1
-  smoothedVolume = 1
 
   // ---- Diagnostics (?ensoniqdbg=1) ----
   // Counts, not guesses: mirrorMonoCount = mono-chorus mirror applications,
@@ -118,7 +118,6 @@ export class IigsEnsoniq {
     this.osce = 1
     this.e0FetchedThisTxn = false
     this.systemVolume = 1
-    this.smoothedVolume = 1
     this.monoMirrorCount = 0
     this.mirrorCountAtGenStart = 0
     this.irqTicks = 0
