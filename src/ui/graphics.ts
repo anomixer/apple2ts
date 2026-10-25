@@ -826,6 +826,18 @@ const applyCrtDistortion = (ctx: CanvasRenderingContext2D,
 // and every source line is emitted twice vertically.
 const shrRgbaBuffer = new Uint8ClampedArray(SHR_WIDTH * SHR_HEIGHT * 4)
 
+// SHR fill mode (scan-line control byte bit 5), 320-pixel lines only: a pixel
+// value of 0 does not select palette colour 0, it repeats the last non-zero
+// colour on that scanline. Sprites are erased by writing zeros and letting the
+// background run in from the left, so ignoring the bit leaves stale sprite
+// pixels on screen. The line starts from this initial colour index, measured
+// on hardware by John Brooks and transcribed by gssquared
+// (VideoScanGenerator.cpp:170).
+const FILLMODE_INIT = [
+  2, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf,
+  0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf,
+]
+
 const processSuperHiRes = (hiddenContext: CanvasRenderingContext2D, colorMode: COLOR_MODE,
   backgroundCss?: string | null): boolean => {
   const shrData = handleGetShr()
@@ -920,11 +932,14 @@ const processSuperHiRes = (hiddenContext: CanvasRenderingContext2D, colorMode: C
 
       if (!is640) {
         // 320 mode
+        const fill = (scb & 0x20) !== 0
+        let lastColour = FILLMODE_INIT[srcY & 0x1f]
         for (let x = 0; x < outWidth; x++) {
           const srcX = Math.min(319, Math.floor((x * 320) / outWidth))
           const byteVal = shrData[lineOffset + (srcX >> 1)]
           const color4Bit = (srcX & 1) ? (byteVal & 0x0F) : ((byteVal >> 4) & 0x0F)
-          const c = palIdx | color4Bit
+          if (!fill || color4Bit !== 0) lastColour = color4Bit
+          const c = palIdx | lastColour
 
           const px = rowOffset + x * 4
           shrRgbaBuffer[px] = palR[c]
