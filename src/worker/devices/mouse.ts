@@ -378,6 +378,9 @@ export const resetMouse = () => {
   adbTargetY = -1
   adbStepOutstanding = false
   adbSyncStaleFrames = 0
+  adbFeedbackStale = false
+  adbLastSeenX = 0
+  adbLastSeenY = 0
 }
 
 let mousex = 0
@@ -609,8 +612,27 @@ let adbClickAwaitConsume = false
 // a program that keeps its own cursor (MCS, Tass Times) must get the plain
 // relative deltas its own code expects instead of being steered against a
 // position it never maintains.
-const iigsClosedLoopActive = (): boolean =>
-  getCurrentMachineName() === "APPLE2GS" && iigsEventManagerActive()
+//
+// The Event Manager flag alone is not enough, because a GS/OS program can keep
+// its own cursor and read the ADB reports directly: freegemas accumulates the
+// $C024 deltas itself and never publishes a position, so the holes read back as
+// (0,0) while the Event Manager's copy stays wherever boot left it. Steering
+// against that origin makes the game apply motion toward a phantom target and
+// pins its pointer in a corner. The loop therefore also needs live feedback: a
+// published position must exist when the target is set, and a report the guest
+// consumed without the position following marks the feedback stale - a guest
+// that later publishes movement while we are not steering (the desktop coming
+// back up) proves it is live again.
+let adbFeedbackStale = false
+let adbLastSeenX = 0
+let adbLastSeenY = 0
+
+const iigsClosedLoopActive = (): boolean => {
+  if (getCurrentMachineName() !== "APPLE2GS" || !iigsEventManagerActive()) return false
+  if (adbFeedbackStale) return false
+  const { x, y } = getIigsMousePos()
+  return x !== 0 || y !== 0
+}
 
 const iigsSetCursorTarget = (event: MouseEventSimple) => {
   const target = iigsGuestTarget(event)
@@ -648,6 +670,15 @@ const drainIigsClicks = () => {
 // is only exposed so tests can assert the stepper's behaviour.
 export const iigsMouseStep = (): { dx: number, dy: number } | null => {
   drainIigsClicks()
+  const { x: ex, y: ey } = getIigsMousePos()
+  // While we are not steering, a position that moves under its own steam is
+  // live feedback (the desktop publishing its cursor again after a game), so a
+  // previously demoted loop may be trusted once more.
+  if (adbFeedbackStale && adbTargetX < 0 && (ex !== adbLastSeenX || ey !== adbLastSeenY)) {
+    adbFeedbackStale = false
+  }
+  adbLastSeenX = ex
+  adbLastSeenY = ey
   if (adbTargetX < 0 || !iigsClosedLoopActive()) {
     // Leaving SHR (or a reset) drops the target so the next session re-seeds.
     if (adbTargetX >= 0 && !iigsClosedLoopActive()) {
@@ -658,7 +689,6 @@ export const iigsMouseStep = (): { dx: number, dy: number } | null => {
     }
     return null
   }
-  const { x: ex, y: ey } = getIigsMousePos()
   if (Math.abs(adbTargetX - ex) <= ADB_SYNC_DEADBAND
     && Math.abs(adbTargetY - ey) <= ADB_SYNC_DEADBAND) {
     adbTargetX = -1
@@ -672,8 +702,19 @@ export const iigsMouseStep = (): { dx: number, dy: number } | null => {
   if (iigsADB.mouseReportPending()) return null
   if (adbStepOutstanding && ex === adbStepSnapshotX && ey === adbStepSnapshotY) {
     // The guest has not moved at all since the last step. Give it a few frames
-    // in case it is just slow, then assume the step was dropped and re-inject.
+    // in case it is just slow. If the report was consumed and the published
+    // position still has not budged, this guest is not using the Event
+    // Manager's cursor at all, so stop steering it and hand the remaining
+    // motion to dead reckoning.
     if (++adbSyncStaleFrames < ADB_SYNC_STALE_LIMIT) return null
+    adbFeedbackStale = true
+    adbLastX = adbTargetX
+    adbLastY = adbTargetY
+    adbTargetX = -1
+    adbTargetY = -1
+    adbStepOutstanding = false
+    adbSyncStaleFrames = 0
+    return null
   }
   const dx = Math.max(-ADB_SYNC_CHUNK_MAX, Math.min(ADB_SYNC_CHUNK_MAX, adbTargetX - ex))
   const dy = Math.max(-ADB_SYNC_CHUNK_MAX, Math.min(ADB_SYNC_CHUNK_MAX, adbTargetY - ey))
@@ -761,6 +802,9 @@ export const resetADBTracking = () => {
   adbTargetY = -1
   adbStepOutstanding = false
   adbSyncStaleFrames = 0
+  adbFeedbackStale = false
+  adbLastSeenX = 0
+  adbLastSeenY = 0
   adbClickQueue.length = 0
   adbClickWaitFrames = 0
   adbClickAwaitConsume = false

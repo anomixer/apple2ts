@@ -120,6 +120,17 @@ loop. Never "improve" a gssquared behaviour by inventing something; port it.
   gates both `memGet24` and `memSet24`, but only for `$C000-$CFFF`; the
   `$D000-$FFFF` language-card half still follows the `BSRREADRAM` rules on the
   assumption that nobody sets the inhibit expecting RAM there.
+- **Bank-$00 shadow target follows the *effective* bank** (`iigsEffectiveAuxWrite` +
+  `shadowIigsWrite`, from gssquared `calc_aux_write` / `shadow_is_enabled`). The
+  video scanner reads Mega II main/aux, not fast RAM, so every bank-$00 store has
+  to be mirrored into the same bank the IIe switch table picked: 80STORE+PAGE2
+  for text pages `$04-$07` and hires `$20-$3F`, ALTZP for pages `$00-$01` and
+  `$C0-$FF`, RAMWRT above that. Mirroring everything into Mega II **main** and
+  skipping `$6000-$9FFF` entirely left RAMWRT SHR blits invisible: the SilkyGS
+  ports (Super Mario Bros) draw with DB=$00 while RAMWRT is set, so the screen
+  stayed a uniform palette-0 blue although the game was blitting every frame
+  (§11.7). `$2000-$5FFF` needs either the SHR or the AUXHGR inhibit clear,
+  `$6000-$9FFF` is SHR only.
 - **Floating bus**: `memory.ts` keeps a byte (power-on `$EE`) refreshed from the
   video scanner. An empty slot's `$C0xx` read returns it. Returning
   `Math.random()` made every run of MCS differ (76 reads, the first at `$C300`,
@@ -328,6 +339,18 @@ register 0 byte 1:  bit7 = LEFT  button (1 = up) | bit6 = moved up    | bits5-0 
   `iigsMouseStep()` (once per frame) reads the guest cursor from the holes and
   injects a ≤ ±63 chunk toward it, waiting for the guest to consume each step.
   Measured convergence is within one count on both axes, edges included.
+- **The loop needs live feedback, not just an Event Manager** (freegemas): the
+  Tool Locator says GS/OS is up, but a program can keep its own cursor and read
+  the ADB bytes itself. freegemas reads `$C024` twice per frame from bank `$09`
+  and accumulates the deltas; the holes stay `(0,0)` forever. Steering against
+  that origin applies real motion toward a phantom target, so the game's pointer
+  raced into the bottom-right corner and looked dead. `iigsClosedLoopActive()`
+  therefore also requires a published position now, and a report the guest
+  consumed without the position following marks the feedback stale
+  (`adbFeedbackStale`) and falls back to dead reckoning; a position that moves
+  while we are not steering re-arms it. Games driven this way track movement
+  with an arbitrary constant offset (the first event only seeds the baseline),
+  which is correct for a guest that applies relative deltas.
 - **Clicks are deferred**: transitions go on a queue and `drainIigsClicks()`
   delivers one per frame, only after the target is reached and no report is
   unread (a press and its release must never share a report — patching an unread
@@ -340,7 +363,9 @@ register 0 byte 1:  bit7 = LEFT  button (1 = up) | bit6 = moved up    | bits5-0 
   blink.
 
 Cursor position lives in the text-page holes `$047C/$057C` (X) and `$04FC/$05FC`
-(Y), data-bank relative. GS/OS reads those, not `$E1:0190-0193`.
+(Y), data-bank relative. On our ROM 01 profile GS/OS reads those, not
+`$E1:0190-0193` (gssquared reads the `$E1:0190-0193` bank globals when the
+platform is ROM 03).
 
 ---
 
@@ -525,6 +550,28 @@ Cursor position lives in the text-page holes `$047C/$057C` (X) and `$04FC/$05FC`
    self-synchronising GCR, 80 tracks x 2 sides, plus a DO→3.5" repacker, and the
    write path. No test image exists in the repo; the ROM's own decoder is the
    ground truth.
+7. **SilkyGS ports render a blank SHR screen — RESOLVED.** Volume `SilkyGS.2mg`
+   in S7D2 with `SystemDisk.2mg` in S7D1; picking e.g. Super Mario Bros left the
+   screen a uniform palette-0 blue although the game blitted every frame. Every
+   bank-$00 store was mirrored into Mega II **main** regardless of the effective
+   bank and the `$6000-$9FFF` half of the SHR window was not mirrored at all, so
+   the ports' RAMWRT blits (DB=$00) landed in aux fast RAM where the video
+   scanner never looked. Fix: `iigsEffectiveAuxWrite` + `shadowIigsWrite` in
+   `memSet24` follow gssquared `calc_aux_write`/`shadow_is_enabled` (§2).
+   Regression: `gs_silky.test.ts` (Finder double-click into the port, then
+   asserts >100 scanlines of SHR pixels and >5000 non-zero Mega II aux bytes).
+8. **freegemas.2mg mouse would not move — RESOLVED.** The game is a self-booting
+   GS/OS match-3 port that keeps its own cursor: it reads `$C024` twice per
+   frame (X then Y) from bank `$09` and accumulates the deltas itself, so the
+   Event Manager never publishes a position and the text holes stay `(0,0)`.
+   The closed-loop stepper therefore saw the cursor at the origin and injected
+   ±63 chunks toward the host target every frame; the game applied them and its
+   pointer raced into the bottom-right corner and stuck there. The Tool Locator
+   flag is not evidence that a guest maintains the EM cursor. Fix: the loop
+   requires a non-zero published position and demotes to dead reckoning when a
+   consumed report leaves it unmoved (§6). Verified end to end: the pointer
+   tracks relative motion and a left click on "Timetrial mode" starts the board
+   (regression: `gs_freegemas.test.ts`).
 
 ---
 
@@ -546,6 +593,7 @@ Cursor position lives in the text-page holes `$047C/$057C` (X) and `$04FC/$05FC`
 | An 8-instruction batch is a free perf win | Starved SmartPort reads in the browser only |
 | SenseiPlay's 37 rows/s is the authored tempo | Wrong NTP pattern offset (a stray `p++` in the header walk) made the tempo look self-consistent; the real average is ~2.735 ticks/row (~18.3 rows/s at 50 Hz). The 37 rows/s came from a build whose DOC march ran 1.5x fast; the (also wrong) 2.05-ticks/row estimate read only rows 0 and 3 of pattern 0 |
 | The MCS splash hangs unless a key arrives | The no-key timeout *is* the demo loader. It crashed because banks `$00`/`$01` kept routing `$C000-$CFFF` to the Mega II soft switches while `$C035` bit 6 asked for fast RAM, so the driver relocation poked I/O instead of copying |
+| A live Tool Locator / Event Manager means the guest publishes its cursor | freegemas keeps its own cursor and reads `$C024` directly; the holes stay `(0,0)` and closed-loop steering pinned its pointer in a corner. The flag says GS/OS is up, not that this program uses the EM cursor |
 
 ---
 
@@ -568,10 +616,11 @@ Cursor position lives in the text-page holes `$047C/$057C` (X) and `$04FC/$05FC`
 - `src/ui/graphics.ts`, `canvas.tsx`, `copycanvas.ts` — rendering, aspect, text
 - `src/ui/inputparams.ts`, `main2worker.ts` — URL params, debug-hook plumbing
 - Tests worth knowing: `gsos_boot`, `gs_cycles`, `gs_adc_flags`, `gs_mouse_sync`,
-  `gs_mouse_neg`, `gs_cursor_repaint`, `gs_vbl_cadence`, `gs_rom_adb_task`,
-  `gs_ensoniq`, `gs_tass`, `gs_tass_title_tempo`, `gs_tass_click_freeze`,
+  `gs_mouse_neg`, `gs_cursor_repaint`, `gs_cursor_draw`, `gs_cursor_y`,
+  `gs_adb_button`, `gs_vbl_cadence`, `gs_rom_adb_task`, `gs_ensoniq`,
+  `gs_doc_clock`, `gs_tass`, `gs_tass_title_tempo`, `gs_tass_click_freeze`,
   `gs_textpage`, `gs_floppy_late`, `gs_ctrl_reset`, `gs_keyboard_adb`,
-  `gs_mcs_nokey`
+  `gs_mcs_nokey`, `gs_silky`, `gs_freegemas`
 
 The only known pre-existing failure is `vera.test.ts` (CMDR-DOS), which also
 fails on a clean tree.
