@@ -109,6 +109,17 @@ loop. Never "improve" a gssquared behaviour by inventing something; port it.
   never shadowed between bank 01 and bank `$E1`.** A stray `megaIIAux[off] = data`
   in the bank-01 LC write path corrupted the GS/OS volume prefix and produced
   `Fatal system error 0308`.
+- **IOLC shadow inhibit**: `$C035` bit 6 (`SHADOW_INH_IOLC`) set means banks
+  `$00`/`$01` **stop** shadowing I/O and the language-card ROM across
+  `$C000-$CFFF`; those addresses become plain fast RAM (bank `$00` main or aux by
+  ALTZP, bank `$01` always aux). gssquared models this as
+  `is_iolc_shadowed() == !(reg_shadow & SHADOW_INH_IOLC)` plus
+  `bank_shadow_read/write`, and `shadow_is_enabled()` never shadows `$C0xx`.
+  Ignoring it corrupts anything that relocates code through bank 1 `$C000` —
+  MCS's music driver did and ran off into `$00:E03B` (§11.1). `isIigsIolcShadowed()`
+  gates both `memGet24` and `memSet24`, but only for `$C000-$CFFF`; the
+  `$D000-$FFFF` language-card half still follows the `BSRREADRAM` rules on the
+  assumption that nobody sets the inhibit expecting RAM there.
 - **Floating bus**: `memory.ts` keeps a byte (power-on `$EE`) refreshed from the
   video scanner. An empty slot's `$C0xx` read returns it. Returning
   `Math.random()` made every run of MCS differ (76 reads, the first at `$C300`,
@@ -139,7 +150,7 @@ loop. Never "improve" a gssquared behaviour by inventing something; port it.
 | `$C030` | speaker. The cone toggles on **reads as well as writes** (Applesoft `BELL` is `LDA $C030`); both paths must call `checkSoftSwitches`. |
 | `$C031` | disk control: bit 6 `EN35` selects the 3.5"/5.25" family, bit 7 `HDSEL` |
 | `$C033/$C034` | RTC data/control (see below) |
-| `$C035` | `STAT` shadowing: bit 0 = text page 1, bit 5 = text page 2 (clear = shadowed into Mega II main) |
+| `$C035` | `STAT` shadowing: bit 0 = text page 1, bit 5 = text page 2 (clear = shadowed into Mega II main), bit 6 = `SHADOW_INH_IOLC` (see §2) |
 | `$C036` | bit 7 = CPU clock: 1 = 2.8 MHz, 0 = 1.024 MHz |
 | `$C03C-$C03F` | Ensoniq DOC (§5) |
 | `$C046` | `INTFLAG`: bit 7 = a source is pending AND enabled. **Cold boot must read 0**, or the ROM runs its diagnostic self-test and prints `System Bad: GGGG0000`. |
@@ -438,24 +449,36 @@ Cursor position lives in the text-page holes `$047C/$057C` (X) and `$04FC/$05FC`
 - CDP `Runtime.evaluate` needs `awaitPromise: true` for `decodeAudioData`, and
   large dumps must be chunked (~120k floats per call). Channel data is float
   -1..1, not int16.
+- `gs_boot_out.txt` and `gsos_boot.bmp` are **rewritten by every run** of
+  `gs_boot`/`gsos_boot` and their diff is not evidence: the `$FF:85xx` gate-trace
+  A values vary run to run (measured 0x8029/0x802f/0x8033 on the same code), so
+  a dirty artifact after a fix says nothing about the fix.
 
 ---
 
 ## 11. Open issues
 
-1. **MCS (`mcs.2mg`) only runs if a key arrives during the ProDOS-8 banner wait.**
-   The banner (`MCS Copyright (c) 1986 Will Harvey` / `PRODOS 8 V1.2 06-SEP-86`)
-   is followed by a bounded wait at `01:33C8` (65816 native mode, bank-1 fast RAM)
-   that polls the **`$E0:C000`** long-addressed keyboard register and exits via
-   `STA $E0:C010` when bit 7 is set. No key → it times out (~9.6 s of machine
-   time per pass, loop entered twice) and the machine then walks a 16-bit block
-   copy at `01:aa03` and ends in `00:E03B` = `4C 3B E0` (`JMP` to itself), i.e.
-   `INSERT SYSTEM DISK AND RESTART -ERR 01` / a byte-ramp crash. **No block reads
-   happen after the banner**, so ProDOS never even tries to load the system file.
-   With a key at frame 300 the wait exits at frame 501 and the machine reaches
-   MCS's real main event loop (`01:a64c`). Whether real hardware needs that key
-   is the open question — if not, the fault is upstream in whatever sets up that
-   wait.
+1. **MCS (`mcs.2mg`) splash timeout — RESOLVED.** The ProDOS-8 splash
+   (`MCS Copyright (c) 1986 Will Harvey` / `PRODOS 8 V1.2 06-SEP-86`) waits at
+   `01:33C8` (65816 native mode, bank-1 fast RAM) for a key on the
+   **`$E0:C000`** keyboard register and exits via `STA $E0:C010`. With no key it
+   times out after ~9.6 s per pass (two passes), loads the demo
+   `/MUSICGS/LEROY` into bank 0 `$2000-$4000` (MLI `$CC`/`$C8`/`$C9`/`$CA` all
+   return success), then relocates its music driver at `01:a9ee-$aa16`: it
+   writes `$C035 = $5F` (**SHADOW_INH_IOLC, bit 6**), block-copies `$1E00`
+   bytes from `$00:2512` to `$C000,Y` with DB = `$01`, and restores `$C035`.
+   Our `memGet24`/`memSet24` routed bank `$00`/`$01` `$C000-$CFFF` to the Mega
+   II unconditionally, so the copy poked soft switches (`$C02D`, `$C03C/D`, ...)
+   and the machine ran off into `00:E03B` (`JMP` to itself) instead of
+   reaching the editor. Fix: honour bit 6 — while `SHADOW_INH_IOLC` is set,
+   banks `$00`/`$01` expose fast RAM across `$C000-$CFFF` (bank 1 = aux, bank 0
+   by ALTZP), matching gssquared `is_iolc_shadowed()` /
+   `bank_shadow_read/write`. No key now ends in the editor with the LEROY demo
+   loaded (SHR on, measures shown, DOC streaming the song); a key at the splash
+   goes straight to the empty editor (`01:a64c`). Regression:
+   `gs_mcs_nokey.test.ts`. Note the splash timeout is measured in CPU cycles,
+   so at the default 1.02 MHz the demo lands at ~frame 3200, not ~925 as at
+   2.8 MHz.
 2. **SenseiPlay music too fast — RESOLVED.** Two stacked bugs, both in the run
    loop's Ensoniq catch-up:
    - The catch-up state (`ensoniqRefreshId`/`ensoniqOutCursor`/
@@ -522,6 +545,7 @@ Cursor position lives in the text-page holes `$047C/$057C` (X) and `$04FC/$05FC`
 | `extractShrBuffer` was fine, the caller forgot to check | It silently adds `$2000`; the buffer was clamped short |
 | An 8-instruction batch is a free perf win | Starved SmartPort reads in the browser only |
 | SenseiPlay's 37 rows/s is the authored tempo | Wrong NTP pattern offset (a stray `p++` in the header walk) made the tempo look self-consistent; the real average is ~2.735 ticks/row (~18.3 rows/s at 50 Hz). The 37 rows/s came from a build whose DOC march ran 1.5x fast; the (also wrong) 2.05-ticks/row estimate read only rows 0 and 3 of pattern 0 |
+| The MCS splash hangs unless a key arrives | The no-key timeout *is* the demo loader. It crashed because banks `$00`/`$01` kept routing `$C000-$CFFF` to the Mega II soft switches while `$C035` bit 6 asked for fast RAM, so the driver relocation poked I/O instead of copying |
 
 ---
 
@@ -546,7 +570,8 @@ Cursor position lives in the text-page holes `$047C/$057C` (X) and `$04FC/$05FC`
 - Tests worth knowing: `gsos_boot`, `gs_cycles`, `gs_adc_flags`, `gs_mouse_sync`,
   `gs_mouse_neg`, `gs_cursor_repaint`, `gs_vbl_cadence`, `gs_rom_adb_task`,
   `gs_ensoniq`, `gs_tass`, `gs_tass_title_tempo`, `gs_tass_click_freeze`,
-  `gs_textpage`, `gs_floppy_late`, `gs_ctrl_reset`, `gs_keyboard_adb`
+  `gs_textpage`, `gs_floppy_late`, `gs_ctrl_reset`, `gs_keyboard_adb`,
+  `gs_mcs_nokey`
 
 The only known pre-existing failure is `vera.test.ts` (CMDR-DOS), which also
 fails on a clean tree.

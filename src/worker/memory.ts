@@ -361,6 +361,14 @@ export const memGet24 = (address: number): number => {
     const offset = address & 0xFFFF;
     if (adbLogEnabled) maybeProbe(address, bank, offset);
 
+    // $C035 bit 6 set: banks $00/$01 are pure fast RAM across $C000-$CFFF.
+    // Bank $00 picks main or aux by ALTZP; bank $01 is always the aux bank.
+    if ((bank === 0x00 || bank === 0x01) && offset >= 0xC000 && offset < 0xD000 &&
+        !isIigsIolcShadowed()) {
+        const aux = bank === 0x01 || (auxCardEnabled && SWITCHES.ALTZP.isSet)
+        return memory[(aux ? RamWorksMemoryStart : 0) + offset];
+    }
+
     // Apple IIgs ROM 01 mapping: the 128KB system ROM lives in banks $FE-$FF
     // (FE at image offset 0, FF at 0x10000). The Mega II banks $E0/$E1 and the
     // shadowed banks $00/$01 read the fast ROM in bank FF through their
@@ -470,6 +478,14 @@ export const memSet24 = (address: number, data: number) => {
     if (adbLogEnabled && ((bank === 0x00 && offset >= 0x0478 && offset <= 0x077f) ||
         (bank === 0xe1 && (probeAddresses.has(address) || (offset >= 0xe0 && offset <= 0xff))))) {
         noteAdbLog("uprobe", address, data);
+    }
+
+    // See memGet24: inhibited IOLC shadowing exposes fast RAM at $C000-$CFFF.
+    if ((bank === 0x00 || bank === 0x01) && offset >= 0xC000 && offset < 0xD000 &&
+        !isIigsIolcShadowed()) {
+        const aux = bank === 0x01 || (auxCardEnabled && SWITCHES.ALTZP.isSet)
+        memory[(aux ? RamWorksMemoryStart : 0) + offset] = data;
+        return;
     }
 
     // Bank E0: Mega II Main
@@ -1937,6 +1953,12 @@ export const iigsAuxLinearToPhys = (linear: number): number => {
 // screen with $41 (linear, display off) and then switches to $81, expecting the
 // mapping to persist.
 export const isIigsAuxLinear = (): boolean => (iigsRegisters[0x29] & 0xc0) !== 0
+
+// $C035 bit 6 (SHADOW_INH_IOLC) turns off I/O and language-card shadowing for
+// banks $00/$01: while it is set those banks see plain fast RAM across
+// $C000-$CFFF instead of the Mega II soft switches. gssquared:
+// is_iolc_shadowed() == !(reg_shadow & SHADOW_INH_IOLC), bank_shadow_read/write.
+export const isIigsIolcShadowed = (): boolean => (iigsRegisters[0x35] & 0x40) === 0
 
 // Copy the SHR window out of the Mega II aux array, undoing the interleave when
 // the window is linearized. vidhd.extractShrBuffer() expects the linear layout.
