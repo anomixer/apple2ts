@@ -472,6 +472,47 @@ export const memGet24 = (address: number): number => {
     return 0;
 }
 
+// Which fast-RAM bank a bank-$00 write actually lands in, after the IIe aux
+// switches (gssquared calc_aux_write). The Mega II shadow target follows this
+// effective bank, not the CPU bank.
+const iigsEffectiveAuxWrite = (offset: number): boolean => {
+    if (!auxCardEnabled) return false
+    const page = offset >>> 8
+    if (SWITCHES.STORE80.isSet && page >= 0x04 && page <= 0x07) return SWITCHES.PAGE2.isSet
+    if (SWITCHES.STORE80.isSet && SWITCHES.HIRES.isSet && page >= 0x20 && page <= 0x3f) {
+        return SWITCHES.PAGE2.isSet
+    }
+    if (SWITCHES.ALTZP.isSet && (page <= 0x01 || page >= 0xc0)) return true
+    return SWITCHES.AUXRAMWRITE.isSet && page >= 0x02
+}
+
+// Mirror a write into the Mega II RAM the video scanner reads (gssquared
+// bank_shadow_write). Main text/hires pages shadow into Mega II main; the aux
+// $2000-$9FFF window shadows into Mega II aux and is interleaved while that
+// window is linearized. $2000-$5FFF is both the AUXHGR and SHR window, so it
+// needs either inhibit flag clear; $6000-$9FFF is SHR only.
+const shadowIigsWrite = (offset: number, data: number, aux: boolean) => {
+    const shadow = iigsRegisters[0x35]
+    if (offset >= 0x0400 && offset < 0x0800) {
+        if (!(shadow & 0x01)) (aux ? megaIIAux : megaIIMain)[offset] = data
+        return
+    }
+    if (offset >= 0x0800 && offset < 0x0c00) {
+        if (!(shadow & 0x20)) (aux ? megaIIAux : megaIIMain)[offset] = data
+        return
+    }
+    if (offset < 0x2000 || offset >= 0xa000) return
+    if (aux) {
+        if (!(shadow & 0x08) || (offset < 0x6000 && !(shadow & 0x10))) {
+            megaIIAux[isIigsAuxLinear() ? iigsAuxLinearToPhys(offset) : offset] = data
+        }
+    } else if (offset < 0x4000) {
+        if (!(shadow & 0x02)) megaIIMain[offset] = data
+    } else if (offset < 0x6000) {
+        if (!(shadow & 0x04)) megaIIMain[offset] = data
+    }
+}
+
 export const memSet24 = (address: number, data: number) => {
     let bank = (address >> 16) & 0xFF;
     const offset = address & 0xFFFF;
@@ -534,21 +575,26 @@ export const memSet24 = (address: number, data: number) => {
         return;
     }
 
-    // Bank 00: Standard Apple IIe memory map with video shadowing to Mega II Main
+    // Bank 00: IIe memory map. memSet() already routes the byte to main or aux
+    // through the switch table; the Mega II shadow must follow that same
+    // effective bank. Shadowing every bank-$00 write into Mega II main left
+    // RAMWRT/80STORE blits (SHR, DHGR) invisible to the video scanner.
     if (bank === 0x00) {
-        memSet(offset, data);
-        if (offset >= 0x0400 && offset < 0x0800 && !(iigsRegisters[0x35] & 0x01)) {
-            megaIIMain[offset] = data;
-        } else if (offset >= 0x0800 && offset < 0x0C00 && !(iigsRegisters[0x35] & 0x20)) {
-            megaIIMain[offset] = data;
-        } else if (offset >= 0x2000 && offset < 0x4000 && !(iigsRegisters[0x35] & 0x02)) {
-            megaIIMain[offset] = data;
-            shrDbg.b00++
-        } else if (offset >= 0x4000 && offset < 0x6000 && !(iigsRegisters[0x35] & 0x04)) {
-            megaIIMain[offset] = data;
-            shrDbg.b00++
+        memSet(offset, data)
+        const aux = iigsEffectiveAuxWrite(offset)
+        if (offset >= 0x2000 && offset < 0x6000) {
+            if (aux) {
+                shrDbg.b00aux++
+                if (shrDbg.trace && offset < 0xa000) noteShrWrite(getCpuPc(), offset)
+            } else {
+                shrDbg.b00++
+            }
+        } else if (aux && offset >= 0x6000 && offset < 0xa000) {
+            shrDbg.b00aux++
+            if (shrDbg.trace) noteShrWrite(getCpuPc(), offset)
         }
-        return;
+        shadowIigsWrite(offset, data, aux)
+        return
     }
 
     // Bank 01: Direct, absolute access to Aux Memory (65816 Fast RAM Bank 01)
@@ -2048,7 +2094,8 @@ export const shrDbg = {
   e1: 0,   // direct bank $E1 writes into the displayed $2000-$9FFF window
   e0: 0,   // direct bank $E0 (Mega II main) writes into that window
   b01: 0,  // bank $01 fast-RAM writes that shadowed into the SHR window
-  b00: 0,  // bank $00 writes that shadowed into Mega II main
+  b00: 0,  // bank $00 writes whose effective bank was main (Mega II main)
+  b00aux: 0, // bank $00 writes whose effective bank was aux (Mega II aux)
   voc: [] as number[],   // $C0B0-$C0BF writes as addr,value pairs (VOC interlace)
   newvideo: [] as number[], // every $C029 write, oldest first
   // A sprite that never gets erased is often a sprite whose erase is scheduled
@@ -2132,6 +2179,7 @@ export const getShrDbg = () => ({
   e0: shrDbg.e0,
   b01: shrDbg.b01,
   b00: shrDbg.b00,
+  b00aux: shrDbg.b00aux,
   voc: shrDbg.voc.slice(),
   newvideo: shrDbg.newvideo.slice(),
   auxHash: shrWindowHash(megaIIAux),
