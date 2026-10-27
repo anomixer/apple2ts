@@ -510,7 +510,10 @@ platform is ROM 03).
   the 5.25" motor line never drives it. The icons are composited from
   `apple-35-floppy-drive.png` with the house layout (activity lamp bottom-left,
   filename across the slot, rainbow apple bottom-right so it shares the Disk II
-  and hard-card corner, which is also where the swapper badge lands).
+  and hard-card corner, which is also where the swapper badge lands). The loaded
+  art shows only the disk's **leading edge** in the slot: a full card standing up
+  there touches the dark band and the two merge into one black mass over the top
+  half of the icon.
 - The 3.5" icon's dark band carries the white filename, so its geometry is bound to
   the CSS overlay: the band is **inset with a beige margin** (like the hard card)
   because a full-bleed black strip fuses with the panel's 1px `.disk-image` border
