@@ -56,6 +56,7 @@ const initDriveProps = (index: number, drive: number, hardDrive: boolean): Drive
     diskHasChanges: false,
     isWriteProtected: false,
     motorRunning: false,
+    spindleOn: false,
     diskData: new Uint8Array(),
     lastAppleWriteTime: -1,
     cloudData: null,

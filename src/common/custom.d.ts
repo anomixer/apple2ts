@@ -460,6 +460,10 @@ type DriveProps = {
   filename: string,
   status: string,
   motorRunning: boolean,
+  // The IIgs 3.5" drive has its own spindle latch (CONT35), so its activity lamp
+  // cannot follow the 5.25" motor line. Optional because the 3.5" bays are the
+  // only consumers and most fixtures describe a 5.25"/SmartPort drive.
+  spindleOn?: boolean,
   diskHasChanges: boolean,
   isWriteProtected: boolean,
   diskData: Uint8Array,

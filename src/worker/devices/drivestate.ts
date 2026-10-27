@@ -121,7 +121,7 @@ export const getFilename = () => {
 
 // Create an array of drive props, indexed by drive number
 const previousProps: Array<{diskHasChanges: boolean,
-  motorRunning: boolean, status: string}> = []
+  motorRunning: boolean, spindleOn?: boolean, status: string}> = []
 
 const getDriveProps = (index: number, forcePassData: boolean): DriveProps => {
   if (driveState[index].diskHasChanges && driveData[index]?.length > 0) {
@@ -134,6 +134,7 @@ const getDriveProps = (index: number, forcePassData: boolean): DriveProps => {
     filename: driveState[index].filename,
     status: driveState[index].status,
     motorRunning: driveState[index].motorRunning,
+    spindleOn: driveState[index].spindleOn,
     diskHasChanges: driveState[index].diskHasChanges,
     isWriteProtected: driveState[index].isWriteProtected,
     diskData: ((driveState[index].diskHasChanges && !driveState[index].motorRunning) || forcePassData) ?
@@ -156,6 +157,7 @@ export const passDriveData = (replaceDiskDataIndex = -1, forcePassData = false) 
       previousProps[i] &&
       previousProps[i].diskHasChanges === driveState[i].diskHasChanges &&
       previousProps[i].motorRunning === driveState[i].motorRunning &&
+      previousProps[i].spindleOn === driveState[i].spindleOn &&
       previousProps[i].status === driveState[i].status &&
       i !== replaceDiskDataIndex) {
       continue
@@ -164,6 +166,7 @@ export const passDriveData = (replaceDiskDataIndex = -1, forcePassData = false) 
     passDriveProps(dprops, i === replaceDiskDataIndex || forcePassData)
     previousProps[i] = {diskHasChanges: dprops.diskHasChanges,
       motorRunning: dprops.motorRunning,
+      spindleOn: dprops.spindleOn,
       status: dprops.status}
   }
 }

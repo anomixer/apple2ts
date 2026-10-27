@@ -376,6 +376,7 @@ const DiskDrive = (props: DiskDriveProps) => {
   }
 
   const slotConfig = handleGetSlotConfig()
+  const isIIgs = handleGetMachineName() === "APPLE2GS"
   // Drive indices map to slots as: 0/1 -> slot 7 (SmartPort), 2/3 -> slot 6
   // (5.25"), 4/5 -> slot 5 (3.5").
   const slot = dprops.index < 2 ? 7 : (dprops.index < 4 ? 6 : 5)
@@ -385,7 +386,7 @@ const DiskDrive = (props: DiskDriveProps) => {
   // default IIgs profile (which has slot 6 = "none" because no card is needed),
   // which made it impossible to mount a 5.25" disk at all. Only slot 7 is a
   // real removable-card choice on the IIgs.
-  const isBuiltInDrive = handleGetMachineName() === "APPLE2GS" && slot !== 7
+  const isBuiltInDrive = isIIgs && slot !== 7
   const isSlotDisabled = !isBuiltInDrive && slotConfig[slot] === "none"
 
   const handleMenuClick = (event: React.MouseEvent) => {
@@ -414,11 +415,19 @@ const DiskDrive = (props: DiskDriveProps) => {
     return new URL(hiddenCanvas.toDataURL("image/jpeg", 0.1))
   }
 
+  // The IIgs slot-5 pair is a 3.5" drive: its own face art, and its activity lamp
+  // follows the CONT35 spindle latch rather than the 5.25" motor line.
+  const isThreeInch = isIIgs && slot === 5
+  const hasDisk = dprops.filename.length > 0
   let img1: string
   if (dprops.hardDrive) {
     img1 = dprops.motorRunning ? window.assetRegistry.hardDriveOn : window.assetRegistry.hardDriveOff
+  } else if (isThreeInch) {
+    img1 = dprops.spindleOn ?
+      (hasDisk ? window.assetRegistry.floppy35on : window.assetRegistry.floppy35onEmpty) :
+      (hasDisk ? window.assetRegistry.floppy35off : window.assetRegistry.floppy35offEmpty)
   } else {
-    img1 = (dprops.filename.length > 0) ?
+    img1 = hasDisk ?
       (dprops.motorRunning ? window.assetRegistry.disk2on : window.assetRegistry.disk2off) :
       (dprops.motorRunning ? window.assetRegistry.disk2onEmpty : window.assetRegistry.disk2offEmpty)
   }
@@ -427,7 +436,8 @@ const DiskDrive = (props: DiskDriveProps) => {
   status += dprops.status
   const isElectron = navigator.userAgent.includes("Electron")
   const isTouchDevice = "ontouchstart" in document.documentElement
-  const diskLabelClass = `disk-label${dprops.diskHasChanges ? " disk-label-unsaved" : ""}${isTouchDevice ? " disk-label-small" : ""}`
+  const diskLabelClass = `disk-label${dprops.diskHasChanges ? " disk-label-unsaved" : ""}` +
+    `${isTouchDevice ? " disk-label-small" : ""}${isThreeInch ? " disk-label-onlight" : ""}`
 
   const loadDiskSubMenu = [
     {

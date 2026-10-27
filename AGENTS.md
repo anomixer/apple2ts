@@ -504,6 +504,14 @@ platform is ROM 03).
   (no cards), S4 mouse/mockingboard, S5 3.5", S6 5.25", S7 SmartPort. Drives are
   motherboard hardware, so the drive panel must **not** grey them out when the
   slot says `"none"` except for slot 7.
+- The drive panel picks its art per bay: `floppy35{on,off}[-empty].png` for the
+  IIgs slot-5 pair, `disk2*` for slot 6, `harddrive*` for slot 7. The 3.5" lamp is
+  the **spindle** (`dprops.spindleOn`, latched by CONT35), not `motorRunning` —
+  the 5.25" motor line never drives it. The icons are composited from
+  `apple-35-floppy-drive.png` with the house layout (activity lamp bottom-left,
+  filename across the slot, swapper badge bottom-right); because the face is beige
+  the filename needs `.disk-label-onlight`, which the Disk II and the hard card do
+  not because their art is dark where the label lands.
 - `iigsInitInterrupts()` runs on **cold boot only**. Ctrl-Reset must preserve low
   memory and `$03F2-$03F4`.
 - IIgs speed labels in the dropdown and in `linkbuilder` / MCP settings must match
