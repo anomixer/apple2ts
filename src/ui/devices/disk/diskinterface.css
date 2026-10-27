@@ -30,17 +30,16 @@
   width: 60px;
 }
 
-/* The 3.5" drive face is beige, so the white filename needs its own plate to
-   stand on - the Disk II and the hard card are dark where the label lands.
-   The plate has to stay inside the 85px image: `.disk-label` already offsets it
-   7px from the left, so 81px would hang 3px past the right border and read as the
-   dark band sticking out of the frame. */
+/* The 3.5" face is beige, so the white filename cannot sit on it directly - but it
+   lands on the dark band above the drive, which needs no plate of its own: a
+   translucent box painted *inside* that band read as a chipped corner. This rule
+   only keeps the text within the band's footprint (`.disk-label` offsets it 7px, so
+   81px would overflow the 85px image and hang past the right border). */
 .disk-label-onlight {
   box-sizing: border-box;
   width: 71px;
   padding: 0 3px;
-  border-radius: 3px;
-  background: rgba(10, 10, 12, 0.66);
+  overflow: hidden;
   text-overflow: ellipsis;
 }
 

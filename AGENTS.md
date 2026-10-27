@@ -510,20 +510,19 @@ platform is ROM 03).
   the 5.25" motor line never drives it. The icons are composited from
   `apple-35-floppy-drive.png` with the house layout (activity lamp bottom-left,
   filename across the slot, rainbow apple bottom-right so it shares the Disk II
-  and hard-card corner, which is also where the swapper badge lands); because the
-  face is beige the filename needs `.disk-label-onlight`, which the Disk II and
-  the hard card do not because their art is dark where the label lands.
-  The dark band above the drive face is **inset with a beige margin** (like the
-  hard card) and its footprint matches where `.disk-label` paints: a full-bleed
-  black strip fuses with the panel's 1px `.disk-image` border and the whole top
-  reads as one heavy frame, and the label plate then crosses the band's edge.
-  The inset must be measured in **CSS pixels**: the 191x110 art is shown at 85x55,
-  so one source pixel is worth 0.445 CSS px across but 0.5 down, and equal
-  insets render as a visibly thinner gap left and right (6 source px read as
-  ~2.7 and stick to the border). Use ~2x for the sides. `.disk-label-onlight`
-  is sized to the same box and must fit inside it *after* `.disk-label`'s 7px
-  left offset - an 81px plate overflowed the right border and read as the black
-  band sticking out.
+  and hard-card corner, which is also where the swapper badge lands).
+- The 3.5" icon's dark band carries the white filename, so its geometry is bound to
+  the CSS overlay: the band is **inset with a beige margin** (like the hard card)
+  because a full-bleed black strip fuses with the panel's 1px `.disk-image` border
+  and the whole top reads as one heavy frame. Measure insets in **CSS pixels**: the
+  191x110 art is shown at 85x55, so one source pixel is worth 0.445 CSS px across
+  but 0.5 down - equal source insets render as a visibly thinner gap left and right
+  (6 source px read as ~2.7 and stick to the border), so the sides need ~2x.
+  `.disk-label-onlight` then only constrains the text box: it must fit inside the
+  85px image *after* `.disk-label`'s 7px left offset (81px overflowed the right
+  border and read as the band sticking out), and it must **not** paint a background -
+  the band is already dark there, and a translucent plate inside it showed up as a
+  chipped corner.
 - `iigsInitInterrupts()` runs on **cold boot only**. Ctrl-Reset must preserve low
   memory and `$03F2-$03F4`.
 - IIgs speed labels in the dropdown and in `linkbuilder` / MCP settings must match
