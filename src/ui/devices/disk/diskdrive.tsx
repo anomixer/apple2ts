@@ -437,7 +437,7 @@ const DiskDrive = (props: DiskDriveProps) => {
   const isElectron = navigator.userAgent.includes("Electron")
   const isTouchDevice = "ontouchstart" in document.documentElement
   const diskLabelClass = `disk-label${dprops.diskHasChanges ? " disk-label-unsaved" : ""}` +
-    `${isTouchDevice ? " disk-label-small" : ""}${isThreeInch ? " disk-label-onlight" : ""}`
+    `${isTouchDevice ? " disk-label-small" : ""}`
 
   const loadDiskSubMenu = [
     {

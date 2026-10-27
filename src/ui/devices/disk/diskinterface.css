@@ -30,24 +30,6 @@
   width: 60px;
 }
 
-/* The 3.5" face is beige, so the white filename cannot sit on it directly - but it
-   lands on the dark band above the drive, which needs no plate of its own: a
-   translucent box painted *inside* that band read as a chipped corner. This rule
-   only keeps the text within the band's footprint (`.disk-label` offsets it 7px, so
-   81px would overflow the 85px image and hang past the right border). */
-.disk-label-onlight {
-  box-sizing: border-box;
-  width: 71px;
-  padding: 0 3px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* The touch layout shrinks the drive image, so the plate has to shrink with it. */
-.disk-label-small.disk-label-onlight {
-  width: 50px;
-}
-
 .disk-status {
   width: 70px;
   /* transform: translate(0, -12px); */

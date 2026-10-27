@@ -509,23 +509,25 @@ platform is ROM 03).
   the **spindle** (`dprops.spindleOn`, latched by CONT35), not `motorRunning` —
   the 5.25" motor line never drives it. The icons are composited from
   `apple-35-floppy-drive.png` with the house layout (activity lamp bottom-left,
-  filename across the slot, rainbow apple bottom-right so it shares the Disk II
-  and hard-card corner, which is also where the swapper badge lands). The loaded
-  art shows only the disk's **leading edge** in the slot: a full card standing up
+  filename across the top, rainbow apple bottom-right so it shares the Disk II and
+  hard-card corner, which is also where the swapper badge lands). The loaded art
+  shows only the disk's **leading edge** in the slot: a full card standing up
   there touches the dark band and the two merge into one black mass over the top
   half of the icon.
 - The 3.5" icon's dark band carries the white filename, so its geometry is bound to
-  the CSS overlay: the band is **inset with a beige margin** (like the hard card)
-  because a full-bleed black strip fuses with the panel's 1px `.disk-image` border
-  and the whole top reads as one heavy frame. Measure insets in **CSS pixels**: the
-  191x110 art is shown at 85x55, so one source pixel is worth 0.445 CSS px across
-  but 0.5 down - equal source insets render as a visibly thinner gap left and right
-  (6 source px read as ~2.7 and stick to the border), so the sides need ~2x.
-  `.disk-label-onlight` then only constrains the text box: it must fit inside the
-  85px image *after* `.disk-label`'s 7px left offset (81px overflowed the right
-  border and read as the band sticking out), and it must **not** paint a background -
-  the band is already dark there, and a translucent plate inside it showed up as a
-  chipped corner.
+  the CSS overlay. It copies the **hard card's own numbers** - `harddriveOn.png`
+  bands at x 6-185, y 6-36 of a 192x110 art, and `floppy35*.png` is 191x110 with the
+  band at x 6-185, y 6-33 - so the two beige bays read as one family and the shared
+  `.disk-label` (75px wide at a 7px left offset = source x 16-184) lands on the band
+  with **no per-bay CSS at all**. A full-bleed black strip instead fuses with the
+  panel's 1px `.disk-image` border and the whole top reads as one heavy frame.
+  Measure insets in **CSS pixels**: the art is shown at 85x55, so one source pixel
+  is worth 0.445 CSS px across but 0.5 down - equal source insets render as a
+  visibly thinner gap left and right, and a label box wider than ~78px overflows the
+  85px image and reads as the band sticking out. The earlier per-bay
+  `.disk-label-onlight` did exactly that (and truncated names the hard card shows in
+  full), so it is deleted; do not re-add a background plate either - the band is
+  already dark there and a translucent box inside it showed up as a chipped corner.
 - `iigsInitInterrupts()` runs on **cold boot only**. Ctrl-Reset must preserve low
   memory and `$03F2-$03F4`.
 - IIgs speed labels in the dropdown and in `linkbuilder` / MCP settings must match
