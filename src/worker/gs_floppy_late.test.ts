@@ -41,8 +41,17 @@ const mkProps = (index: number): DriveProps => ({
   lastLocalFileWriteTime: 0,
 })
 
+// The welcome text only stays on screen for a few hundred frames, and how many
+// depends on the CPU speed (the IIgs boots at 2.8 MHz, where A2DeskTop's GS/OS
+// startup takes the screen over almost immediately), so the run loop watches
+// every frame instead of sampling one at the end.
+let sawProDos = false
+
 const run = (frames: number) => {
-  for (let f = 0; f < frames; f++) jest.advanceTimersByTime(17)
+  for (let f = 0; f < frames; f++) {
+    jest.advanceTimersByTime(17)
+    if (!sawProDos && (f & 3) === 3 && bootedProDos()) sawProDos = true
+  }
 }
 
 const screenText = () => {
@@ -63,6 +72,7 @@ const bootedProDos = () => /ProDOS\s*8/i.test(screenText())
 
 // mountAtBoot: disk present when doBoot() runs. doAReset: Ctrl-Reset afterwards.
 const scenario = (mountAtBoot: boolean, doAReset: boolean) => {
+  sawProDos = false
   doSetMachineName("APPLE2GS")
   if (mountAtBoot) expect(doSetEmuDriveNewData(mkProps(2))).toBe(true)
   doSetRunMode(RUN_MODE.NEED_BOOT)
@@ -73,6 +83,8 @@ const scenario = (mountAtBoot: boolean, doAReset: boolean) => {
   }
   if (doAReset) {
     clearRomTrace()
+    // Watch only the post-reset boot; the cold boot above is test 1's job.
+    sawProDos = false
     doReset()
     doSetRunMode(RUN_MODE.RUNNING, false)
     run(1500)
@@ -83,7 +95,7 @@ const scenario = (mountAtBoot: boolean, doAReset: boolean) => {
     // diffed against a browser run (see AGENTS.md section 26b).
     fs.writeFileSync(process.env.GS_TRACE_OUT, JSON.stringify(getRomTrace()))
   }
-  return bootedProDos()
+  return sawProDos
 }
 
 describe("Apple IIgs 5.25 inch floppy boot", () => {

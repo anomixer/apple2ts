@@ -118,7 +118,7 @@ const getCollectionDriveIndex = (disk: DiskCollectionItem) => {
   if (selectedCollectionDriveIndex !== undefined) return selectedCollectionDriveIndex
   const filename = disk.cloudData?.fileName || getPrimaryDiskUrl(disk)
   const fileSize = disk.cloudData?.fileSize ?? disk.fileSize
-  return getDefaultDiskDriveIndex(filename, fileSize)
+  return getDefaultDiskDriveIndex(filename, fileSize, handleGetMachineName() === "APPLE2GS")
 }
 
 const diskTemplateBindings: RetroControlBindings = {

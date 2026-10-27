@@ -361,6 +361,25 @@ register 0 byte 1:  bit7 = LEFT  button (1 = up) | bit6 = moved up    | bits5-0 
   from `FF:C4D0-$C560` with bits 7 and 1 both clear — because GS/OS runs the same
   task to *consume* reports; stamping every read made the (now removed) overlay
   blink.
+- **F1 captures the mouse** (`canvas.tsx`): pointer lock turns mousemove into
+  `movementX/Y`, forwarded as `MouseEventSimple.relative`. The ADB mouse is a
+  relative device, so `iigsADBEvent` queues those counts directly — no closed
+  loop (there is no absolute pointer to steer toward) and no dead reckoning
+  (which would clamp at the screen edges). `stopIigsCursorTarget()` drops any
+  steering target and the dead-reckoning baseline first, or both paths would
+  move the cursor and leaving capture would replay the captured distance as one
+  jump. F1 again or Escape releases the lock; a lock lost mid-drag also sends
+  both button releases. Non-IIgs machines have no relative input path, so their
+  capture accumulates into a virtual clamped pointer instead — the mouse card
+  only takes absolute positions (and still has to enable `MOUSE_ON`), so motion
+  stops at the screen edge there; only the IIgs gets unbounded relative motion.
+- The boot welcome text page (`panels/help/startuptextpage.ts`) advertises
+  `SHIFT+ESC` for the control panel and F1 for mouse capture. It is the same
+  drawn text page for every non-game-mode machine, not ROM output. Its strings
+  live in `startup.*` in `src/i18n/catalogs/messages.pot` (and each `.po` must
+  carry the same msgctxt or `--require-merged` fails); `languages/*.ts` are
+  generated with `npm run generate-i18n-catalogs`, so edit the catalogs, not
+  those files.
 
 Cursor position lives in the text-page holes `$047C/$057C` (X) and `$04FC/$05FC`
 (Y), data-bank relative. On our ROM 01 profile GS/OS reads those, not
@@ -373,6 +392,23 @@ platform is ROM 03).
 
 - Drive indices: **0/1 = S7** (hard drives / SmartPort), **2/3 = S6** (5.25"),
   **4/5 = S5** (3.5"). `MAX_DRIVES = 6`.
+- **Mounting keeps the bay the user chose.** `canDriveTakeImage(index, filename,
+  size, hasThreeInchBay)` (in `src/common/utility.ts`) is the only rule allowed to
+  move a disk, and it moves one only when that bay physically cannot hold the
+  media: S7 takes any block image (an 800 KB one included, as a small SmartPort
+  volume), S6 takes 5.25" media only, S5 is the IIgs 3.5" pair and does not exist
+  on other machines (`getDefaultDiskDriveIndex` then answers 0). Before this, the
+  UI had a two-family clamp that silently re-inserted an 800 KB disk into S6D1 and
+  an 800 KB `.po` into S7D1, whatever the user picked.
+- A headerless 800 KB image is 3.5" media whatever its name (`.2mg`, `.po`,
+  `.dsk`, `.do`); the 2IMG container adds 64 bytes and may carry a short trailing
+  chunk.
+- **A loaded drive must label its track or the panel looks dead.** The drive
+  panel renders `DISK_DRIVE_LABELS[index] + driveProps.status`, and only
+  `moveHead()` wrote that label - the 3.5" head moves through `moveHead35()`, so
+  S5,D1 showed nothing at all and reads as a crash. A 3.5" `quarterTrack` is a
+  **track-side** index (80 tracks x 2 sides, `maxQuarterTrack = 159`), so the
+  label is `Trk ${quarterTrack >> 1}`, not `/ 4` as on a 5.25" drive.
 - `doResetDiskDrive()` must set `quarterTrack = 0` (real drives spring back to
   track 0). Parked at the outer stop, a Ctrl-Reset read the wrong track.
 - **Ctrl-Reset**: clear the `$03F2-$03F4` signature (`$03F3 ^ $A5 == $03F4`) when
@@ -397,7 +433,30 @@ platform is ROM 03).
   `$2F` offline.
 - A 2MG whose header is corrupt (this happens) is fine: detect the `"2IMG"` magic
   and always use offset 64. gssquared trusts `data_offset` and would read garbage.
-- 3.5" media needs a GCR nibblizer that does not exist yet (§11).
+- **The two floppy families live in different clock domains, and this is the
+  subtle part of the IWM.** The **5.25" LSS is clocked by raw CPU cycles** —
+  `iwmReadDataRegister()` gets `s6502.cycleCount` with **no speed scaling**, 4
+  cycles per bit cell, exactly as gssquared's `Floppy525_woz` does in *every*
+  speed mode. The Disk II / ProDOS read loops are cycle-timed too, so the two
+  keep their relationship at 2.8 MHz. Scaling the bit model to wall time
+  (`frameCycles / 17030`) makes the ROM re-read the same register 2.7 times
+  before the next bit cell arrives, the `D5 AA 96` sync loop at `$C65E`/`FF:6700`
+  never locks on, and the boot ends at `CHECK STARTUP DEVICE!`. Only the
+  **3.5"** drive follows machine time — gssquared overrides `get_current_time()`
+  with `get_vid_cycles()` for `Floppy35_woz` alone, because 500 kbit/s media
+  cannot be sustained by a 1.02 MHz budget.
+- **3.5" media (`src/worker/devices/floppy35.ts`)** is a *block* nibblizer, not a
+  captured-bit one: the 800 KB volume image is expanded per track-side into
+  self-synchronising GCR fields and streamed at machine time, and the ROM's own
+  decoder is the ground truth. Zoned layout is 16 cylinders each of
+  12/11/10/9/8 sectors per side (160 track-sides, 1600 blocks). Writes splice the
+  sector back into the block image at `64 + sectorOffset(track, sector, side)`,
+  flushed on a data-register read (`iwmFlushWrites35`). Captured 3.5" GCR images
+  (`.do`/`.woz` from real media) are still not supported.
+- `doSetEmuDriveNewData()` must copy `props.isWriteProtected` into the drive
+  state, not only the disk data. It used to keep whatever the previous mount
+  left there, so a write-protected image mounted as the boot volume made GS/OS
+  refuse to write its directory blocks.
 
 ---
 
@@ -417,13 +476,27 @@ platform is ROM 03).
 - Verified: 4074 VBLs / 4074 refreshes over 4000 frames with `$C036` flipping
   both ways.
 - Speed modes: 1.02 MHz (17030 cycles/refresh), 2.8 (46727), 7.1, 14.3.
+- **`$C036` bit 7 SET means FAST (2.8 MHz)**, clear means 1.024 MHz — verified in
+  gssquared `mmu_iigs.hpp` (`set_slow_mode(value & 0x80 ? false : true)`); the
+  `// bit 7 slow` comment in `mmu_iigs.cpp` is stale. Cold boot seeds `0x80`
+  (ROM 03 uses `0xC0`), and `doReset()` re-seeds it.
+- **The IIgs defaults to speed mode 1 (2.8 MHz)** when the host never explicitly
+  picked one (`speedModeExplicit` in `doSetMachineName`); classic 8-bit machines
+  keep mode 0. `cpuCyclesPerRefresh` is then indexed from the IIgs table, so the
+  video clock stays in machine time and the 5.25" LSS keeps counting CPU cycles.
+  Everything timed in *frames* has to be re-checked after this: ProDOS 8's
+  welcome page is only on screen for a few hundred frames at 2.8 MHz before
+  A2DeskTop takes over, so `gs_floppy_late` watches every frame instead of
+  sampling the end of the run.
 
 ---
 
 ## 9. Boot, disks, UI
 
 - `?machine=apple2gs`, `?boot=true`, `?drive=N` (0/1 = S7, 2/3 = S6, 4/5 = S5),
-  `?speed=`, `#http://...` fragment disk.
+  `?speed=`, `#http://...` fragment disk. Named bay parameters: `?s7d1`/`?s7d2`
+  (`?hd1`/`?hd2`), `?s6d1`/`?s6d2` (`?d1`/`?d2`) and `?s5d1`/`?s5d2` for the IIgs
+  3.5" pair.
 - **`?boot=true` must wait for the fragment disk to mount** (`__pendingBootAfterDisk`
   + `.finally`, so a failed mount still boots). Booting first scanned an empty
   drive.
@@ -502,8 +575,8 @@ platform is ROM 03).
    loaded (SHR on, measures shown, DOC streaming the song); a key at the splash
    goes straight to the empty editor (`01:a64c`). Regression:
    `gs_mcs_nokey.test.ts`. Note the splash timeout is measured in CPU cycles,
-   so at the default 1.02 MHz the demo lands at ~frame 3200, not ~925 as at
-   2.8 MHz.
+   so the frame it lands on follows the speed mode: ~925 at the current 2.8 MHz
+   default, ~3200 at 1.02 MHz.
 2. **SenseiPlay music too fast — RESOLVED.** Two stacked bugs, both in the run
    loop's Ensoniq catch-up:
    - The catch-up state (`ensoniqRefreshId`/`ensoniqOutCursor`/
@@ -546,10 +619,13 @@ platform is ROM 03).
    window render correctly), and grayed-out menu items render as garbage glyphs
    while enabled items are fine. Both point at the mask/transfer path of QD II
    copybits (`TOOL034`), compare against `display.cpp`.
-6. **3.5" floppies** have no nibblizer (5.25" uses 6-and-2 + 4-and-4). Needs
-   self-synchronising GCR, 80 tracks x 2 sides, plus a DO→3.5" repacker, and the
-   write path. No test image exists in the repo; the ROM's own decoder is the
-   ground truth.
+6. **3.5" floppies — RESOLVED for 2MG block images.** `src/worker/devices/floppy35.ts`
+   expands the 800 KB volume into self-synchronising GCR fields per track-side
+   (zoned 12/11/10/9/8 sectors, 160 track-sides), streams them on the machine
+   clock and splices writes back into the block image. `SystemDisk.2mg` boots
+   from slot 5 into the SHR Finder desktop and every field still decodes to the
+   *written* image afterwards (`gs_floppy35`, `gs_floppy35_boot`). Still open:
+   captured real-media images (`.do`/`.woz` 3.5") have no importer.
 7. **SilkyGS ports render a blank SHR screen — RESOLVED.** Volume `SilkyGS.2mg`
    in S7D2 with `SystemDisk.2mg` in S7D1; picking e.g. Super Mario Bros left the
    screen a uniform palette-0 blue although the game blitted every frame. Every
@@ -594,6 +670,7 @@ platform is ROM 03).
 | SenseiPlay's 37 rows/s is the authored tempo | Wrong NTP pattern offset (a stray `p++` in the header walk) made the tempo look self-consistent; the real average is ~2.735 ticks/row (~18.3 rows/s at 50 Hz). The 37 rows/s came from a build whose DOC march ran 1.5x fast; the (also wrong) 2.05-ticks/row estimate read only rows 0 and 3 of pattern 0 |
 | The MCS splash hangs unless a key arrives | The no-key timeout *is* the demo loader. It crashed because banks `$00`/`$01` kept routing `$C000-$CFFF` to the Mega II soft switches while `$C035` bit 6 asked for fast RAM, so the driver relocation poked I/O instead of copying |
 | A live Tool Locator / Event Manager means the guest publishes its cursor | freegemas keeps its own cursor and reads `$C024` directly; the holes stay `(0,0)` and closed-loop steering pinned its pointer in a corner. The flag says GS/OS is up, not that this program uses the EM cursor |
+| "One refresh is always 1/60 s, so every peripheral must follow machine time" | True for the beam and the 3.5" drive, **false for the 5.25" LSS**: gssquared counts raw CPU cycles for it in every speed mode, because the Disk II firmware's read loop is cycle-timed as well. Scaling it to wall time broke the 5.25" boot at the 2.8 MHz default |
 
 ---
 
@@ -611,16 +688,21 @@ platform is ROM 03).
 - `src/worker/devices/iigs_ensoniq.ts` — DOC
 - `src/worker/devices/diskdata.ts`, `drivestate.ts`, `decodedisk.ts`,
   `harddrivedata.ts` — IWM, drives, 2MG/PO/WOZ, SmartPort
+- `src/worker/devices/floppy35.ts` — 3.5" GCR field generation, sector offsets,
+  write splice; machine-time media clock (§7)
 - `src/worker/iigs_clock.ts` — RTC + battery RAM
 - `src/worker/memory.ts::iigsInitInterrupts` — tool vectors, `$E1:0034`
 - `src/ui/graphics.ts`, `canvas.tsx`, `copycanvas.ts` — rendering, aspect, text
 - `src/ui/inputparams.ts`, `main2worker.ts` — URL params, debug-hook plumbing
 - Tests worth knowing: `gsos_boot`, `gs_cycles`, `gs_adc_flags`, `gs_mouse_sync`,
-  `gs_mouse_neg`, `gs_cursor_repaint`, `gs_cursor_draw`, `gs_cursor_y`,
-  `gs_adb_button`, `gs_vbl_cadence`, `gs_rom_adb_task`, `gs_ensoniq`,
-  `gs_doc_clock`, `gs_tass`, `gs_tass_title_tempo`, `gs_tass_click_freeze`,
-  `gs_textpage`, `gs_floppy_late`, `gs_ctrl_reset`, `gs_keyboard_adb`,
-  `gs_mcs_nokey`, `gs_silky`, `gs_freegemas`
+  `gs_mouse_neg`, `gs_mouse_capture`, `gs_cursor_repaint`, `gs_cursor_draw`,
+  `gs_cursor_y`, `gs_adb_button`, `gs_vbl_cadence`, `gs_rom_adb_task`,
+  `gs_ensoniq`, `gs_doc_clock`, `gs_tass`, `gs_tass_title_tempo`,
+  `gs_tass_click_freeze`, `gs_textpage`, `gs_floppy_late`, `gs_ctrl_reset`,
+  `gs_keyboard_adb`, `gs_mcs_nokey`, `gs_silky`, `gs_freegemas`,
+  `gs_floppy35` / `gs_floppy35_boot` (3.5" read, write, zone layout),
+  `gs_speed`, `gs_boot`, `gs_hdd_boot`, `gs_slots_mockingboard`,
+  `gs_test_coldboot`, `gs_fatal`
 
 The only known pre-existing failure is `vera.test.ts` (CMDR-DOS), which also
 fails on a clean tree.

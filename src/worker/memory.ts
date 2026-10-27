@@ -15,11 +15,11 @@ import { adbLogEnabled, noteAdbLog } from "./iigs_adb"
 import { getCpuPc } from "./cpu_pc"
 import { videoTerm } from "./devices/videoterm"
 import { vidhd } from "./devices/vidhd"
-import { isDebugging, setIigsSpeedRegister, getIigsVideoClock, getIigsFrameUnits } from "./motherboard"
+import { isDebugging, setIigsSpeedRegister, getIigsVideoClock, getIigsFrameUnits, isIigsSlowMode } from "./motherboard"
 import { iigsClock } from "./iigs_clock"
 import { iigsADB } from "./iigs_adb"
 import { iigsEnsoniq, docAccess } from "./devices/iigs_ensoniq"
-import { iwmReadDataRegister, iwmResetTiming, iwmStepHead } from "./devices/diskdata"
+import { iwmAdvance35, iwmFloppySpinning, iwmFlushWrites35, iwmGetSense35, iwmReadDataRegister, iwmReadHandshake35, iwmReset35Lines, iwmResetTiming, iwmStepHead, iwmWriteDataRegister35 } from "./devices/diskdata"
 import { getDriveDataByIndex, getDriveStateByIndex } from "./devices/drivestate"
 
 // 0x00000: main memory
@@ -143,7 +143,10 @@ export const iigsRegisters = new Uint8Array(256);
 export const megaIIAux = new Uint8Array(65536);
 export const megaIIMain = new Uint8Array(65536);
 iigsRegisters[0x36] = 0x80; // Default fast speed
-export let iigsSlotRegister = 0b11110110; // $C02D SLTROMSEL: 1 = Your Card, 0 = Internal ROM (default: slots 7,6,5,4,2,1 = card)
+// $C02D SLTROMSEL: bit N = 1 maps slot N's card ROM, 0 leaves the motherboard's
+// slot firmware mapped. Reset value is 0 (gssquared mmu_iigs); the slot
+// configuration sets it at boot and on reset.
+export let iigsSlotRegister = 0;
 export const setIigsSlotRegister = (val: number) => { iigsSlotRegister = val; };
 // IIgs interrupt state, mirroring web-a2e's iigs_memory: $C046 reports which
 // sources are pending (bit3 VBL, bit4 quarter-second) plus bit7 = "a source
@@ -238,6 +241,16 @@ const readIigsVideoCounter = (wantHorz: boolean): number => {
   return v;
 };
 
+// CPU cycles per 3.5" disk bit cell (2 µs). The IWM clocks the media off
+// machine time, not off CPU cycles, so a 2.8 MHz fast-mode CPU gets ~5.6 cycles
+// per bit while the 1.02 MHz clock gets ~2. Using the slow-mode figure at 2.8
+// MHz would let the write LSS demand a byte every 16 CPU cycles while the ROM's
+// write loop needs ~45, so every field would be clocked out with zero-filled
+// underrun gaps.
+const iigsDiskBitCellCycles = () => isIigsSlowMode()
+  ? 0.00012 * 17030
+  : 0.00012 * getIigsFrameUnits()
+
 // IWM (Integrated Woz Machine) state for Apple IIgs ($C0E0-$C0EF)
 let iwmQ6 = false;
 let iwmQ7 = false;
@@ -264,6 +277,8 @@ export const iigsFloppyHasMedia = (index: number) => {
 export const iigsGetIwmEnable35 = () => iwmEnable35
 export const iigsSetIwmEnable35 = (enable35: boolean) => {
   if (iwmEnable35 === enable35) return
+  // Leaving the 3.5" family ends any write session on the selected drive.
+  if (iwmEnable35) iwmFlushWrites35(IWM_FLOPPY_BASE[5] + iwmDriveSelect)
   iwmEnable35 = enable35
   iwmDiskRegister = enable35 ? (iwmDiskRegister | 0x40) : (iwmDiskRegister & ~0x40)
   // Switching families moves /ENBL, so restart the sequencer for the newly
@@ -276,6 +291,7 @@ export const iigsWriteDiskControlPort = (value: number) => {
   iigsSetIwmEnable35((value & 0x40) !== 0)
 }
 export const iigsResetIwm = () => {
+  if (iwmEnable35) iwmFlushWrites35(IWM_FLOPPY_BASE[5] + iwmDriveSelect)
   iwmQ6 = false
   iwmQ7 = false
   iwmMotorOn = false
@@ -284,6 +300,7 @@ export const iigsResetIwm = () => {
   iwmEnable35 = false
   iwmDiskRegister = 0
   iwmResetTiming()
+  iwmReset35Lines()
 }
 
 export const doSetRom = (machineName: MACHINE_NAME) => {
@@ -716,8 +733,8 @@ export const iigsInitInterrupts = () => {
     memSet24(0xE103C8, 0x2f); memSet24(0xE103C9, 0x01); memSet24(0xE103CA, 0xfe);
     // Reset INTEN ($C041) to 0 at power-on / cold boot (interrupts disabled)
     iigsRegisters[0x41] = 0x00;
-    iigsSlotRegister = 0b11110110;
-    iigsRegisters[0x2D] = iigsSlotRegister;
+    // $C02D is owned by the slot configuration (motherboard
+    // applyIigsSlotConfig) and must not be reset behind its back.
     iigsClearInterrupts();
     iigsResetIwm();
 }
@@ -1259,16 +1276,34 @@ const memGetSoftSwitch = (addr: number): number => {
       case 0x0F: iwmQ7 = true; break;
     }
     const iwmDriveIndex = IWM_FLOPPY_BASE[iwmEnable35 ? 5 : 6] + iwmDriveSelect;
+    // $C031 bit 7 is SEL/HDSEL: the fourth bit of the 3.5" status/control
+    // selector (the 5.25" family ignores it).
+    const iwmHdsel = (iwmDiskRegister >> 7) & 1;
+    // The 3.5" spindle turns continuously, so the media clock has to be brought
+    // up to "now" on every IWM access, not only on data-register ones: a
+    // status or mode access still lets the disc rotate under the head.
+    if (iwmEnable35) {
+      iwmAdvance35(iwmDriveIndex,
+        iwmFloppySpinning(iwmDriveIndex, iwmMotorOn), iigsDiskBitCellCycles())
+    }
     // $C0E0-$C0E7 are the head stepper lines (CA0-CA2 plus LSTRB). They apply on
     // every access, not just reads, because firmware strobes them either way.
     if (reg <= 7) {
-      iwmStepHead(iwmDriveIndex, reg, iwmMotorOn)
+      iwmStepHead(iwmDriveIndex, reg, iwmMotorOn, iwmHdsel)
     }
     if (!iwmQ7) {
       if (iwmQ6) {
-        // Read status register: bits 0-4 mode, bit 5 motor/enable
+        // Read status register: bits 0-4 mode, bit 5 motor/enable. On a 3.5"
+        // drive bit 7 is the selected status function's output, not the 5.25
+        // write-protect sense.
         let status = iwmMode & 0x1F;
         if (iwmMotorOn) status |= 0x20;
+        if (iwmEnable35) {
+          status |= iwmGetSense35(iwmDriveIndex, iwmHdsel) << 7;
+          // The ROM reads the status register once after its final write
+          // handshake wait; persist anything the burst wrote.
+          iwmFlushWrites35(iwmDriveIndex);
+        }
         return status;
       } else {
         // Data register. The Logic State Sequencer shifts continuously, so
@@ -1281,8 +1316,20 @@ const memGetSoftSwitch = (addr: number): number => {
         // stream there derails the boot (see gssquared IWM2.hpp on the ROM03
         // power-on disk self-test).
         if (iigsFloppyHasMedia(iwmDriveIndex)) {
-          return iwmReadDataRegister(iwmDriveIndex, iwmMotorOn);
+          const spinning = iwmFloppySpinning(iwmDriveIndex, iwmMotorOn);
+          // The 5.25" Logic State Sequencer is clocked by the CPU, not by wall
+          // time: gssquared's Floppy525_woz counts 4 CPU cycles per bit cell in
+          // every speed mode (only the 3.5" drive, which uses get_vid_cycles(),
+          // follows machine time). Keeping the Disk II bit model in raw cycles
+          // preserves the ROM's D5-AA-96 sync loop timing at 2.8 MHz; scaling it
+          // to wall time makes the loop re-read each nibble 2.7x before the next
+          // bit cell arrives and it never locks on.
+          return iwmReadDataRegister(iwmDriveIndex, spinning,
+            (iwmMode & 1) !== 0);
         }
+        // An empty 3.5" bay reads as zero; the ROM's 5.25" self-test wants the
+        // ROM byte instead.
+        if (iwmEnable35) return 0;
         checkSlotIO(addr);
         return memory[ROMmemoryStart + addr - 0xC000];
       }
@@ -1290,7 +1337,13 @@ const memGetSoftSwitch = (addr: number): number => {
       if (iwmQ6) {
         return 0;
       } else {
-        // Handshake register: bit 7 (ready) | bit 6 (no underrun)
+        // Handshake register: bit 7 (ready) | bit 6 (no underrun). A 3.5"
+        // drive in async mode owns these bits while it clocks a queued byte
+        // onto the media; the 5.25" family has no async protocol.
+        if (iwmEnable35) {
+          const spinning = iwmFloppySpinning(iwmDriveIndex, iwmMotorOn);
+          return iwmReadHandshake35(iwmDriveIndex, spinning, iigsDiskBitCellCycles());
+        }
         return 0xC0;
       }
     }
@@ -1583,9 +1636,31 @@ const memSetSoftSwitch = (addr: number, value: number) => {
             case 0x0E: iwmQ7 = false; break;
             case 0x0F: iwmQ7 = true; break;
         }
+        // CA0-CA2/LSTRB can be driven by either a read or a write; both go
+        // through the same switch decode (gssquared IWM2::decode).
+        const iwmDriveIndex = IWM_FLOPPY_BASE[iwmEnable35 ? 5 : 6] + iwmDriveSelect;
+        // Keep the 3.5" media clock on machine time across every access; see
+        // the same call in the read path.
+        if (iwmEnable35) {
+            iwmAdvance35(iwmDriveIndex,
+                iwmFloppySpinning(iwmDriveIndex, iwmMotorOn), iigsDiskBitCellCycles());
+        }
+        if (reg <= 7) {
+            iwmStepHead(iwmDriveIndex, reg, iwmMotorOn, (iwmDiskRegister >> 7) & 1);
+        }
         if (iwmQ6 && iwmQ7 && (reg & 1)) {
             if (!iwmMotorOn) {
+                // Mode register: only writable while ENABLE is released
+                // (gssquared IWM2::write). Switching out of async mode ends a
+                // write session, so persist anything the burst wrote.
+                if (iwmEnable35) iwmFlushWrites35(iwmDriveIndex);
                 iwmMode = value & 0x1F;
+            } else if (iwmEnable35 && (iwmMode & 0x02)) {
+                // 3.5" async write: queue the byte; the LSS clocks it out at
+                // the disk bit rate (MODE.H=1).
+                iwmWriteDataRegister35(iwmDriveIndex, value,
+                    iwmFloppySpinning(iwmDriveIndex, iwmMotorOn),
+                    iigsDiskBitCellCycles());
             }
         }
         checkSlotIO(addr, value);

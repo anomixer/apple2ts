@@ -8,6 +8,7 @@ import { notifySettingsChanged } from "../settingschange"
 import PopupMenu from "../controls/popupmenu"
 import { useTranslation } from "../../i18n/useTranslation"
 import { DEFAULT_SLOT_CONFIG, DEFAULT_SLOT_CONFIG_GS, RUN_MODE } from "../../common/utility"
+import { isIigsBuiltinSlot } from "../../common/iigs_slots"
 import { handleSetCPUState } from "../controller"
 import { isCanvasFullscreen, setCanvasFullscreen } from "../controls/fullscreenbutton"
 import type { RetroControlMetadata, RetroMenuContext } from "../retro/retromenucontext"
@@ -52,8 +53,14 @@ const retroCardLabels = (context: RetroMenuContext): Record<SLOT_CARD_ID, string
   vera: context.t("retroControl.card.vera"),
   passport: context.t("retroControl.card.passport"),
   disk2: context.t("retroControl.card.disk2"),
-  disk35: context.t("retroControl.card.disk2"),
+  disk35: "3.5\" Floppy Drive",
   smartport: context.t("retroControl.card.smartport"),
+  gsPrinter: "Printer Port",
+  gsModem: "Modem Port",
+  gsText80: "80-Column Text",
+  gsMouse: "Mouse Port",
+  gsSmartPort: "Smart Port",
+  gsDiskPort: "Disk Port",
 })
 
 const getRetroSlotOptionLabel = (context: RetroMenuContext, option: SlotOption) =>
@@ -111,9 +118,17 @@ const machineBindings: RetroControlBindings = {
     defaultIndex: 0,
   },
   slots: {
-    value: context => context.t("retroControl.configured", {
-      count: String(SLOT_NUMBERS.filter(slot => handleGetSlotConfig()[slot] !== "none").length),
-    }),
+    value: context => {
+      const machine = handleGetMachineName()
+      const config = handleGetSlotConfig()
+      const count = SLOT_NUMBERS.filter(slot => {
+        const card = config[slot]
+        // On the IIgs every slot normally runs a built-in function; only
+        // installed cards count as configured.
+        return machine === "APPLE2GS" ? !isIigsBuiltinSlot(card) && card !== "none" : card !== "none"
+      }).length
+      return context.t("retroControl.configured", { count: String(count) })
+    },
   },
   ...Object.fromEntries(SLOT_NUMBERS.map(slot => [
     `slots.${slot}`,
@@ -184,6 +199,12 @@ export const MachineConfig = (props: DisplayProps) => {
     disk2: "Disk II Floppy Controller",
     disk35: "3.5\" Floppy Drive",
     smartport: "SmartPort Hard Drive Card",
+    gsPrinter: "Printer Port",
+    gsModem: "Modem Port",
+    gsText80: "80-Column Text",
+    gsMouse: "Mouse Port",
+    gsSmartPort: "Smart Port",
+    gsDiskPort: "Disk Port",
   }
 
   const handleSelectSlotCard = (slot: 1 | 2 | 3 | 4 | 5 | 6 | 7, cardId: SLOT_CARD_ID, ramSizeKb = 64) => {

@@ -1,4 +1,5 @@
-import { DEFAULT_SLOT_CONFIG, DEFAULT_SLOT_CONFIG_GS } from "./utility"
+import { DEFAULT_SLOT_CONFIG } from "./utility"
+import { getIigsSlotDefault } from "./iigs_slots"
 
 export const RAM_OPTIONS = [64, 512, 1024, 4096, 8192] as const
 
@@ -12,20 +13,22 @@ export type SlotOption = {
 
 export const getSlotOptions = (slot: SlotNumber, machine: MACHINE_NAME): SlotOption[] => {
   if (machine === "APPLE2GS") {
+    // Built-in functions follow the Control Panel: slots 1-6 normally run the
+    // motherboard's own firmware. Only the cards the emulator implements are
+    // offered as alternatives ("Your Card").
     switch (slot) {
       case 1:
-        return [{ card: "none" }, { card: "ssc" }]
+        return [{ card: "gsPrinter" }, { card: "ssc" }]
       case 2:
-        return [{ card: "none" }]
+        return [{ card: "gsModem" }]
       case 3:
-        return [{ card: "none" }]
+        return [{ card: "gsText80" }]
       case 4:
-        return [{ card: "none" }, { card: "mockingboard" }]
+        return [{ card: "gsMouse" }, { card: "mockingboard" }]
       case 5:
-        // Apple IIgs: slot 5 is the built-in 3.5" disk drive.
-        return [{ card: "none" }, { card: "disk35" }]
+        return [{ card: "gsSmartPort" }]
       case 6:
-        return [{ card: "none" }, { card: "disk2" }]
+        return [{ card: "gsDiskPort" }]
       case 7:
         return [{ card: "none" }, { card: "smartport" }]
     }
@@ -51,13 +54,16 @@ export const getSlotOptions = (slot: SlotNumber, machine: MACHINE_NAME): SlotOpt
   return options[slot].map(card => ({ card }))
 }
 
+// Any value that is not valid for the machine (including configurations saved
+// by older builds, where "none" meant "built-in function" in a IIgs slot) falls
+// back to that slot's default.
 export const sanitizeSlotConfig = (config: SlotConfig, machine: MACHINE_NAME): SlotConfig => {
   const next = { ...config }
   for (const slot of SLOT_NUMBERS) {
     const allowed = getSlotOptions(slot, machine).map(o => o.card)
     if (!allowed.includes(next[slot])) {
       const defaultCard = machine === "APPLE2GS"
-        ? DEFAULT_SLOT_CONFIG_GS[slot]
+        ? getIigsSlotDefault(slot)
         : (machine === "APPLE2P" && slot === 3 ? "videoterm" : DEFAULT_SLOT_CONFIG[slot])
       next[slot] = allowed.includes(defaultCard) ? defaultCard : "none"
     }

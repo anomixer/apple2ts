@@ -146,6 +146,12 @@ const LinkBuilder = () => {
     disk2: "Disk II",
     disk35: "3.5\" Disk Drive",
     smartport: "SmartPort",
+    gsPrinter: "Printer Port",
+    gsModem: "Modem Port",
+    gsText80: "80-Column Text",
+    gsMouse: "Mouse Port",
+    gsSmartPort: "Smart Port",
+    gsDiskPort: "Disk Port",
   }
 
   const machineValues = [
@@ -298,9 +304,10 @@ const LinkBuilder = () => {
     }
 
     if (tabSection === TAB.DISK) {
+      const isDiskPort = slotConfig[6] === "disk2" || slotConfig[6] === "gsDiskPort"
       const drives = [
-        { key: "s6d1", disk: s6d1Disk, url: s6d1Url, enabled: slotConfig[6] === "disk2" },
-        { key: "s6d2", disk: s6d2Disk, url: s6d2Url, enabled: slotConfig[6] === "disk2" },
+        { key: "s6d1", disk: s6d1Disk, url: s6d1Url, enabled: isDiskPort },
+        { key: "s6d2", disk: s6d2Disk, url: s6d2Url, enabled: isDiskPort },
         { key: "s7d1", disk: s7d1Disk, url: s7d1Url, enabled: slotConfig[7] === "smartport" },
         { key: "s7d2", disk: s7d2Disk, url: s7d2Url, enabled: slotConfig[7] === "smartport" },
         { key: "s2d1", disk: s2d1Disk, url: s2d1Url, enabled: slotConfig[2] === "vera" },

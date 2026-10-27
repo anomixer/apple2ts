@@ -3,6 +3,7 @@ import { passMachineState, passSoftSwitchDescriptions, passWorkerOperationResult
 import { setCpuPcGetter } from "./cpu_pc"
 import { s6502, setState6502, setCycleCount, setPC, getStackString, get6502Instructions } from "./instructions"
 import { hiresAddressToLine, RUN_MODE, TEST_DEBUG, DEFAULT_SLOT_CONFIG, DEFAULT_SLOT_CONFIG_GS, MEMORY_DUMP_STATE, AUTO_SNAPSHOT } from "../common/utility"
+import { iigsSlotRegisterFor } from "../common/iigs_slots"
 import { resetFloppyDrives, doPauseDrive, getHardDriveState } from "./devices/drivestate"
 import { iigsEnsoniq } from "./devices/iigs_ensoniq"
 import { passEnsoniqSound } from "./worker2main"
@@ -91,13 +92,22 @@ import { hasHardDriveMounted } from "./devices/drivestate"
 import { findMemory, getMemoryView, resolveMemoryRangeRequest } from "./memory_view"
 
 let speedMode = 0
+// True once the UI or a test has chosen a speed. The IIgs defaults to 2.8 MHz
+// (hardware fast mode) only while nobody has picked one: the 3.5" driver
+// cannot clock 500 kbit/s media at a 1.02 MHz budget.
+let speedModeExplicit = false
 let iigsQuarterSecCounter = 0
 let iigsOneSecCounter = 0
 // Debug-only: count VBL interrupts so the browser can verify the 60 Hz rate.
 let iigsVblCount = 0
 export const getIigsVblCount = () => iigsVblCount
 export const resetIigsVblCount = () => { iigsVblCount = 0 }
-export let iigsSpeedRegister = 0x00
+// $C036 reset value: bit 7 set = fast. gssquared resets the IIgs MMU to fast
+// mode, and the ROM keeps it there while its slot-5 3.5" driver runs. The
+// emulated clock has to agree with what the guest reads, or software that
+// relies on fast mode (the disk driver needs ~45 CPU cycles per byte at
+// 500 kbit/s) is silently throttled while $C036 reports fast.
+export let iigsSpeedRegister = 0x80
 export const setIigsSpeedRegister = (v: number) => { iigsSpeedRegister = v }
 // Apple IIgs slow mode. $C036 bit 7 = 1 -> fast (2.8 MHz), bit 7 = 0 ->
 // slow (1.024 MHz). gssquared models this in the clock itself
@@ -107,7 +117,7 @@ export const setIigsSpeedRegister = (v: number) => { iigsSpeedRegister = v }
 // We had the register but never used it, so 1 MHz-era code ran at the
 // selected 2.8 MHz rate - 2.74x too fast (ProDOS 16 music sequencers
 // sequenced on CPU cycles came out at double tempo).
-const isIigsSlowMode = () => !(iigsSpeedRegister & 0x80)
+export const isIigsSlowMode = () => !(iigsSpeedRegister & 0x80)
 // CPU cycles in one 1/60 s refresh at the 1.024 MHz slow-mode clock.
 const IIGS_SLOW_CYCLES_PER_REFRESH = 17030
 // The video scanner runs off the fixed 14 MHz master clock; $C036 bit 7 only
@@ -340,6 +350,17 @@ export const getSlotConfig = () => {
   return currentSlotConfig
 }
 
+// $C02D follows the Control Panel assignment: a built-in function leaves the
+// motherboard's slot firmware mapped, a card maps the card's ROM. Re-applied
+// after any cold-boot path that touches the MMU registers.
+export const applyIigsSlotConfig = () => {
+  if (machineName !== "APPLE2GS") return
+  const register = iigsSlotRegisterFor(currentSlotConfig)
+  setIigsSlotRegister(register)
+  iigsRegisters[0x2D] = register
+  updateAddressTables()
+}
+
 let didConfiguration = false
 export const configureMachine = () => {
   if (didConfiguration) return
@@ -351,47 +372,33 @@ export const configureMachine = () => {
     clearSlot(s)
   }
 
-  // Apple IIgs uses a completely different architecture
-  // It has built-in hardware and native slot management
+  // Apple IIgs: slots are Control Panel assignments, not card scans. Slots 1-6
+  // normally run the motherboard's own slot firmware; only a configured card
+  // gets its $C02D (SLTROMSEL) bit set.
   if (machineName === "APPLE2GS") {
     disableVideoTerm()
     disableVidHD()
     setAuxCardEnabled(true)
 
-    // Slot 1: SSC (if configured)
-    if (currentSlotConfig[1] === "ssc") {
-      enableSerialCard()
+    // The built-in IWM serves both built-in drive families. The slot-5 Smart
+    // Port (3.5") and slot-6 Disk Port (5.25") firmware lives in ROM, so no
+    // card is installed for either.
+    enableDiskDrive35()
+
+    if (currentSlotConfig[1] === "gsPrinter" || currentSlotConfig[1] === "ssc") {
+      // The SSC card and the built-in printer port are both a 6551 ACIA in the
+      // slot-1 I/O space; $C02D decides whether the card's ROM or the internal
+      // firmware at $FF:C100 answers.
+      enableSerialCard(true, 1)
     }
-    // Slot 4: Mockingboard (if configured)
     if (currentSlotConfig[4] === "mockingboard") {
       enableMockingboard(true, 4)
     }
-    // Slot 5: built-in 3.5" drive (if configured)
-    if (currentSlotConfig[5] === "disk35") {
-      enableDiskDrive35()
-    }
-    // Slot 6: 5.25" Disk II (if configured)
-    if (currentSlotConfig[6] === "disk2") {
-      enableDiskDrive()
-    }
-    // Slot 7: SmartPort / Hard Drive (if configured)
     if (currentSlotConfig[7] === "smartport") {
       enableHardDrive()
     }
 
-    // Sync $C02D (SLTROMSEL) with configured peripheral cards.
-    // Slot 3 is always internal video. Slot 5 (3.5") and slot 6 (5.25") follow
-    // the same "card if present, else motherboard ROM" rule as the other slots,
-    // which is what the IIgs power-on default 0b11110110 does.
-    let slotReg = 0
-    for (let s = 1; s <= 7; s++) {
-      if (s === 3) continue
-      if ((currentSlotConfig as any)[s] !== "none") {
-        slotReg |= (1 << s)
-      }
-    }
-    setIigsSlotRegister(slotReg)
-    iigsRegisters[0x2D] = slotReg
+    applyIigsSlotConfig()
 
     get6502Instructions()
     return
@@ -563,7 +570,10 @@ export const doBoot = () => {
     enableHardDrive()
   }
 
-  if (machineName === "APPLE2GS") iigsInitInterrupts()
+  if (machineName === "APPLE2GS") {
+    iigsInitInterrupts()
+    applyIigsSlotConfig()
+  }
   doReset()
   // This is a hack. If we don't currently have a hard drive image on boot,
   // temporarily disable the hard drive and then re-enable it later.
@@ -586,6 +596,10 @@ export const doReset = () => {
   cpu.reset()
   if (machineName === "APPLE2GS") {
     iigsClearInterrupts()
+    // A hardware reset returns the CPU to fast mode; software reads the same
+    // value back from $C036, so keep both views in step across Ctrl-Reset.
+    setIigsSpeedRegister(0x80)
+    iigsRegisters[0x36] = 0x80
     // The IWM's logic state sequencer runs on wall-clock cycles. A reset can
     // follow a long pause (breakpoint, menu), so restart its timing rather
     // than letting it shift thousands of idle bits into the data register.
@@ -607,6 +621,9 @@ export const doReset = () => {
       memSet24(0x000000 + 0x03f3, 0x00)
       memSet24(0x000000 + 0x03f4, 0x00)
     }
+    // A hardware reset clears SLTROMSEL; the machine then re-applies the
+    // Control Panel assignment.
+    applyIigsSlotConfig()
   }
   resetMachine()
   // Otherwise Heat Map data survives a reset/reboot indefinitely (it was
@@ -665,6 +682,7 @@ const GS_CYCLES_PER_REFRESH = [
 
 export const doSetSpeedMode = (speedModeIn: number, operationId?: number) => {
   speedMode = speedModeIn
+  speedModeExplicit = true
   // speedMode = -2 is slowest, but add 2 to it to make the arrays be zero based.
   // speedMode = 0 is still 1 MHz, so no risk of backwards compatibility issues.
   refreshTime = (speedMode === 4) ? 0 : 16.6881
@@ -802,9 +820,13 @@ export const doSetMachineName = (name: MACHINE_NAME, reset = true, publishState 
   didConfiguration = false
   doSetRom(machineName)
   configureMachine()
+  if (!speedModeExplicit) speedMode = (machineName === "APPLE2GS") ? 1 : 0
   const cyclesTable = (machineName === "APPLE2GS") ? GS_CYCLES_PER_REFRESH : IIE_CYCLES_PER_REFRESH
   cpuCyclesPerRefresh = cyclesTable[speedMode + 2]
-  if (machineName === "APPLE2GS") iigsInitInterrupts()
+  if (machineName === "APPLE2GS") {
+    iigsInitInterrupts()
+    applyIigsSlotConfig()
+  }
   if (reset) doReset()
   if (publishState) updateExternalMachineState()
 }

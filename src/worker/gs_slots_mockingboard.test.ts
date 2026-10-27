@@ -1,41 +1,64 @@
 import { DEFAULT_SLOT_CONFIG_GS } from "../common/utility"
 import { getSlotOptions, sanitizeSlotConfig } from "../common/slot_options"
+import { iigsSlotRegisterFor } from "../common/iigs_slots"
 import { doSetRom, memGet24, memSet24, memoryReset, iigsSlotRegister } from "./memory"
 import { CPU65816 } from "./cpu65816"
 import { doSetMachineName, doSetSlotConfig, getSlotConfig } from "./motherboard"
 import { s6502 } from "./instructions"
 
 describe("Apple IIgs Slot Management & Hardware Compatibility", () => {
-  test("Apple IIgs slot options restrict slots per GS architecture", () => {
-    // Slot 1: Built-in Printer (none) or SSC
-    expect(getSlotOptions(1, "APPLE2GS")).toEqual([{ card: "none" }, { card: "ssc" }])
-    // Slot 2: Built-in Modem (none)
-    expect(getSlotOptions(2, "APPLE2GS")).toEqual([{ card: "none" }])
-    // Slot 3: Built-in 80 Columns / Video (none only! No aux or VidHD)
-    expect(getSlotOptions(3, "APPLE2GS")).toEqual([{ card: "none" }])
-    // Slot 4: Built-in Mouse (none) or Mockingboard
-    expect(getSlotOptions(4, "APPLE2GS")).toEqual([{ card: "none" }, { card: "mockingboard" }])
-    // Slot 5: Built-in 3.5" drive (none or disk35)
-    expect(getSlotOptions(5, "APPLE2GS")).toEqual([{ card: "none" }, { card: "disk35" }])
-    // Slot 6: Built-in 5.25" Floppy (none) or Disk II
-    expect(getSlotOptions(6, "APPLE2GS")).toEqual([{ card: "none" }, { card: "disk2" }])
-    // Slot 7: Hard Drive / SmartPort (none or smartport)
+  test("Apple IIgs slot options follow the Control Panel built-in functions", () => {
+    // Slot 1: built-in Printer Port, or a Super Serial Card
+    expect(getSlotOptions(1, "APPLE2GS")).toEqual([{ card: "gsPrinter" }, { card: "ssc" }])
+    // Slot 2: built-in Modem Port
+    expect(getSlotOptions(2, "APPLE2GS")).toEqual([{ card: "gsModem" }])
+    // Slot 3: built-in 80-column / text firmware
+    expect(getSlotOptions(3, "APPLE2GS")).toEqual([{ card: "gsText80" }])
+    // Slot 4: built-in Mouse Port, or a Mockingboard
+    expect(getSlotOptions(4, "APPLE2GS")).toEqual([{ card: "gsMouse" }, { card: "mockingboard" }])
+    // Slot 5: built-in Smart Port (3.5" UniDisk)
+    expect(getSlotOptions(5, "APPLE2GS")).toEqual([{ card: "gsSmartPort" }])
+    // Slot 6: built-in Disk Port (5.25" Disk II)
+    expect(getSlotOptions(6, "APPLE2GS")).toEqual([{ card: "gsDiskPort" }])
+    // Slot 7: Your Card (empty) or the SmartPort hard drive card
     expect(getSlotOptions(7, "APPLE2GS")).toEqual([{ card: "none" }, { card: "smartport" }])
+    // Classic machines are untouched by the IIgs model.
+    expect(getSlotOptions(6, "APPLE2EE")).toEqual([{ card: "none" }, { card: "disk2" }])
   })
 
-  test("DEFAULT_SLOT_CONFIG_GS clears all expansion slots to none except slot 7 smartport", () => {
+  test("DEFAULT_SLOT_CONFIG_GS assigns the built-in functions", () => {
     expect(DEFAULT_SLOT_CONFIG_GS).toEqual({
-      1: "none",
-      2: "none",
-      3: "none",
-      4: "none",
-      5: "none",
-      6: "none",
+      1: "gsPrinter",
+      2: "gsModem",
+      3: "gsText80",
+      4: "gsMouse",
+      5: "gsSmartPort",
+      6: "gsDiskPort",
       7: "smartport",
     })
   })
 
-  test("sanitizeSlotConfig cleans up incompatible Apple IIe cards when switching to GS", () => {
+  test("$C02D sets a bit only for slots holding a card", () => {
+    // Slot 3 never appears in SLTROMSEL; slot 7 holds the hard drive card.
+    expect(iigsSlotRegisterFor(DEFAULT_SLOT_CONFIG_GS)).toBe(0x80)
+    expect(iigsSlotRegisterFor({ ...DEFAULT_SLOT_CONFIG_GS, 1: "ssc" })).toBe(0x82)
+    expect(iigsSlotRegisterFor({ ...DEFAULT_SLOT_CONFIG_GS, 4: "mockingboard" })).toBe(0x90)
+    // An empty "Your Card" slot still selects card space, so the bit stays set.
+    expect(iigsSlotRegisterFor({ ...DEFAULT_SLOT_CONFIG_GS, 7: "none" })).toBe(0x80)
+    // Every built-in function leaves the motherboard firmware mapped; only
+    // slot 7's (empty, "Your Card") card bit remains.
+    expect(iigsSlotRegisterFor({
+      1: "gsPrinter",
+      2: "gsModem",
+      3: "gsText80",
+      4: "gsMouse",
+      5: "gsSmartPort",
+      6: "gsDiskPort",
+      7: "none",
+    })).toBe(0x80)
+  })
+
+  test("sanitizeSlotConfig maps old IIe / pre-Control-Panel values to GS functions", () => {
     const iieConfig = {
       1: "ssc" as const,
       2: "none" as const,
@@ -46,12 +69,20 @@ describe("Apple IIgs Slot Management & Hardware Compatibility", () => {
       7: "smartport" as const,
     }
     const sanitized = sanitizeSlotConfig(iieConfig, "APPLE2GS")
-    expect(sanitized[3]).toBe("none") // aux removed
-    expect(sanitized[4]).toBe("none") // vera removed
-    expect(sanitized[5]).toBe("none") // mouse card removed
-    expect(sanitized[1]).toBe("ssc")  // allowed
-    expect(sanitized[6]).toBe("disk2") // allowed
-    expect(sanitized[7]).toBe("smartport") // allowed
+    expect(sanitized[1]).toBe("ssc")       // card allowed
+    expect(sanitized[2]).toBe("gsModem")
+    expect(sanitized[3]).toBe("gsText80")  // aux removed
+    expect(sanitized[4]).toBe("gsMouse")   // vera removed
+    expect(sanitized[5]).toBe("gsSmartPort") // mouse card removed
+    expect(sanitized[6]).toBe("gsDiskPort")  // Disk II card is the built-in port
+    expect(sanitized[7]).toBe("smartport")
+
+    // Configurations saved before the slot rework:
+    const legacy = { ...DEFAULT_SLOT_CONFIG_GS, 1: "none" as const, 5: "disk35" as const, 6: "disk2" as const }
+    const migrated = sanitizeSlotConfig(legacy, "APPLE2GS")
+    expect(migrated[1]).toBe("gsPrinter")
+    expect(migrated[5]).toBe("gsSmartPort")
+    expect(migrated[6]).toBe("gsDiskPort")
   })
 
   test("doSetMachineName('APPLE2GS') resets slots to DEFAULT_SLOT_CONFIG_GS", () => {

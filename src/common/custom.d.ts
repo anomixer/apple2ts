@@ -252,7 +252,12 @@ type Video7Override = {
   enabled: boolean,
 }
 
-type SLOT_CARD_ID = "none" | "ssc" | "softcard" | "aux" | "videoterm" | "mockingboard" | "mouse" | "vera" | "passport" | "disk2" | "disk35" | "smartport" | "vidhd"
+// "gs*" ids are the Apple IIgs Control Panel's built-in slot functions: the
+// motherboard's own slot firmware stays mapped ($C02D bit clear). Every other
+// id is a card in the slot ("Your Card" in the Control Panel), including "none"
+// which leaves an empty card slot. "disk35" is retained only so old saved
+// configurations still parse; it migrates to "gsSmartPort".
+type SLOT_CARD_ID = "none" | "ssc" | "softcard" | "aux" | "videoterm" | "mockingboard" | "mouse" | "vera" | "passport" | "disk2" | "disk35" | "smartport" | "vidhd" | "gsPrinter" | "gsModem" | "gsText80" | "gsMouse" | "gsSmartPort" | "gsDiskPort"
 
 type SlotConfig = {
   1: SLOT_CARD_ID,
@@ -434,6 +439,18 @@ type DriveState = {
   writableFileHandle: WritableFileHandle | null,
   lastLocalFileWriteTime: number
   optimalTiming: number,
+  // Apple IIgs 3.5" (Sony) drive state. is35 marks the drive/media family;
+  // blockMedia35 means driveData holds a raw 800K block image and the GCR bit
+  // stream the IWM reads was generated separately (see
+  // getDriveBitstreamByIndex). Spindle/track mechanics are separate from the
+  // 5.25" motor and stepper phases.
+  is35: boolean,
+  blockMedia35: boolean,
+  spindleOn: boolean,
+  stepDirection: number,
+  diskSwitched: boolean,
+  stepEnd: number,
+  readyEnd: number,
 }
 
 type DriveProps = {

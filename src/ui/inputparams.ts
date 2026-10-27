@@ -9,7 +9,8 @@ import { audioEnable } from "./devices/audio/speaker"
 import { setAppMode, setColorMode, setMonitorMode, setTabView, setTheme, setUIStateBoolean } from "./ui_settings"
 import * as pako from "pako"
 import { MaximumSpeedMode } from "./controls/speeddropdown"
-import { getPreferenceSlotConfig, setPreferenceSlotConfig, setPreferenceSpeedMode, setPreferenceVeraSlot } from "./localstorage"
+import { getPreferenceMachineName, getPreferenceSlotConfig, setPreferenceSlotConfig, setPreferenceSpeedMode, setPreferenceVeraSlot } from "./localstorage"
+import { sanitizeSlotConfig } from "../common/slot_options"
 import { Expectin } from "./api/expectin"
 import { notifySettingsChanged } from "./settingschange"
 
@@ -191,14 +192,19 @@ export const handleInputParams = (paramString = "") => {
   }
 
   const machineName = params.get("machine")?.toUpperCase()
+  let urlMachine: MACHINE_NAME | undefined
   if (machineName) {
     if (machineName === "APPLE2P") {
+      urlMachine = "APPLE2P"
       passSetMachineName("APPLE2P")
     } else if (machineName === "APPLE2EU") {
+      urlMachine = "APPLE2EU"
       passSetMachineName("APPLE2EU")
     } else if (machineName === "APPLE2GS") {
+      urlMachine = "APPLE2GS"
       passSetMachineName("APPLE2GS")
     } else {
+      urlMachine = "APPLE2EE"
       passSetMachineName("APPLE2EE")
     }
   }
@@ -216,15 +222,26 @@ export const handleInputParams = (paramString = "") => {
   const nextSlotConfig = { ...currentSlotConfig }
   let slotConfigChanged = false
 
-  const validCards: Record<number, string[]> = {
-    1: ["none", "ssc"],
-    2: ["none", "vera", "passport", "softcard"],
-    3: ["none", "aux", "videoterm", "vidhd"],
-    4: ["none", "mouse", "mockingboard", "vera", "softcard"],
-    5: ["none", "mouse", "mockingboard", "softcard"],
-    6: ["none", "disk2"],
-    7: ["none", "smartport"],
-  }
+  const validCards: Record<number, string[]> = urlMachine === "APPLE2GS"
+    ? {
+        // IIgs Control Panel slot functions; "none" is an empty "Your Card".
+        1: ["gsPrinter", "ssc"],
+        2: ["gsModem"],
+        3: ["gsText80"],
+        4: ["gsMouse", "mockingboard"],
+        5: ["gsSmartPort", "disk35"], // disk35 = old id, sanitised below
+        6: ["gsDiskPort", "disk2"],
+        7: ["none", "smartport"],
+      }
+    : {
+        1: ["none", "ssc"],
+        2: ["none", "vera", "passport", "softcard"],
+        3: ["none", "aux", "videoterm", "vidhd"],
+        4: ["none", "mouse", "mockingboard", "vera", "softcard"],
+        5: ["none", "mouse", "mockingboard", "softcard"],
+        6: ["none", "disk2"],
+        7: ["none", "smartport"],
+      }
 
   for (let slotNum = 1; slotNum <= 7; slotNum++) {
     const cardParam = params.get(`slot${slotNum}`)?.toLowerCase()
@@ -297,8 +314,9 @@ export const handleInputParams = (paramString = "") => {
   }
 
   if (slotConfigChanged) {
-    setPreferenceSlotConfig(nextSlotConfig)
-    passSetSlotConfig(nextSlotConfig)
+    const sanitized = sanitizeSlotConfig(nextSlotConfig, urlMachine ?? getPreferenceMachineName())
+    setPreferenceSlotConfig(sanitized)
+    passSetSlotConfig(sanitized)
   }
 
   const theme = params.get("theme")
@@ -513,6 +531,7 @@ export const handleFragment = async (
   // Slot 7 Drive 2 (SmartPort 2): s7d2 or hd2 -> drive index 1
   // Slot 6 Drive 1 (Disk II 1):   s6d1 or d1  -> drive index 2
   // Slot 6 Drive 2 (Disk II 2):   s6d2 or d2  -> drive index 3
+  // Slot 5 Drive 1/2 (IIgs 3.5"): s5d1 / s5d2 -> drive index 4 / 5
   const params = new URLSearchParams(search.toLowerCase())
   const porig = new URLSearchParams(search)
 
@@ -521,6 +540,8 @@ export const handleFragment = async (
     { keys: ["s7d2", "hd2"], index: 1 },
     { keys: ["s6d1", "d1"],  index: 2 },
     { keys: ["s6d2", "d2"],  index: 3 },
+    { keys: ["s5d1"],        index: 4 },
+    { keys: ["s5d2"],        index: 5 },
   ]
 
   const driveConfigs: Array<{ index: number; url: string }> = []

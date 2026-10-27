@@ -41,7 +41,8 @@ ${i18n.t("startup.copyright", { year })}`
 
   if (!isGameMode()) {
     emulatorStartText += `\n\n${i18n.t("startup.diskCollections")}`
-    emulatorStartText += `\n\n${i18n.t("startup.retroControlPanel")}\n`
+    emulatorStartText += `\n\n${i18n.t("startup.retroControlPanel")}`
+    emulatorStartText += `\n\n${i18n.t("startup.mouseCapture")}\n`
   }
 
   if (machineName === "APPLE2P") {

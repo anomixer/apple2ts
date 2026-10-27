@@ -157,12 +157,12 @@ export const DEFAULT_SLOT_CONFIG: SlotConfig = {
 }
 
 export const DEFAULT_SLOT_CONFIG_GS: SlotConfig = {
-  1: "none",
-  2: "none",
-  3: "none",
-  4: "none",
-  5: "none",
-  6: "none",
+  1: "gsPrinter",
+  2: "gsModem",
+  3: "gsText80",
+  4: "gsMouse",
+  5: "gsSmartPort",
+  6: "gsDiskPort",
   7: "smartport",
 }
 
@@ -225,6 +225,10 @@ export type MouseEventSimple = {
   //  0x01:  button 1 up
   //  0x11:  button 1 down
   buttons : number;
+  // Captured (pointer-locked) motion: x and y are signed fractions of the screen
+  // size rather than an absolute position, so the guest's relative-motion
+  // accumulator is fed directly and motion never stops at a screen edge.
+  relative?: boolean;
 }
 
 export enum MEMORY_DUMP_STATE {
@@ -608,9 +612,42 @@ export const getSymbolTables = (machineName: string) => {
   return [machineSymbolTable, userSymbolTable]
 }
 
+// An Apple IIgs 3.5" disk holds 1600 x 512-byte blocks. Raw images (.po/.img/
+// .dsk/.3mg) are exactly that size; 2IMG containers add a 64-byte header and
+// may append a short comment/creator chunk after the payload, so allow a small
+// amount of trailing container data.
+const FLOPPY35_BLOCK_SIZE = 800 * 1024
+const FLOPPY35_2IMG_MAX = 64 + FLOPPY35_BLOCK_SIZE + 4096
+
+export const isThreePointFiveInchImage = (filename: string, fileSize: number) => {
+  const f = filename.toLowerCase()
+  // A headerless image of exactly 1600 blocks is 3.5" media whatever the name.
+  if (fileSize === FLOPPY35_BLOCK_SIZE &&
+    /\.(?:2mg|3mg|po|img|dsk|do)(?:$|[^a-z0-9])/.test(f)) {
+    return true
+  }
+  if (/\.3mg(?:$|[^a-z0-9])/.test(f)) {
+    return fileSize <= 1_474_560
+  }
+  if (/\.2mg(?:$|[^a-z0-9])/.test(f)) {
+    return fileSize >= 64 + FLOPPY35_BLOCK_SIZE && fileSize <= FLOPPY35_2IMG_MAX
+  }
+  // Raw block images. A 140K .po/.dsk is 5.25" media, and a .woz is never a
+  // raw block image.
+  if (/\.(?:po|img|dsk|do)(?:$|[^a-z0-9])/.test(f)) {
+    return fileSize === FLOPPY35_BLOCK_SIZE
+  }
+  return false
+}
+
 export const isHardDriveImage = (filename: string, fileSize: number) => {
   const f = filename.toLowerCase()
   if (/\.(?:woz|dsk|do)(?:$|[^a-z0-9])/.test(f)) {
+    // A .dsk/.do is a floppy (5.25", or a raw 800K 3.5" block image), never a
+    // hard drive.
+    return false
+  }
+  if (isThreePointFiveInchImage(filename, fileSize)) {
     return false
   }
   if (/\.(?:hdv|2mg|2meg)(?:$|[^a-z0-9])/.test(f)) {
@@ -619,8 +656,8 @@ export const isHardDriveImage = (filename: string, fileSize: number) => {
   if (/\.(?:po|img)(?:$|[^a-z0-9])/.test(f)) {
     // 5.25" ProDOS floppy disk is 140KB (143360 bytes).
     // Converted WOZ2 floppy images from 140KB disks are ~234KB - 236KB (35-40 tracks).
-    // Anything larger (e.g. 800KB 3.5" disk, 2MB, 16MB, 32MB hard drive images)
-    // is treated as a Slot 7 SmartPort hard drive image.
+    // Anything larger (e.g. 2MB, 16MB, 32MB hard drive images) is treated as a
+    // Slot 7 SmartPort hard drive image.
     if (fileSize >= 230000 && fileSize <= 275000) {
       return false
     }
@@ -629,17 +666,46 @@ export const isHardDriveImage = (filename: string, fileSize: number) => {
   return false
 }
 
-export const isThreePointFiveInchImage = (filename: string, fileSize: number) => {
-  // Apple IIgs 3.5" media: .3mg images up to a 1.44MB floppy. Anything larger
-  // is a SmartPort hard disk; .po/.dsk are 5.25" formats.
-  const THREE_POINT_FIVE_MAX = 1_474_560
-  return /\.3mg(?:$|[^a-z0-9])/i.test(filename) && fileSize <= THREE_POINT_FIVE_MAX
+// The drive bays come in three media families: indices 0/1 are the slot-7
+// SmartPort block device, 2/3 the slot-6 5.25" floppy, and 4/5 the IIgs's
+// built-in slot-5 3.5" drive. A bay can hold the media it is wired for, and a
+// block image additionally fits any block-capable bay.
+const isNibbleImage = (filename: string) =>
+  /\.(?:woz|dsk|do)(?:$|[^a-z0-9])/.test(filename.toLowerCase())
+
+// Only the IIgs wires indices 4/5: slot 5 is its built-in 3.5" drive pair. On
+// every other machine 3.5" media has to be served as a block volume.
+export const machineHasThreeInchBay = (machineName: string) => machineName === "APPLE2GS"
+
+export const canDriveTakeImage = (
+  index: number,
+  filename: string,
+  fileSize: number,
+  hasThreeInchBay: boolean,
+) => {
+  if (index < 0 || index >= MAX_DRIVES) {
+    return false
+  }
+  const threeInch = isThreePointFiveInchImage(filename, fileSize)
+  // A raw 800 KB .dsk/.do is 3.5" block media, not 5.25" nibble media.
+  const nibble = isNibbleImage(filename) && !threeInch
+  const hardDrive = isHardDriveImage(filename, fileSize)
+  if (index <= 1) {
+    return !nibble
+  }
+  if (index <= 3) {
+    return !threeInch && !hardDrive
+  }
+  return hasThreeInchBay && !nibble && !hardDrive
 }
 
 export const getDefaultDiskDriveIndex = (
   filename: string,
   fileSize: number,
-) => isHardDriveImage(filename, fileSize) ? 0 : 2
+  hasThreeInchBay = false,
+) => isThreePointFiveInchImage(filename, fileSize)
+  ? (hasThreeInchBay ? 4 : 0)
+  : isHardDriveImage(filename, fileSize) ? 0 : 2
 
 export const constructAudio = (mp3track: string) => {
   const audioDevice: AudioDevice = {

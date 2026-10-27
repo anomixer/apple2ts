@@ -62,6 +62,12 @@ const Apple2Canvas = (props: DisplayProps) => {
   const hiddenCanvas = useRef<HTMLCanvasElement>(null)
   const hardwareKeyboardKey = useRef<{ code: string, key: number } | null>(null)
   const didNavigateWithKeyboard = useRef(false)
+  // F1 pointer lock (mouse capture). While locked the host pointer stops moving
+  // and every mousemove carries movementX/Y instead, so motion is unbounded by
+  // the window and the guest gets relative counts rather than a screen position.
+  const mouseCaptured = useRef(false)
+  const lastMousePos = useRef({ x: 0.5, y: 0.5 })
+  const capturedMousePos = useRef({ x: 0.5, y: 0.5 })
 
   const pasteHandler = (e: ClipboardEvent) => {
     const canvas = document.getElementById("apple2canvas")
@@ -236,6 +242,26 @@ const Apple2Canvas = (props: DisplayProps) => {
     }
   }
 
+  // F1 captures the mouse (pointer lock) so apps that need the pointer inside
+  // the emulator keep receiving motion even at the window edge; F1 again, or
+  // Escape, releases it. The lock is requested with unadjustedMovement where the
+  // browser supports it so a captured game gets raw counts, not OS acceleration.
+  const toggleMouseCapture = () => {
+    const canvas = myCanvas.current
+    if (!canvas) return
+    if (document.pointerLockElement === canvas) {
+      document.exitPointerLock()
+      return
+    }
+    const requestLock = (options?: PointerLockOptions) => {
+      const result = options ? canvas.requestPointerLock(options) : canvas.requestPointerLock()
+      if (result && typeof result.catch === "function") {
+        result.catch(() => { if (options) requestLock() })
+      }
+    }
+    requestLock({ unadjustedMovement: true })
+  }
+
   const inKeyboardLoop = () => {
     const s6502 = handleGetState6502()
     const switches = handleGetSoftSwitches()
@@ -266,6 +292,13 @@ const Apple2Canvas = (props: DisplayProps) => {
     // bailing out here (rather than inside the meta-key handling) also avoids arming
     // the Open/Closed Apple modifier state for a chord we are not going to send.
     if (isCopyShortcut(e) && hasUITextSelection()) return
+
+    if (e.code === "F1") {
+      e.preventDefault()
+      e.stopPropagation()
+      if (!e.repeat) toggleMouseCapture()
+      return
+    }
 
     let keyHandledLocal = false
     const isBrowserAltKey = e.code === "AltLeft" || e.code === "AltRight"
@@ -515,8 +548,29 @@ const Apple2Canvas = (props: DisplayProps) => {
       if (x < 0 || x > 1 || y < 0 || y > 1) {
         return null
       }
+      lastMousePos.current = { x, y }
     }
     return { x, y, buttons: -1 }
+  }
+
+  // Pointer-locked motion arrives as movementX/Y with clientX/Y frozen, so the
+  // captured position is maintained here. The IIgs is fed relative counts (its
+  // ADB mouse is relative); the other machines only take absolute positions, so
+  // for them the movement is accumulated into a virtual pointer clamped to the
+  // screen.
+  const getCapturedMouseEvent = (movementX: number, movementY: number, buttons = -1): MouseEventSimple => {
+    const canvas = myCanvas.current
+    const w = canvas?.clientWidth || canvas?.width || 0
+    const h = canvas?.clientHeight || canvas?.height || 0
+    const dx = w > 0 ? movementX / w : 0
+    const dy = h > 0 ? movementY / h : 0
+    if (handleGetMachineName() === "APPLE2GS") {
+      return { x: dx, y: dy, buttons, relative: true }
+    }
+    const pos = capturedMousePos.current
+    pos.x = Math.max(0, Math.min(1, pos.x + dx))
+    pos.y = Math.max(0, Math.min(1, pos.y + dy))
+    return { x: pos.x, y: pos.y, buttons }
   }
 
   // Clicks carry the host pointer position on every machine. The IIgs used to
@@ -532,6 +586,10 @@ const Apple2Canvas = (props: DisplayProps) => {
   }
 
   const handleMouseDown = (event: ReactMouseEvent<HTMLCanvasElement>) => {
+    if (mouseCaptured.current) {
+      passMouseEvent(getCapturedMouseEvent(0, 0, event.button === 0 ? 0x10 : 0x11))
+      return
+    }
     const evt = getClickEvent(event, event.button === 0 ? 0x10 : 0x11)
     if (!evt) return
     passMouseEvent(evt)
@@ -543,12 +601,21 @@ const Apple2Canvas = (props: DisplayProps) => {
   }
 
   const handleMouseUp = (event: ReactMouseEvent<HTMLCanvasElement>) => {
+    if (mouseCaptured.current) {
+      passMouseEvent(getCapturedMouseEvent(0, 0, event.button === 0 ? 0x00 : 0x01))
+      return
+    }
     const evt = getClickEvent(event, event.button === 0 ? 0x00 : 0x01)
     if (!evt) return
     passMouseEvent(evt)
   }
 
   const handleMouseMove = (event: ReactMouseEvent<HTMLCanvasElement>) => {
+    if (mouseCaptured.current) {
+      const evt = getCapturedMouseEvent(event.movementX, event.movementY)
+      if (evt.x !== 0 || evt.y !== 0) passMouseEvent(evt)
+      return
+    }
     const evt = scaleMouseEvent(event)
     if (handleGetOverrideHires() && !lockHgrMagnifier) {
       setMagnifierMouseLoc([event.clientX, event.clientY])
@@ -696,6 +763,25 @@ const Apple2Canvas = (props: DisplayProps) => {
       window.removeEventListener("keyup", keyUpListener)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // F1 toggles the pointer lock; Escape releases it without our involvement, so
+  // the capture flag follows the browser rather than our own guess.
+  useEffect(() => {
+    const handlePointerLockChange = () => {
+      const locked = !!myCanvas.current && document.pointerLockElement === myCanvas.current
+      if (locked === mouseCaptured.current) return
+      mouseCaptured.current = locked
+      if (locked) {
+        capturedMousePos.current = { ...lastMousePos.current }
+      } else {
+        // A lock lost mid-drag would otherwise leave the button held down.
+        passMouseEvent({ x: 0, y: 0, buttons: 0x00 })
+        passMouseEvent({ x: 0, y: 0, buttons: 0x01 })
+      }
+    }
+    document.addEventListener("pointerlockchange", handlePointerLockChange)
+    return () => document.removeEventListener("pointerlockchange", handlePointerLockChange)
   }, [])
 
   const setFocus = () => {

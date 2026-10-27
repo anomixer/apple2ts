@@ -2758,6 +2758,13 @@ msgid ""
 "the control panel."
 msgstr ""
 
+msgctxt "startup.mouseCapture"
+msgid ""
+"Press F1 to capture
+"
+"or release mouse."
+msgstr ""
+
 msgctxt "retroControl.ariaLabel"
 msgid "Apple2TS control panel"
 msgstr ""

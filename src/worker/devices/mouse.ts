@@ -570,6 +570,15 @@ const iigsGuestTarget = (event: MouseEventSimple) => {
   return { x: isIigsShr320() ? px >> 1 : px, y: py }
 }
 
+// Signed sibling of iigsGuestTarget for captured (pointer-locked) motion, where
+// x/y are movement fractions and nothing may be clamped to the screen: the ADB
+// carries relative counts, so the guest keeps accumulating past an edge.
+const iigsGuestMotion = (event: MouseEventSimple) => {
+  const px = Math.round(event.x * 639)
+  const py = Math.round(event.y * 399) >> 1
+  return { x: isIigsShr320() ? px >> 1 : px, y: py }
+}
+
 // --- Apple IIgs closed-loop ADB cursor sync ---
 //
 // Ported from gssquared/src/devices/adb/keygloo_mouse_sync.hpp, which selects
@@ -639,6 +648,21 @@ const iigsSetCursorTarget = (event: MouseEventSimple) => {
   adbTargetX = target.x
   adbTargetY = target.y
   adbSyncStaleFrames = 0
+}
+
+// Captured motion bypasses both steering paths. Drop anything an earlier
+// absolute event left behind, or the stepper would keep driving the cursor
+// toward that position while the user's relative motion moves it as well. The
+// dead-reckoning baseline goes too: the first absolute event after a capture
+// session only re-seeds it, so it cannot inject the distance travelled while
+// captured as one jump.
+const stopIigsCursorTarget = () => {
+  adbTargetX = -1
+  adbTargetY = -1
+  adbStepOutstanding = false
+  adbSyncStaleFrames = 0
+  adbLastX = -1
+  adbLastY = -1
 }
 
 // Hand over one queued button transition per frame. A press and its release
@@ -748,6 +772,7 @@ export const iigsMouseStep = (): { dx: number, dy: number } | null => {
 const iigsADBEvent = (event: MouseEventSimple) => {
   // Debug: every event the UI hands to the IIgs path (?adbtrace=1).
   noteAdbLog("ui", event.buttons, event.x, event.y)
+  if (event.relative) stopIigsCursorTarget()
   if (event.buttons >= 0) {
     let button: 0 | 1 = 0
     let pressed = false
@@ -760,6 +785,12 @@ const iigsADBEvent = (event: MouseEventSimple) => {
       case 0x11: button = 1; pressed = true; break    // button 1 (right) down
       default: return
     }
+    if (event.relative) {
+      // Captured pointer: driven by relative motion only, so the guest's own
+      // cursor is already wherever the user put it. A click goes there now.
+      iigsADB.setMouseButton(button, pressed)
+      return
+    }
     if (iigsClosedLoopActive()) {
       // The click is dispatched at the guest cursor, so steer it to the
       // position the UI reported and hold the transition until it arrives.
@@ -769,6 +800,15 @@ const iigsADBEvent = (event: MouseEventSimple) => {
       return
     }
     iigsADB.setMouseButton(button, pressed)
+    return
+  }
+  if (event.relative) {
+    // Pointer-locked host: hand the motion straight to the ADB. There is no
+    // absolute pointer to steer toward (and moving the physical mouse past the
+    // edge of the screen must keep moving the guest cursor), so neither the
+    // closed loop nor dead reckoning applies.
+    const motion = iigsGuestMotion(event)
+    if (motion.x !== 0 || motion.y !== 0) iigsADB.queueMouse(motion.x, motion.y)
     return
   }
   if (event.x < 0 || event.x > 1.0 || event.y < 0 || event.y > 1.0) return

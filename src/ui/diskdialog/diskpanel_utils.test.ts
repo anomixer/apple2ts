@@ -28,6 +28,7 @@ jest.mock("../devices/vera/verasdicon", () => ({
 }))
 jest.mock("../main2worker", () => ({
   passSetRunMode: (...args: unknown[]) => mockPassSetRunMode(...args),
+  handleGetMachineName: () => "APPLE2E",
 }))
 jest.mock("../ui_utilities", () => ({
   showGlobalProgressModal: (...args: unknown[]) => mockShowGlobalProgressModal(...args),

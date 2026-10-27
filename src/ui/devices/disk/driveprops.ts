@@ -4,7 +4,9 @@ import { OneDriveCloudDrive } from "./onedriveclouddrive"
 import { GoogleDrive } from "./googledrive"
 import {
   CLOUD_SYNC,
+  canDriveTakeImage,
   getDefaultDiskDriveIndex,
+  machineHasThreeInchBay,
   getPrimaryDiskUrl,
   MAX_DRIVES,
   RUN_MODE,
@@ -16,7 +18,7 @@ import {
   getDiskBlobForSync,
 } from "../../../common/utility"
 import { clearDialogMessageContext, hasDialogMessageContext, showGlobalProgressModal } from "../../ui_utilities"
-import { passSetDriveNewData, requestSetDriveNewData, passSetDriveProps, passSetBinaryBlock, passPasteText, handleGetRunMode, passSetRunMode } from "../../main2worker"
+import { passSetDriveNewData, requestSetDriveNewData, passSetDriveProps, passSetBinaryBlock, passPasteText, handleGetRunMode, handleGetMachineName, passSetRunMode } from "../../main2worker"
 import { internetArchiveUrlProtocol, getDiskImageUrlFromIdentifier } from "./internetarchive_utils"
 import {
   isDemoZooDiskUrl,
@@ -41,8 +43,11 @@ import {
 // since they just maintain the state that needs to be passed to/from the
 // emulator. But the helper functions were getting too large, so now it's here.
 
-const initDriveProps = (index: number, drive: number, hardDrive: boolean): DriveProps => {
-  return {
+// The IIgs wires the slot-5 3.5" drive pair (indices 4/5); other machines have
+// no 3.5" hardware, so their 3.5"-sized images mount as block volumes.
+const hasThreeInchBay = () => machineHasThreeInchBay(handleGetMachineName())
+
+const initDriveProps = (index: number, drive: number, hardDrive: boolean): DriveProps => {  return {
     index: index,
     hardDrive: hardDrive,
     drive: drive,
@@ -511,18 +516,17 @@ const setDiskOrFileFromBuffer = (
       passPasteText(basic + cmd)
     }
   } else {
-    const defaultDriveIndex = getDefaultDiskDriveIndex(fname, buffer.byteLength)
+    const defaultDriveIndex = getDefaultDiskDriveIndex(fname, buffer.byteLength, hasThreeInchBay())
     const isIdle = handleGetRunMode() === RUN_MODE.IDLE
     const bootsExplicitDrive = !noReset && !noBoot && isIdle && preserveDriveIndex && index === defaultDriveIndex
     if (bootsExplicitDrive) {
       passSetRunMode(RUN_MODE.IDLE)
       resetAllDiskDrives()
     }
-    if (newIndex < 0) {
-      newIndex = defaultDriveIndex
-    } else if (defaultDriveIndex < 2) {
-      if (newIndex < 0 || newIndex > 1) newIndex = defaultDriveIndex
-    } else if (newIndex < 2 || newIndex > 3) {
+    // Keep the bay the user chose; only fall back to the default when that bay
+    // physically cannot hold this media (nibble media in SmartPort, a hard disk
+    // in a floppy bay, 3.5" media in the 5.25" drive).
+    if (!canDriveTakeImage(newIndex, fname, buffer.byteLength, hasThreeInchBay())) {
       newIndex = defaultDriveIndex
     }
     setDiskData(
@@ -1546,12 +1550,15 @@ export const handleSetDiskFromFile = async (disk: string,
     callback(data)
     return true
   } else {
-    const defaultDriveIndex = getDefaultDiskDriveIndex(disk, data.byteLength)
-    if (driveIndex < 0) {
+    const threeInch = hasThreeInchBay()
+    const defaultDriveIndex = getDefaultDiskDriveIndex(disk, data.byteLength, threeInch)
+    if (!canDriveTakeImage(driveIndex, disk, data.byteLength, threeInch)) {
       driveIndex = defaultDriveIndex
     }
+    // Booting means re-scanning the devices, which only makes sense when the
+    // disk landed in one of the primary bays: S7D1, S6D1 or the IIgs S5D1.
     let needsBoot = !noBoot && (preserveDriveIndex
-      ? (driveIndex === 0 || driveIndex === 2)
+      ? (driveIndex === 0 || driveIndex === 2 || driveIndex === 4)
       : handleGetRunMode() === RUN_MODE.IDLE)
     
     if (!noReset && driveIndex < 0) {
@@ -1561,9 +1568,6 @@ export const handleSetDiskFromFile = async (disk: string,
     if (!noReset && needsBoot) {
       if (preserveDriveIndex) passSetRunMode(RUN_MODE.IDLE)
       resetAllDiskDrives()
-      if (!preserveDriveIndex) {
-        driveIndex = defaultDriveIndex
-      }
     }
 
     setDiskData(
