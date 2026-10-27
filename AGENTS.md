@@ -520,7 +520,10 @@ platform is ROM 03).
   The inset must be measured in **CSS pixels**: the 191x110 art is shown at 85x55,
   so one source pixel is worth 0.445 CSS px across but 0.5 down, and equal
   insets render as a visibly thinner gap left and right (6 source px read as
-  ~2.7 and stick to the border). Use ~2x for the sides.
+  ~2.7 and stick to the border). Use ~2x for the sides. `.disk-label-onlight`
+  is sized to the same box and must fit inside it *after* `.disk-label`'s 7px
+  left offset - an 81px plate overflowed the right border and read as the black
+  band sticking out.
 - `iigsInitInterrupts()` runs on **cold boot only**. Ctrl-Reset must preserve low
   memory and `$03F2-$03F4`.
 - IIgs speed labels in the dropdown and in `linkbuilder` / MCP settings must match
