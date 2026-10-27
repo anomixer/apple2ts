@@ -509,9 +509,10 @@ platform is ROM 03).
   the **spindle** (`dprops.spindleOn`, latched by CONT35), not `motorRunning` —
   the 5.25" motor line never drives it. The icons are composited from
   `apple-35-floppy-drive.png` with the house layout (activity lamp bottom-left,
-  filename across the slot, swapper badge bottom-right); because the face is beige
-  the filename needs `.disk-label-onlight`, which the Disk II and the hard card do
-  not because their art is dark where the label lands.
+  filename across the slot, rainbow apple bottom-right so it shares the Disk II
+  and hard-card corner, which is also where the swapper badge lands); because the
+  face is beige the filename needs `.disk-label-onlight`, which the Disk II and
+  the hard card do not because their art is dark where the label lands.
 - `iigsInitInterrupts()` runs on **cold boot only**. Ctrl-Reset must preserve low
   memory and `$03F2-$03F4`.
 - IIgs speed labels in the dropdown and in `linkbuilder` / MCP settings must match
