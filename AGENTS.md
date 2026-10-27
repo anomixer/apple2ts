@@ -513,6 +513,10 @@ platform is ROM 03).
   and hard-card corner, which is also where the swapper badge lands); because the
   face is beige the filename needs `.disk-label-onlight`, which the Disk II and
   the hard card do not because their art is dark where the label lands.
+  The dark band above the drive face is **inset with a beige margin** (like the
+  hard card) and its footprint matches where `.disk-label` paints: a full-bleed
+  black strip fuses with the panel's 1px `.disk-image` border and the whole top
+  reads as one heavy frame, and the label plate then crosses the band's edge.
 - `iigsInitInterrupts()` runs on **cold boot only**. Ctrl-Reset must preserve low
   memory and `$03F2-$03F4`.
 - IIgs speed labels in the dropdown and in `linkbuilder` / MCP settings must match
