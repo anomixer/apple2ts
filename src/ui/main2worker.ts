@@ -362,6 +362,8 @@ export const passSetMachineName = (name: MACHINE_NAME) => {
   machineState.machineName = name
 }
 
+export const passAudioClock = () => doPostMessage(MSG_MAIN.AUDIO_CLOCK, null)
+
 export const passSetVeraFmEnabled = (enabled: boolean) => {
   doPostMessage(MSG_MAIN.VERA_FM_ENABLED, enabled)
 }

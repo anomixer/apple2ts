@@ -1104,7 +1104,23 @@ const doAdvance6502 = () => {
 }
 
 
+let lastAudioClock = -Infinity
+export const advanceFromAudioClock = () => {
+  const now = performance.now()
+  lastAudioClock = now
+  // Each message represents one complete audio-clock interval. Do not gate
+  // it on wall time: render quanta naturally alternate around that deadline.
+  doAdvance6502()
+  nextFrameTime = performance.now() + refreshTime
+}
+
 const doAdvance6502Timer = () => {
+  // AudioWorklet messages keep arriving when background timers are throttled.
+  // Retain the timer as a fallback when the audio context stops or suspends.
+  if (performance.now() - lastAudioClock < 100) {
+    setTimeout(doAdvance6502Timer, 20)
+    return
+  }
   doAdvance6502()
   nextFrameTime += refreshTime
   // Calculate exactly how long until the next frame is due

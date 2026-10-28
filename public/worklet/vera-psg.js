@@ -52,6 +52,7 @@ class VeraPsgProcessor extends AudioWorkletProcessor {
     this.pcmCurL = 0
     this.pcmCurR = 0
     this.pcmPhase = 0
+    this.clockSamples = 0
     this.fmModule = null
     this.fmBuffer = 0
     this.fmCapacity = 128
@@ -337,6 +338,11 @@ class VeraPsgProcessor extends AudioWorkletProcessor {
     const left = output[0]
     const right = output[1] || output[0]
 
+    this.clockSamples += left.length
+    if (this.clockSamples >= sampleRate * 0.0166881) {
+      this.clockSamples -= sampleRate * 0.0166881
+      this.port.postMessage({ type: "audio-clock" })
+    }
     const fm = this.renderFm(left.length)
     for (let i = 0; i < left.length; i++) {
       const psg = this.renderSample()
