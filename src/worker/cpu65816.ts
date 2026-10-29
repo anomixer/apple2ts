@@ -120,7 +120,7 @@ export type WriteCallback = (address: number, value: number) => void;
 export type VectorReadCallback = (address: number) => number;
 
 import { ICPU } from "./icpu";
-import { specialJumpTable, iigsInterruptPending } from "./memory";
+import { specialJumpTable, iigsInterruptPending, memGet, memSet24 } from "./memory";
 import { SWITCHES } from "./softswitches";
 import { s6502 } from "./instructions";
 
@@ -196,6 +196,7 @@ export class CPU65816 implements ICPU {
 
         this.stopped = false;
         this.waiting = false;
+        this.slot5Dp = null;
     }
 
     private traceBuffer: string[] = [];
@@ -240,6 +241,29 @@ export class CPU65816 implements ICPU {
         this.waiting = false;
     }
 
+    // The ROM 01 slot-5 (3.5") firmware at FF:6AB5 uses direct page $57-$5A as
+    // its inline-parameter scratch pointer *before* it copies the caller's
+    // $40-$6E to $E1:$14E2 (FF:6F4D) and copies it back on the way out
+    // (FF:6F70), so the restore hands the caller the firmware's own scratch.
+    // ProDOS 8 keeps nothing there across a block call; Apple Pascal's p-machine
+    // keeps its p-stack pointer ($56/$57) and p-code PC ($58/$59) there and
+    // resumes at a garbage p-code PC, dying with "Execution error # 1" (Card Cat
+    // 1.94 dies scanning slot 5). Keep the caller's four bytes across the call.
+    private slot5Dp: { dp: number; bytes: number[] } | null = null;
+
+    private slot5DriverDirectPage() {
+        if (this.PC === 0x6AB6) {
+            const dp = this.D;
+            this.slot5Dp = {
+                dp, bytes: [0x57, 0x58, 0x59, 0x5a].map(o => memGet((dp + o) & 0xFFFF, false) & 0xFF),
+            };
+        } else if (this.PC === 0x6F7F && this.slot5Dp) {
+            const { dp, bytes } = this.slot5Dp;
+            for (let i = 0; i < 4; i++) memSet24((dp + 0x57 + i) & 0xFFFF, bytes[i]);
+            this.slot5Dp = null;
+        }
+    }
+
     public processInstruction(traceCallback?: ((str: string) => void) | null): number {
         // Debug-only PC trace (?romtrace=1). Off by default.
         recordRomPc((this.PB << 16) | this.PC)
@@ -268,6 +292,8 @@ export class CPU65816 implements ICPU {
 
         const pc = this.PC;
         const pb = this.PB;
+
+        if (pb === 0xFF && (this.PC === 0x6AB6 || this.PC === 0x6F7F)) this.slot5DriverDirectPage()
 
         // Peripheral card hooks (e.g. SmartPort / Hard Drive block access)
         if (pb === 0) {

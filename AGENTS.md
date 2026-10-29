@@ -453,6 +453,22 @@ platform is ROM 03).
   sector back into the block image at `64 + sectorOffset(track, sector, side)`,
   flushed on a data-register read (`iwmFlushWrites35`). Captured 3.5" GCR images
   (`.do`/`.woz` from real media) are still not supported.
+- **The slot-5 firmware clobbers the caller's direct page `$57-$5A`.** The
+  ProDOS-8 entry offset at `$C5FF` is `$0A`, so Apple Pascal's BIOS trampoline
+  (bank-0 `$9E32`, which pops a 13-byte frame) enters at `$C50D`. That stub does
+  `CLC; ROR A; AND #$80; STA $E1:0FB0` (always 0 on this entry) and reaches the
+  shared block driver at `FF:6AB5` (`PHK; PLB; BCC`). The `BCC` path stores its
+  inline parameter pointer in DP `$57-$5A` at `FF:6ACB`/`$6ACD` **before** it
+  saves DP `$40-$6E` to `$E1:$14E2` (`FF:6F4D`), and the exit (`FF:6F70`,
+  `MVN $00,$E1`, PC `$6F7F`) restores that copy — so the caller gets firmware
+  scratch back. ProDOS 8 survives (it keeps nothing live there); Apple Pascal's
+  p-machine keeps its p-stack pointer (`$56/$57`) and p-code PC (`$58/$59`) in
+  the direct page, resumed at p-code PC `$009E` and printed
+  `Execution error # 1` right after `Checking Card Slot 5 of 7` (Card Cat 1.94).
+  `CPU65816.slot5DriverDirectPage()` snapshots the four bytes at `FF:6AB6` and
+  re-applies them at `FF:6F7F`. The other entries (`$C500`/`$C502`/`$C504`/
+  `$C506`/`$C50A`) set `$E1:0FB0 = $C0` instead, take `BMI FF:6AEB`, and never
+  reach the clobber. Regression: `gs_cardcat.test.ts`.
 - `doSetEmuDriveNewData()` must copy `props.isWriteProtected` into the drive
   state, not only the disk data. It used to keep whatever the previous mount
   left there, so a write-protected image mounted as the boot volume made GS/OS
@@ -568,6 +584,10 @@ platform is ROM 03).
   that types.
 - A probe that sends `setKeyboardState({key})` **without `isDown: true`** silently
   takes the release branch and types nothing.
+- `dis65816.cjs` with a plain `{start, bytes}` object ignores `at:`/`count` and
+  decodes the **whole** buffer; if the slice does not end on an instruction
+  boundary it throws mid-print and produces no output at all. Pad the tail with
+  `$EA` (`NOP`) and it decodes cleanly.
 - CDP `Runtime.evaluate` needs `awaitPromise: true` for `decodeAudioData`, and
   large dumps must be chunked (~120k floats per call). Channel data is float
   -1..1, not int16.
@@ -701,7 +721,7 @@ platform is ROM 03).
 ## 13. File map
 
 - `src/worker/cpu65816.ts` — 65816 core, stack normalisation, cycle accounting,
-  IRQ sampling, `specialJumpTable`
+  IRQ sampling, `specialJumpTable`, `slot5DriverDirectPage` (slot-5 DP guard, §7)
 - `src/worker/memory.ts` — bank map, Mega II main/aux, soft switches, `$C02x`/`$C03x`
   registers, text-page sources, SHR extraction, floating bus, slot strobes
 - `src/worker/motherboard.ts` — run loop, video clock, VBL, housekeeping, Ensoniq
@@ -726,7 +746,8 @@ platform is ROM 03).
   `gs_keyboard_adb`, `gs_mcs_nokey`, `gs_silky`, `gs_freegemas`,
   `gs_floppy35` / `gs_floppy35_boot` (3.5" read, write, zone layout),
   `gs_speed`, `gs_boot`, `gs_hdd_boot`, `gs_slots_mockingboard`,
-  `gs_test_coldboot`, `gs_fatal`
+  `gs_test_coldboot`, `gs_fatal`, `gs_cardcat` (Pascal p-machine vs. the slot-5
+  driver's DP clobber)
 
 The only known pre-existing failure is `vera.test.ts` (CMDR-DOS), which also
 fails on a clean tree.
