@@ -4,7 +4,7 @@ import { setCpuPcGetter } from "./cpu_pc"
 import { s6502, setState6502, setCycleCount, setPC, getStackString, get6502Instructions } from "./instructions"
 import { hiresAddressToLine, RUN_MODE, TEST_DEBUG, DEFAULT_SLOT_CONFIG, DEFAULT_SLOT_CONFIG_GS, MEMORY_DUMP_STATE, AUTO_SNAPSHOT } from "../common/utility"
 import { iigsSlotRegisterFor } from "../common/iigs_slots"
-import { resetFloppyDrives, doPauseDrive, getHardDriveState } from "./devices/drivestate"
+import { resetFloppyDrives, doPauseDrive, getHardDriveState, refreshDriveBays } from "./devices/drivestate"
 import { iigsEnsoniq } from "./devices/iigs_ensoniq"
 import { passEnsoniqSound } from "./worker2main"
 // import { slot_omni } from "./roms/slot_omni_cx00"
@@ -827,6 +827,9 @@ export const doSetMachineName = (name: MACHINE_NAME, reset = true, publishState 
     iigsInitInterrupts()
     applyIigsSlotConfig()
   }
+  // The IIgs's slot-5 bays are 3.5" mechanisms regardless of media, the other
+  // machines' are not; the drive states exist before the machine name does.
+  refreshDriveBays()
   if (reset) doReset()
   if (publishState) updateExternalMachineState()
 }

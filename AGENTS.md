@@ -403,6 +403,30 @@ platform is ROM 03).
 - A headerless 800 KB image is 3.5" media whatever its name (`.2mg`, `.po`,
   `.dsk`, `.do`); the 2IMG container adds 64 bytes and may carry a short trailing
   chunk.
+- **A IIgs slot-5 bay is a 3.5" mechanism even with no media in it.** `is35` used
+  to be purely a media property, so an empty bay answered no Sony status lines
+  and the ROM's built-in SMART PORT firmware (`$FF:C500` → shared driver
+  `FF:6AB5`) reported **no units**: Card Cat printed
+  `5 Apple II Liron Drive Controller (SP:0, no units)`. `initDriveState()` cannot
+  look the machine up (drive states are created at module load, possibly while
+  `memory.ts`, which owns the machine name, is still evaluating - the circular
+  import throws `getCurrentMachineName is not a function`), so the bay type is
+  applied by `refreshDriveBays()` from `doSetMachineName()`,
+  `doSetEmuDriveNewData()` and `restoreDriveSaveState()`. Slot 5 then reports
+  `(SP:2) 800 KB 3.5 Disk "DISK 3.5"`, as gssquared does. The `800 KB` vs
+  gssquared's `0 KB` is a ROM-derived capacity for the built-in mechanism and
+  does not follow the media (a zero-filled 800K image still reads 800 KB).
+  Regression: `gs_cardcat.test.ts`.
+- **Slot 7's unit count belongs to the card model, not to gssquared.** gssquared's
+  slot-7 `pdblock3` is Liron firmware that claims 32 units and errors on the DIB
+  reads of its empty ones, hence `SP:32` + "SP DIB read err". Our slot 7 is the
+  generated ProDOS 8 block driver + `$C7C3` SmartPort hook with
+  `SP_MAX_UNIT = 2`, so Card Cat shows `(SP:2)` (probed with a hard-disk image
+  mounted: units 0-2, DIB of the empty unit 2 fails, same error line). With no
+  hard-disk image mounted the card stays disabled at cold boot (the
+  `doSetMachineName` hack that lets a floppy boot first) and Card Cat only prints
+  the generic "Apple II Liron Drive Controller Card" line. Do not grow
+  `SP_MAX_UNIT` to imitate `SP:32`: the extra 30 units are phantom.
 - **A loaded drive must label its track or the panel looks dead.** The drive
   panel renders `DISK_DRIVE_LABELS[index] + driveProps.status`, and only
   `moveHead()` wrote that label - the 3.5" head moves through `moveHead35()`, so
