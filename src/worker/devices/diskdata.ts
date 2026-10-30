@@ -841,11 +841,7 @@ const refreshSense35 = (ds: DriveState, hdsel: number) => {
     case 0x8: setSide35(ds, 0); sense35 = 0; break
     case 0x9: setSide35(ds, 1); sense35 = 0; break
     case 0xC: sense35 = 1; break // double-sided
-    // Disk ready: gssquared's disk_ready is only true once a motor-on settle
-    // has elapsed, and it is cleared when the motor stops. `readyEnd` is the
-    // timestamp of that settle, so it is 0 both when the drive is ready and
-    // when it was never spun - the spindle tells the two apart.
-    case 0xD: sense35 = (ds.readyEnd === 0 && ds.spindleOn) ? 0 : 1; break
+    case 0xD: sense35 = ds.readyEnd ? 1 : 0; break
     case 0xF: sense35 = 0; break // drive installed
     default: sense35 = 0; break
   }

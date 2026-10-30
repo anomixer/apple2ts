@@ -403,20 +403,25 @@ platform is ROM 03).
 - A headerless 800 KB image is 3.5" media whatever its name (`.2mg`, `.po`,
   `.dsk`, `.do`); the 2IMG container adds 64 bytes and may carry a short trailing
   chunk.
-- **A IIgs slot-5 bay is a 3.5" mechanism even with no media in it.** `is35` used
-  to be purely a media property, so an empty bay answered no Sony status lines
-  and the ROM's built-in SMART PORT firmware (`$FF:C500` → shared driver
-  `FF:6AB5`) reported **no units**: Card Cat printed
-  `5 Apple II Liron Drive Controller (SP:0, no units)`. `initDriveState()` cannot
-  look the machine up (drive states are created at module load, possibly while
-  `memory.ts`, which owns the machine name, is still evaluating - the circular
-  import throws `getCurrentMachineName is not a function`), so the bay type is
-  applied by `refreshDriveBays()` from `doSetMachineName()`,
-  `doSetEmuDriveNewData()` and `restoreDriveSaveState()`. Slot 5 then reports
-  `(SP:2) 800 KB 3.5 Disk "DISK 3.5"`, as gssquared does. The `800 KB` vs
-  gssquared's `0 KB` is a ROM-derived capacity for the built-in mechanism and
-  does not follow the media (a zero-filled 800K image still reads 800 KB).
-  Regression: `gs_cardcat.test.ts`.
+- **A IIgs slot-5 bay stays media-driven: an *empty* bay must not report a 3.5"
+  mechanism.** `is35` is a property of the media. Presenting the Sony status
+  lines from an empty bay does make the ROM's built-in SMART PORT firmware
+  (`$FF:C500` → shared driver `FF:6AB5`) report two units, so Card Cat prints
+  `5 Apple II Liron Drive Controller (SP:2) ... 3.5 Disk "DISK 3.5"`, but the
+  ROM's boot-time device scan then allocates ~498 bytes more and GS/OS 6.0.1's
+  ExpressLoad buffer moves from `$7E:FC56` to `$7E:FA64`. 498 ≡ 1 (mod 7), so a
+  7-byte relocation record that used to fit before the bank end starts at
+  `$7E:FFFF`; its `$F5` handler reads the 6 body bytes with `LDA ($52),Y`, which
+  wraps inside bank `$7E` instead of reading `$7F:0000..5`, and MYCRATE.2MG dies
+  with `Sorry, system error $0201 occurred while loading the desk accessory
+  NIFTYLIST.CDA.` The shift is instruction-deterministic and independent of
+  speed mode, RAM size, Sony sense values and unit count, and there is no timing
+  window: Card Cat's own scan needs the status lines early while MYCRATE needs
+  them gone past 4M cycles. gssquared instantiates both slot-5 drives
+  unconditionally, so this looks like a genuine GS/OS 6.0.1 loader bug on real
+  hardware too. An empty bay therefore answers `(SP:0, no units)`; mount 3.5"
+  media and it reports the mechanism and `DISK 3.5` as before. Regressions:
+  `gs_cardcat.test.ts` (empty bay) and `gs_mycrate.test.ts` (boot).
 - **Slot 7's unit count belongs to the card model, not to gssquared.** gssquared's
   slot-7 `pdblock3` is Liron firmware that claims 32 units and errors on the DIB
   reads of its empty ones, hence `SP:32` + "SP DIB read err". Our slot 7 is the
@@ -716,6 +721,15 @@ platform is ROM 03).
    consumed report leaves it unmoved (§6). Verified end to end: the pointer
    tracks relative motion and a left click on "Timetrial mode" starts the board
    (regression: `gs_freegemas.test.ts`).
+9. **GS/OS 6.0.1 ExpressLoad bank straddle — open, guest-side.** MYCRATE.2MG
+   boots from S7 with no slot-5 media (`gs_mycrate`), but the same volume fails
+   with `Sorry, system error $0201 ... NIFTYLIST.CDA` whenever a 3.5" disk is
+   mounted in slot 5 at boot, because the ROM reports the mechanism, the boot
+   allocation grows by ~498 bytes and a 7-byte relocation record lands on
+   `$7E:FFFF` (§7). No emulator setting avoids it other than not presenting the
+   slot-5 mechanism (`GS_35DELAY` bisect: 1M cycles still crashes, 4M/10M boot
+   but Card Cat's scan then fails at both). It is a GS/OS loader limitation, not
+   a drive-model bug; do not "fix" it by hiding the drive.
 
 ---
 
@@ -739,6 +753,7 @@ platform is ROM 03).
 | The MCS splash hangs unless a key arrives | The no-key timeout *is* the demo loader. It crashed because banks `$00`/`$01` kept routing `$C000-$CFFF` to the Mega II soft switches while `$C035` bit 6 asked for fast RAM, so the driver relocation poked I/O instead of copying |
 | A live Tool Locator / Event Manager means the guest publishes its cursor | freegemas keeps its own cursor and reads `$C024` directly; the holes stay `(0,0)` and closed-loop steering pinned its pointer in a corner. The flag says GS/OS is up, not that this program uses the EM cursor |
 | "One refresh is always 1/60 s, so every peripheral must follow machine time" | True for the beam and the 3.5" drive, **false for the 5.25" LSS**: gssquared counts raw CPU cycles for it in every speed mode, because the Disk II firmware's read loop is cycle-timed as well. Scaling it to wall time broke the 5.25" boot at the 2.8 MHz default |
+| An empty slot-5 bay should present the 3.5" mechanism because gssquared always instantiates the drives | The extra unit shifts GS/OS 6.0.1's ExpressLoad buffer by 498 bytes and MYCRATE dies in NIFTYLIST.CDA (§7, §11.9). The bay type follows the media |
 
 ---
 

@@ -59,12 +59,11 @@ test("Card Cat 1.94 completes its slot scan", () => {
     expect(text).toContain("Apple II Mouse Card")
     expect(text).toContain("5.25 Disk Drive Controller Card")
     expect(text).toContain("Apple II Liron Drive Controller Card")
-    // Slot 5 must present the Sony mechanism even with no media in the bay:
-    // the ROM's built-in SmartPort firmware ($FF:C500) probes it and only
-    // reports its two units and the 3.5" DIB ("DISK 3.5") when the drive
-    // answers the status-selector lines. An empty bay used to advertise
-    // "(SP:0, no units)".
-    expect(text).toMatch(/5\s+Apple II Liron Drive Controller \(SP:2\).*3\.5 Disk "DISK 3\.5"/)
+    // Slot 5 is media-driven: with no 3.5" disk in the bay the ROM's built-in
+    // SmartPort firmware reports no units. Presenting a Sony mechanism there
+    // shifts GS/OS's ExpressLoad buffer by 498 bytes and breaks the MYCRATE
+    // boot (gs_mycrate), so the empty bay must stay inert.
+    expect(text).toMatch(/5\s+Apple II Liron Drive Controller \(SP:0, no units\)/)
     // Menu line: the program is alive and waiting for a key.
     expect(text).toContain("[P]rint")
     expect(text).toContain("[Q]uit")

@@ -5,26 +5,9 @@ import { doPauseDiskDrive, doResetDiskDrive } from "./diskdata"
 import { enableHardDrive } from "./harddrivedata"
 import { DRIVE, canDriveTakeImage, isHardDriveImage, isThreePointFiveInchImage, updateWozCrc } from "../../common/utility"
 import { getCurrentMachineName } from "../memory"
-import { buildFloppy35Bitstream, FLOPPY35_OPTIMAL_TIMING, FLOPPY35_TRACKS } from "./floppy35"
-
-const FLOPPY35_MAX_QUARTER_TRACK = FLOPPY35_TRACKS * 2 - 1
-
-// Index of the first floppy drive for a given IIgs drive family slot.
-export const FLOPPY_BASE_INDEX = { 5: 4, 6: 2 } as const
-
-// A IIgs slot-5 bay is a 3.5" mechanism even with no media in it. The ROM's
-// built-in SMART PORT firmware at $FF:C500 probes the selected drive and
-// answers "no units" unless it presents the Sony status lines, which is why an
-// empty bay used to make Card Cat print "(SP:0, no units)".
-const isThreeInchBay = (index: number) =>
-  getCurrentMachineName() === "APPLE2GS" &&
-  index >= FLOPPY_BASE_INDEX[5] && index < FLOPPY_BASE_INDEX[5] + 2
+import { buildFloppy35Bitstream, FLOPPY35_OPTIMAL_TIMING } from "./floppy35"
 
 const initDriveState = (index: number, drive: number, hardDrive: boolean): DriveState => {
-  // The bay type depends on the machine, which is not known here: the drive
-  // states are created at module load, possibly while memory.ts (the owner of
-  // the machine name) is still evaluating. refreshDriveBays() applies it as
-  // soon as a machine is set and after every mount.
   return {
     index: index,
     hardDrive: hardDrive,
@@ -70,26 +53,6 @@ const initializeDriveState = () => {
   for (let i = 0; i < driveState.length; i++) {
     driveData[i] = new Uint8Array()
     driveBitstream[i] = new Uint8Array()
-  }
-}
-
-// Bay type follows the machine, but the drive states are created at module load
-// (before any machine is known), so re-evaluate after a machine switch and
-// after a save-state restore.
-export const refreshDriveBays = () => {
-  for (const ds of driveState) {
-    if (!ds || ds.hardDrive) continue
-    if (isThreeInchBay(ds.index)) {
-      ds.is35 = true
-      if (ds.maxQuarterTrack === 0) ds.maxQuarterTrack = FLOPPY35_MAX_QUARTER_TRACK
-      continue
-    }
-    // Leaving the IIgs turns its empty Sony bays inert again; mounted 3.5"
-    // media keeps the mechanism it was decoded for.
-    if (ds.is35 && ds.filename === "" && !ds.blockMedia35) {
-      ds.is35 = false
-      ds.maxQuarterTrack = 0
-    }
   }
 }
 
@@ -145,6 +108,9 @@ export const getHardDriveData = (drive: number): [Uint8Array, number, number] =>
 export const getDriveStateByIndex = (index: number) => driveState[index]
 export const getDriveDataByIndex = (index: number) => driveData[index]
 export const getDriveBitstreamByIndex = (index: number) => driveBitstream[index] ?? driveData[index]
+
+// Index of the first floppy drive for a given IIgs drive family slot.
+export const FLOPPY_BASE_INDEX = { 5: 4, 6: 2 } as const
 
 export const getFilename = () => {
   for (let i = 0; i < driveState.length; i++) {
@@ -236,7 +202,6 @@ export const restoreDriveSaveState = (newState: DriveSaveState) => {
     currentDrive++
   }
   initializeDriveState()
-  refreshDriveBays()
   let dindex = 0
   for (let i=0; i < newState.driveState.length; i++) {
     // Make sure our drive had data.
@@ -338,10 +303,6 @@ export const doSetEmuDriveNewData = (props: DriveProps, forceIndex: boolean = fa
   // unprotects a protected disk every time an image is inserted.
   driveState[index].isWriteProtected = props.isWriteProtected
   driveData[index] = decodeDiskData(driveState[index], props.diskData, forceIndex)
-  // Re-create wiped the bay type; restore it for the machine before anything
-  // reads the drive (a failed decode leaves the bay empty but still a Sony
-  // mechanism on the IIgs).
-  refreshDriveBays()
   if (driveData[index].length === 0) {
     driveState[index].filename = ""
     driveBitstream[index] = new Uint8Array()
