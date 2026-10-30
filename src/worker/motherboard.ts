@@ -1,3 +1,4 @@
+import { FrameClock } from "./frameclock"
 // Chris Torrence, 2022
 import { passMachineState, passSoftSwitchDescriptions, passWorkerOperationResult } from "./worker2main"
 import { s6502, setState6502, reset6502, setCycleCount, setPC, getStackString, get6502Instructions } from "./instructions"
@@ -87,7 +88,7 @@ let executionBreakpointAddress: number | null = null
 let executionMemoryWrite: MemoryWriteEvent | null = null
 // let heatMapGetMem = false
 let memoryDumpState: MEMORY_DUMP_STATE = MEMORY_DUMP_STATE.NONE
-let nextFrameTime = 0
+const frameClock = new FrameClock()
 let machineName: MACHINE_NAME = "APPLE2EE"
 let veraSlot: VERA_SLOT = 0
 let autoSnapshot: AUTO_SNAPSHOT = AUTO_SNAPSHOT.AUTO_OFF
@@ -723,7 +724,7 @@ export const doStepOut = () => {
 
 const resetRefreshCounter = () => {
   speedTracker = [{time: performance.now(), cycles: s6502.cycleCount}]
-  nextFrameTime = performance.now()
+  frameClock.reset(performance.now())
 }
 
 export const doSetRunMode = (
@@ -1104,48 +1105,27 @@ const doAdvance6502 = () => {
 }
 
 
-let lastAudioClock = -Infinity
-let lastCpuAdvance = -Infinity
 let audioClockPort: MessagePort | null = null
+const advanceScheduledFrame = () => frameClock.advance(
+  performance.now(), refreshTime, doAdvance6502, () => performance.now(),
+)
+
 export const attachAudioClockPort = (port: MessagePort) => {
   audioClockPort?.close()
   audioClockPort = port
-  lastAudioClock = -Infinity
   port.onmessage = () => {
-    const now = performance.now()
-    const resuming = now - lastAudioClock >= 100
-    lastAudioClock = now
-    // A fallback timer may have just executed a frame. Do not execute a
-    // second one immediately when the audio context resumes.
-    if (!resuming || now - lastCpuAdvance >= refreshTime * 0.9) {
-      lastCpuAdvance = now
-      doAdvance6502()
-      nextFrameTime = performance.now() + refreshTime
+    // Audio wakes the worker if background timer throttling made it late.
+    // The shared deadline prevents duplicate frames and catch-up bursts.
+    try {
+      advanceScheduledFrame()
+    } finally {
+      port.postMessage({ type: "ack" })
     }
-    port.postMessage({ type: "ack" })
   }
 }
 
 const doAdvance6502Timer = () => {
-  // AudioWorklet messages keep arriving when background timers are throttled.
-  // Retain the timer as a fallback when the audio context stops or suspends.
-  if (performance.now() - lastAudioClock < 100) {
-    setTimeout(doAdvance6502Timer, 20)
-    return
-  }
-  lastCpuAdvance = performance.now()
-  doAdvance6502()
-  nextFrameTime += refreshTime
-  // Calculate exactly how long until the next frame is due
-  const now = performance.now()
-  let delay = nextFrameTime - now
-  if (delay < 0) {
-    // If we're already past the time for the next frame, we were probably
-    // stopped at a breakpoint or the browser was paused. In that case,
-    // just set the next frame time to now.
-    nextFrameTime = now
-    delay = 0
-  }
-  delay = (cpuRunMode === RUN_MODE.PAUSED) ? 20 : Math.max(1, delay)
+  advanceScheduledFrame()
+  const delay = cpuRunMode === RUN_MODE.PAUSED ? 20 : frameClock.delay(performance.now())
   setTimeout(doAdvance6502Timer, delay)
 }
