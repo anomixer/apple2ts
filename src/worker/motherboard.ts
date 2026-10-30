@@ -1105,13 +1105,25 @@ const doAdvance6502 = () => {
 
 
 let lastAudioClock = -Infinity
-export const advanceFromAudioClock = () => {
-  const now = performance.now()
-  lastAudioClock = now
-  // Each message represents one complete audio-clock interval. Do not gate
-  // it on wall time: render quanta naturally alternate around that deadline.
-  doAdvance6502()
-  nextFrameTime = performance.now() + refreshTime
+let lastCpuAdvance = -Infinity
+let audioClockPort: MessagePort | null = null
+export const attachAudioClockPort = (port: MessagePort) => {
+  audioClockPort?.close()
+  audioClockPort = port
+  lastAudioClock = -Infinity
+  port.onmessage = () => {
+    const now = performance.now()
+    const resuming = now - lastAudioClock >= 100
+    lastAudioClock = now
+    // A fallback timer may have just executed a frame. Do not execute a
+    // second one immediately when the audio context resumes.
+    if (!resuming || now - lastCpuAdvance >= refreshTime * 0.9) {
+      lastCpuAdvance = now
+      doAdvance6502()
+      nextFrameTime = performance.now() + refreshTime
+    }
+    port.postMessage({ type: "ack" })
+  }
 }
 
 const doAdvance6502Timer = () => {
@@ -1121,6 +1133,7 @@ const doAdvance6502Timer = () => {
     setTimeout(doAdvance6502Timer, 20)
     return
   }
+  lastCpuAdvance = performance.now()
   doAdvance6502()
   nextFrameTime += refreshTime
   // Calculate exactly how long until the next frame is due

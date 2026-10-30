@@ -1,5 +1,5 @@
 import { setVeraFmEnabled } from "./devices/vera/vera"
-import { advanceFromAudioClock, doSetRunMode, doSetSpeedMode,
+import { attachAudioClockPort, doSetRunMode, doSetSpeedMode,
   doStepInto, doStepOver, doStepOut, doSetBinaryBlock, doLoadBinary, doRunBinary, doSetIsDebugging, doSetState6502, requestSnapshot, doSetPastedText, forceSoftSwitches,
   forceVideo7Override,
   doSetMemory,
@@ -502,7 +502,7 @@ if (typeof self !== "undefined") {
         doSetMachineName(e.data.payload as MACHINE_NAME)
         break
       case MSG_MAIN.AUDIO_CLOCK:
-        advanceFromAudioClock()
+        if (e.ports[0]) attachAudioClockPort(e.ports[0])
         break
       case MSG_MAIN.VERA_FM_ENABLED:
         setVeraFmEnabled(e.data.payload as boolean)

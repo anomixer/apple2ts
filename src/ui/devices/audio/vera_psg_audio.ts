@@ -1,4 +1,4 @@
-import { passAudioClock } from "../../main2worker"
+import { passAudioClockPort } from "../../main2worker"
 import { isAudioEnabled, registerAudioContext } from "./speaker"
 
 let veraPsgContext: AudioContext
@@ -24,9 +24,9 @@ const initVeraPsgAudio = async () => {
     const fmWasmModule = await WebAssembly.compileStreaming(fetch("js/vera-ym.wasm"))
     await veraPsgContext.audioWorklet.addModule("worklet/vera-psg.js")
     veraPsgNode = new AudioWorkletNode(veraPsgContext, "vera-psg", { processorOptions: { fmWasmModule } })
-    veraPsgNode.port.onmessage = (event) => {
-      if (event.data.type === "audio-clock") passAudioClock()
-    }
+    const clockChannel = new MessageChannel()
+    passAudioClockPort(clockChannel.port1)
+    veraPsgNode.port.postMessage({ type: "clock-port", port: clockChannel.port2 }, [clockChannel.port2])
     veraPsgNode.connect(veraPsgContext.destination)
     veraPsgNode.port.postMessage({ type: "fm-enabled", enabled: isVeraFmAudioEnabled })
   })()

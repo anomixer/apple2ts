@@ -1,3 +1,4 @@
+import { AudioClock } from "./audio-clock.js"
 import createYmfm from "../js/vera-ym.js"
 const WF_PULSE = 0
 const WF_SAWTOOTH = 1
@@ -52,7 +53,7 @@ class VeraPsgProcessor extends AudioWorkletProcessor {
     this.pcmCurL = 0
     this.pcmCurR = 0
     this.pcmPhase = 0
-    this.clockSamples = 0
+    this.audioClock = null
     this.fmModule = null
     this.fmBuffer = 0
     this.fmCapacity = 128
@@ -60,6 +61,10 @@ class VeraPsgProcessor extends AudioWorkletProcessor {
     this.pendingFmWrites = []
     this.fmReady = this.initFm(options.processorOptions.fmWasmModule)
     this.port.onmessage = (e) => {
+      if (e.data.type === "clock-port") {
+        this.audioClock = new AudioClock(sampleRate, e.data.port)
+        return
+      }
       if (Array.isArray(e.data)) {
         for (let i = 0; i < e.data.length; i++) {
           const item = e.data[i]
@@ -338,11 +343,7 @@ class VeraPsgProcessor extends AudioWorkletProcessor {
     const left = output[0]
     const right = output[1] || output[0]
 
-    this.clockSamples += left.length
-    if (this.clockSamples >= sampleRate * 0.0166881) {
-      this.clockSamples -= sampleRate * 0.0166881
-      this.port.postMessage({ type: "audio-clock" })
-    }
+    this.audioClock?.advance(left.length)
     const fm = this.renderFm(left.length)
     for (let i = 0; i < left.length; i++) {
       const psg = this.renderSample()
