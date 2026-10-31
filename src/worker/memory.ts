@@ -530,6 +530,44 @@ const shadowIigsWrite = (offset: number, data: number, aux: boolean) => {
     }
 }
 
+// $C036 bit 4 (SPEED_SHADOW_ALL) gives banks $02-$7F the Mega II shadow handlers
+// banks $00/$01 always get (gssquared set_ram_shadow_banks/bank_shadow_write).
+// GS/OS's copy helper at 08:8A5F brackets a blit with $C035 = $57 and
+// $C036 |= $10 for that reason: the CPU bank picks the target, odd = Mega II aux
+// (while $C029 bit 0 latches the bank), even = main.
+const shadowIigsBankWrite = (bank: number, offset: number, data: number) => {
+    const page = offset >>> 8
+    if (isIigsIolcShadowed()) {
+        // With IOLC shadowing on, the I/O page and the language card belong to
+        // the Mega II rather than to this bank's fast RAM.
+        if (page >= 0xc0 && page <= 0xcf) {
+            memSet(offset, data)
+            return
+        }
+        if (page >= 0xd0 && !SWITCHES.BSR_WRITE.isSet) return
+    }
+    const shadow = iigsRegisters[0x35]
+    const odd = (bank & 1) !== 0
+    const addr17 = (odd ? 0x10000 : 0) | offset
+    let shadowed = false
+    if (offset >= 0x0400 && offset < 0x0800) shadowed = !(shadow & 0x01)
+    else if (offset >= 0x0800 && offset < 0x0c00) shadowed = !(shadow & 0x20)
+    else if (!odd && offset >= 0x2000 && offset < 0x4000) shadowed = !(shadow & 0x02)
+    else if (!odd && offset >= 0x4000 && offset < 0x6000) shadowed = !(shadow & 0x04)
+    // $2000-$5FFF is both the AUXHGR and SHR window, so either inhibit clear
+    // is enough; SHR is checked first, as in gssquared shadow_is_enabled().
+    if (!shadowed && addr17 >= 0x12000 && addr17 < 0x1a000) shadowed = !(shadow & 0x08)
+    if (!shadowed && addr17 >= 0x12000 && addr17 < 0x16000) shadowed = !(shadow & 0x10)
+    if (shadowed) {
+        if (odd && (iigsRegisters[0x29] & 0x01)) {
+            megaIIAux[isIigsAuxLinear() ? iigsAuxLinearToPhys(offset) : offset] = data
+        } else {
+            megaIIMain[offset] = data
+        }
+    }
+    gsRAM[(bank << 16) | offset] = data
+}
+
 export const memSet24 = (address: number, data: number) => {
     let bank = (address >> 16) & 0xFF;
     const offset = address & 0xFFFF;
@@ -639,9 +677,14 @@ export const memSet24 = (address: number, data: number) => {
         return;
     }
     
-    // Bank 02-7F: 8MB of pure, linear 65816 Fast RAM
+    // Bank 02-7F: 8MB of pure, linear 65816 Fast RAM. $C036 bit 4 optionally
+    // mirrors writes into the Mega II RAM the video scanner reads.
     if (bank >= 0x02 && bank < 0x80) {
-        gsRAM[(bank << 16) | offset] = data;
+        if (iigsRegisters[0x36] & 0x10) {
+            shadowIigsBankWrite(bank, offset, data)
+        } else {
+            gsRAM[(bank << 16) | offset] = data;
+        }
     }
 }
 

@@ -131,6 +131,17 @@ loop. Never "improve" a gssquared behaviour by inventing something; port it.
   stayed a uniform palette-0 blue although the game was blitting every frame
   (§11.7). `$2000-$5FFF` needs either the SHR or the AUXHGR inhibit clear,
   `$6000-$9FFF` is SHR only.
+- **`SPEED_SHADOW_ALL` (`$C036` bit 4) extends that shadow to banks `$02-$7F`**
+  (`shadowIigsBankWrite`, from gssquared `set_ram_shadow_banks` +
+  `bank_shadow_write`). GS/OS's block-copy helper (`$08:8A5F`) brackets a copy
+  with `$C035 = $57` / `$C036 |= $10` and restores `$1E`/`$84` through long
+  `$E0C03x` writes. The CPU bank selects the target: odd banks address Mega II
+  aux (while `$C029` bit 0 latches the bank, linearized with SHR), even banks
+  address main; the `$C035` inhibit bits still apply. With it set, `$xxC000-$xxCFFF`
+  is the Mega II I/O page while IOLC shadowing is on. Ignoring the bit left
+  Arkanoid (launched from MYCRATE) without its bricks and with permanent ball
+  trails: its playfield compose lives in bank `$09`, and only the direct `$E1`
+  paddle blit reached the screen (§11.10).
 - **Floating bus**: `memory.ts` keeps a byte (power-on `$EE`) refreshed from the
   video scanner. An empty slot's `$C0xx` read returns it. Returning
   `Math.random()` made every run of MCS differ (76 reads, the first at `$C300`,
@@ -730,6 +741,16 @@ platform is ROM 03).
    slot-5 mechanism (`GS_35DELAY` bisect: 1M cycles still crashes, 4M/10M boot
    but Card Cat's scan then fails at both). It is a GS/OS loader limitation, not
    a drive-model bug; do not "fix" it by hiding the drive.
+10. **Arkanoid from MYCRATE: no bricks, permanent sprite trails — RESOLVED.**
+    Same disk boots fine from floppy and the MYCRATE copy works in
+    gssquared/gsplus, so the fault was ours. The game composes its playfield in
+    bank `$09` inside a GS/OS copy bracketed by `$C035 = $57` / `$C036 |= $10`
+    (`$08:8A5F`), i.e. it relies on `SPEED_SHADOW_ALL` to mirror bank `$09`
+    writes into Mega II aux; the paddle is blitted straight to `$E1`, which is
+    why it moved while the bricks never appeared and old pixels were never
+    erased. We ignored `$C036` bit 4, so bank-$09 stores stayed in fast RAM —
+    bank `$09` held the level while `$E1` kept the hatch wall. Fix:
+    `shadowIigsBankWrite` (§2). Regression: `gs_shadow_all.test.ts`.
 
 ---
 
@@ -786,7 +807,7 @@ platform is ROM 03).
   `gs_floppy35` / `gs_floppy35_boot` (3.5" read, write, zone layout),
   `gs_speed`, `gs_boot`, `gs_hdd_boot`, `gs_slots_mockingboard`,
   `gs_test_coldboot`, `gs_fatal`, `gs_cardcat` (Pascal p-machine vs. the slot-5
-  driver's DP clobber)
+  driver's DP clobber), `gs_shadow_all` (`SPEED_SHADOW_ALL`)
 
 The only known pre-existing failure is `vera.test.ts` (CMDR-DOS), which also
 fails on a clean tree.
