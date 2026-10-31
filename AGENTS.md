@@ -173,7 +173,7 @@ loop. Never "improve" a gssquared behaviour by inventing something; port it.
 | `$C031` | disk control: bit 6 `EN35` selects the 3.5"/5.25" family, bit 7 `HDSEL` |
 | `$C033/$C034` | RTC data/control (see below) |
 | `$C035` | `STAT` shadowing: bit 0 = text page 1, bit 5 = text page 2 (clear = shadowed into Mega II main), bit 6 = `SHADOW_INH_IOLC` (see §2) |
-| `$C036` | bit 7 = CPU clock: 1 = 2.8 MHz, 0 = 1.024 MHz |
+| `$C036` | bit 7 = CPU clock: 1 = 2.8 MHz, 0 = 1.024 MHz; bit 4 = `SPEED_SHADOW_ALL` (§2) |
 | `$C03C-$C03F` | Ensoniq DOC (§5) |
 | `$C046` | `INTFLAG`: bit 7 = a source is pending AND enabled. **Cold boot must read 0**, or the ROM runs its diagnostic self-test and prints `System Bad: GGGG0000`. |
 | `$C047` | interrupt acknowledge |
