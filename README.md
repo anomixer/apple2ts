@@ -14,7 +14,7 @@ Note: The integrated server and CLI were moved out of this repository into `appl
 
 ## Dynamic Expansion Slot Configuration
 
-Apple2TS features a flexible **Expansion Slot Configuration** system allowing real-time configuration of expansion cards across Slots 1 through 7 via the Machine Settings menu:
+Apple2TS features a flexible **Expansion Slot Configuration** system allowing real-time configuration of expansion cards across Slots 1 through 7 via the Machine Settings menu. The table below describes the classic (II+/IIe) family profile:
 
 - **Slot 1**: *Super Serial Card (Printer / Serial Communications)
 - **Slot 2**: *Microsoft Z-80 SoftCard (CP/M), VERA Graphics Card, Passport MIDI Card
@@ -26,7 +26,7 @@ Apple2TS features a flexible **Expansion Slot Configuration** system allowing re
 
 * = Default Card
 
-Single-instance cards automatically handle slot exclusivity, and UI peripheral buttons (printer, floppy drives, hard drives) dynamically disable and grey out when their respective slot is set to `None`.
+The explicit `CLASSIC_PROFILE` / `GS_PROFILE` models in `src/common/machine_profile.ts` are the source of truth for slot defaults, speed tables, boot/disk bay rules, and UI capabilities. Classic defaults vary by exact model (`APPLE2P`: slot 3 `videoterm`; `APPLE2EU`/`APPLE2EE`: aux-card RAM variants), while the IIgs profile exposes built-in slot functions and has no VERA or Passport entry. Single-instance cards automatically handle slot exclusivity, and UI peripheral buttons (printer, floppy drives, hard drives) dynamically disable and grey out when their respective slot is set to `None`.
 
 ---
 
