@@ -113,8 +113,10 @@ loop. Never "improve" a gssquared behaviour by inventing something; port it.
   the four names again in preference loading, speed-context migration, or URL
   parsing; use `ALL_MACHINE_NAMES` and keep the target fallback as it is.
 - Deployment targets still filter their Settings/MCP remote menus, but local
-  development is intentional: Vite's serve mode sets `A2TS_DEV_MACHINES`
-  (`vite.config.ts`), so `app_target.ts` lists both families locally. A target
+  development is intentional: Vite's serve mode must define
+  `process.env.A2TS_DEV_MACHINES` in `vite.config.ts`, so `app_target.ts` lists
+  both families locally. Omitting that define silently leaves a dev server
+  classic-only and also rejects `?machine=apple2gs` URL speed parsing. A target
   build exposes only its production family in Settings. Explicit title-link
   surfaces deliberately cross the boundary: `inputparams.ts` accepts every
   `ALL_MACHINE_NAMES` machine from `?machine=` (no `APP_MACHINE_NAMES` filter),
@@ -1407,8 +1409,11 @@ intact. Regression: `save_restore_adb.test.ts`.
   are a working accelerator option rather than a dead selection. Regression:
   `gs_speed_clock.test.ts` pins all four speed rows against a slow `$C036`
   toggle: the machine keeps its refresh budget and the video clock still advances
-  raw CPU cycles. The Card Cat census was a temporary measurement
-  (`tmp-gs-cardcat-speed.test.ts`, external image), not a CI production test.
+  raw CPU cycles. A real browser check
+  (`Temp\opencode\gs-cardcat-boot-time.cjs`) reaches the `[Q]uit` menu in 52 s at
+  1.02 MHz, 22 s at 2.8 MHz, 18 s at 7.1 MHz, and 16 s at 14.3 MHz. The Card Cat
+  census was a temporary measurement (`tmp-gs-cardcat-speed.test.ts`, external
+  image), not a CI production test.
 - gssquared, KEGS and GSplus model no accelerator, so there was nothing to port:
   making 7.1/14.3 meaningful required the speed-override decision (§8). The old
   ROM fallback was `$FF:A0D0` → `$FF:A5A3` at "Check startup device!"; VBL/refresh
