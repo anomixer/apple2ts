@@ -322,11 +322,18 @@ export const setPreferenceSlotConfig = (
   notifySettingsChanged([1, 2, 3, 4, 5, 6, 7].map(slot => `slots.${slot}`), origin)
 }
 
+export const SPEED_MODE_MACHINE_KEY = "speedModeMachineName"
+const SPEED_FAMILIES = (machineName: string | null) =>
+  machineName === "APPLE2GS" ? "GS" : "CLASSIC"
+
 const savePreferenceSpeedMode = (mode: number) => {
   if (mode === 0) {
     localStorage.removeItem("speedMode")
+    localStorage.removeItem(SPEED_MODE_MACHINE_KEY)
   } else {
     localStorage.setItem("speedMode", JSON.stringify(mode))
+    const machineName = handleGetMachineName()
+    localStorage.setItem(SPEED_MODE_MACHINE_KEY, JSON.stringify(machineName))
   }
 }
 
@@ -545,13 +552,40 @@ export const loadPreferences = () => {
     }
   }
 
+  // A saved speed is a machine-specific choice. The stored speed mode is an
+  // index into a different clock table on the IIgs than on the IIe, so an index
+  // saved while running the GS must not survive after the machine falls back to
+  // a classic machine. Choose the machine first, then apply the speed only when
+  // it was saved against the same machine family (`speedModeMachineName`).
+  // The first load after this change finds legacy speed entries without that
+  // context; drop them once rather than letting an old 2.8 MHz index become
+  // 2 MHz on a classic machine. A new speed selection writes the context.
+  const machineName = getPreferenceMachineName()
+  passSetMachineName(machineName)
+
   const speedMode = localStorage.getItem("speedMode")
-  if (speedMode) {
+  const speedModeMachineRaw = localStorage.getItem(SPEED_MODE_MACHINE_KEY)
+  let savedSpeedFamily: string | null = null
+  if (speedModeMachineRaw) {
+    try {
+      const savedSpeedMachine = JSON.parse(speedModeMachineRaw) as MACHINE_NAME
+      if (["APPLE2P", "APPLE2EU", "APPLE2EE", "APPLE2GS"].includes(savedSpeedMachine)) {
+        savedSpeedFamily = SPEED_FAMILIES(savedSpeedMachine)
+      }
+    } catch {
+      savedSpeedFamily = null
+    }
+  }
+  if (speedMode && savedSpeedFamily === SPEED_FAMILIES(machineName)) {
     try {
       passSpeedMode(JSON.parse(speedMode))
     } catch {
       localStorage.removeItem("speedMode")
+      localStorage.removeItem(SPEED_MODE_MACHINE_KEY)
     }
+  } else if (speedMode) {
+    localStorage.removeItem("speedMode")
+    localStorage.removeItem(SPEED_MODE_MACHINE_KEY)
   }
 
   const machineName = localStorage.getItem("machineName")
