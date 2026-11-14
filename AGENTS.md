@@ -126,6 +126,46 @@ loop. Never "improve" a gssquared behaviour by inventing something; port it.
   Settings stays GS-only. `getAppMachineNameOrDefault` remains the
   Settings/remote-API fallback contract. Menu order stays II+, IIe unenhanced,
   IIe enhanced, IIgs.
+- Deployment builds: `npm run build:apple2ts` / `build:apple2gts` run `prebuild`
+  and then `tools/build-target.mjs`, which sets `BUILD_TARGET` and invokes `tsc`
+  then Vite. A targeted build lands in `dist/apple2ts` / `dist/apple2gts`; a
+  plain `npm run build` keeps the generic `dist` used by Cloudflare Pages.
+  `BUILD_TARGET` selects `APP_TARGET` metadata, favicon, manifest and CNAME
+  (`apple2ts.com` / `apple2gts.com`), and `vite.config.ts`'s
+  `app-target-metadata` plugin substitutes the title/description/favicon and
+  writes the target manifest and CNAME into the output directory. The target
+  is also a browser-bundle define, so `process.env.BUILD_TARGET` inside
+  `app_target.ts` matches the build. Both targeted builds were run locally:
+  `apple2ts` emits title `Apple2TS - Apple II Emulator in TypeScript`,
+  `favicon.png`, `CNAME apple2ts.com`; `apple2gts` emits title `Apple2GTS -
+  Apple IIgs Emulator in TypeScript`, `favicon-gts.svg`, `CNAME apple2gts.com`,
+  and both manifests carry their own name/description. Regression coverage:
+  `app_target.test.ts`, `machinemenu_target.test.tsx`,
+  `machinemenu_target_gts.test.tsx`, and the explicit-URL cases in
+  `inputparams.test.ts`.
+- Deployment workflows: both `.github/workflows/main-build-deploy.yml` and
+  `pull-request-build-only.yml` build both targets. The main workflow uploads
+  `dist/apple2ts` to Github Pages with the built-in `GITHUB_TOKEN`; it also
+  pushes `dist/apple2gts` to `ct6502/apple2gts`'s `gh-pages` branch and sends
+  the `apple2ts-deploy` repository-dispatch event using `APPLE2GTS_TOKEN`.
+  If that secret is absent, the apple2ts deployment still runs and only the
+  apple2gts deploy/dispatch steps are skipped. The workflow verifies each
+  output's `CNAME` before deployment. GitHub Pages deployment cannot be tested
+  locally beyond the build output and browser checks below.
+- Production browser validation for the cross-target boundary: served the
+  built `dist/apple2ts` on 6510 and `dist/apple2gts` on 6511 from a temporary
+  static server. Both Settings droplists stayed target-filtered (`Apple II+`,
+  `Apple IIe (unenhanced)`, `Apple IIe (enhanced)` on apple2ts; only `Apple
+  IIgs` on apple2gts), Link Builder offered all four rows on both, and page
+  titles matched the target. Loading `?machine=apple2gs` on the apple2ts build
+  and `?machine=apple2ee` on the apple2gts build then made Link Builder's
+  current-machine row show Apple IIgs and Apple IIe (enhanced) respectively,
+  proving the explicit URL machine reached the running machine even though the
+  Settings droplist stayed filtered. This is expected: the Settings droplist
+  can show no selection for the cross-family runtime machine, while Link
+  Builder reads `handleGetMachineName` and reflects it. The UI test helper is
+  temporary, not a CI regression. No new PR until the stack, CI and diff are
+  stable and the user approves.
 - Regressions: `machine_profile.test.ts` (profile identity, GS built-ins/no VERA,
   classic slot-3 variants, stale classic VERA sanitizes on GS, CPU tables, boot/
   disk bays, defaults) and `gs_slots_mockingboard.test.ts` (machine switch keeps
