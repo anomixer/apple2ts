@@ -4,6 +4,7 @@
 import { setSlotDriver, setSlotIOCallback, memGet, memSet, memSetC000, memGetC000 } from "../memory"
 import { registerSlotCardState } from "./slot_card_state"
 import { MouseEventSimple } from "../../common/utility"
+import { getMachineCapabilities } from "../../common/machine_profile"
 import { interruptRequest } from "../cpu6502"
 import { s6502 } from "../instructions"
 import { passShowAppleMouse } from "../worker2main"

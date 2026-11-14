@@ -1,4 +1,5 @@
 import { RUN_MODE } from "../../common/utility"
+import { getMachineProfile, getProfileSpeedOptions } from "../../common/machine_profile"
 import { handleGetTextPageAsString, handleGetState6502, handleGetRunMode, handleGetMachineName, handleGetStackString, handleGetSoftSwitches, handleGetBreakpoints, handleGetTracelog, handleGetTracing, handleGetSpeedMode, handleGetMemoryResource } from "../main2worker"
 import { MCPResourceURI, MCPResource } from "./mcp_server"
 import { getUIState } from "../ui_settings"

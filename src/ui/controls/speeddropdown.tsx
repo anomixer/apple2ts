@@ -21,17 +21,9 @@ import type { RetroControlMetadata } from "../retro/retromenucontext"
 import { createControlContext } from "../retro/retromenucontext"
 import { ControlRegistry } from "./controlregistry"
 import { controlsFromJson, choiceBinding, type RetroControlBindings } from "../retro/retrocontrolmetadata"
+import { getMachineProfile, getProfileSpeedLabel, getProfileSpeedOptions } from "../../common/machine_profile"
 
 export const SPEED_MODES = [-2, -1, 0, 1, 2, 3, 4] as const
-const SPEED_LABEL_KEYS = [
-  "retroControl.snail",
-  "retroControl.slow",
-  "retroControl.normal",
-  "retroControl.twoMhz",
-  "retroControl.threeMhz",
-  "retroControl.fast",
-  "retroControl.warp",
-] as const
 
 const speedBindings: RetroControlBindings = {
   "options.speed": {
@@ -39,7 +31,11 @@ const speedBindings: RetroControlBindings = {
       options: context => SPEED_LABEL_KEYS.map(key => ({ label: context.t(key) })),
       currentIndex: () => SPEED_MODES.indexOf(handleGetSpeedMode() as typeof SPEED_MODES[number]),
       select: (context, index) => {
-        setPreferenceSpeedMode(SPEED_MODES[index], context.settingsOrigin)
+        const profile = getMachineProfile(handleGetMachineName())
+        const option = getProfileSpeedOptions(profile)[index]
+        if (option) {
+          setPreferenceSpeedMode(option.mode as -2 | -1 | 0 | 1 | 2 | 3 | 4, context.settingsOrigin)
+        }
         context.displayProps.updateDisplay()
       },
     }),

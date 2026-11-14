@@ -65,14 +65,16 @@ export const SettingsDialog = (props: DisplayProps) => {
   const machineStrings = [t("machine.models.apple2ee"), t("machine.models.apple2eu"), t("machine.models.apple2p")]
   const machineIndex = machineNames.indexOf(machineName)
 
-  const slotConfig = handleGetSlotConfig()
+  const machineProfile = getMachineProfile(machineName)
+  const machineCapabilities = getMachineCapabilities(machineName)
+  const slotConfig = sanitizeSlotConfig(handleGetSlotConfig(), machineName)
 
   const mem = handleGetMemSize()
   const memIndex = mem > 8000 ? 4 : mem > 4000 ? 3 : mem > 1000 ? 2 : mem > 500 ? 1 : 0
   const ramdisk = ramdiskValues[memIndex]
 
   const handleSelectSlotCard = (slot: 1 | 2 | 3 | 4 | 5 | 6 | 7, cardId: SLOT_CARD_ID, ramSizeKb = 64) => {
-    const currentConfig = handleGetSlotConfig()
+    const currentConfig = sanitizeSlotConfig(handleGetSlotConfig(), machineName)
     const newConfig = { ...currentConfig }
 
     // Single-instance cards (all except 'none' and 'mockingboard'): remove from other slots
@@ -314,7 +316,9 @@ export const SettingsDialog = (props: DisplayProps) => {
                 }
               }}
             />
-            {(currentCard === "mockingboard" || currentCard === "passport" || currentCard === "vera") &&
+            {(currentCard === "mockingboard" ||
+              (machineCapabilities.hasPassport && currentCard === "passport") ||
+              (machineCapabilities.hasVeraCard && currentCard === "vera")) &&
               <SlotAudioConfig {...props} card={currentCard} slot={slot} />}
             </div>
           )

@@ -250,7 +250,11 @@ export const softCard = new SoftCard(2)
 let currentSlotConfig: SlotConfig = { ...DEFAULT_SLOT_CONFIG }
 
 export const doSetSlotConfig = (config: SlotConfig) => {
-  currentSlotConfig = { ...config }
+  // The UI may post the saved classic layout first, before it applies a new
+  // machine name. Never let a card that the selected machine has no hardware for
+  // linger in the worker's slot config: a stale VERA at $C0xx otherwise keeps
+  // its audio control visible after switching to the IIgs.
+  currentSlotConfig = sanitizeSlotConfig(config, machineName)
   didConfiguration = false
   configureMachine()
   updateExternalMachineState()
@@ -579,8 +583,11 @@ export const doSetMachineName = (name: MACHINE_NAME, reset = true, publishState 
       currentSlotConfig[3] = "videoterm"
     }
   } else {
-    if (currentSlotConfig[3] !== "none" && currentSlotConfig[3] !== "aux" && currentSlotConfig[3] !== "vidhd") {
-      currentSlotConfig[3] = "aux"
+    // Switching between classic models keeps the user's card layout; only slot
+    // 3 has to change family (Videoterm on the II+, RAMWorks on the IIe).
+    const slot3Cards = getProfileSlotChoices(profile, name, 3).map(choice => choice.card)
+    if (!slot3Cards.includes(currentSlotConfig[3])) {
+      currentSlotConfig[3] = getProfileDefaultSlotConfig(profile, name)[3]
     }
   }
   didConfiguration = false
@@ -592,6 +599,18 @@ export const doSetMachineName = (name: MACHINE_NAME, reset = true, publishState 
 
 export const doSetVeraSlot = (slot: VERA_SLOT) => {
   if (slot !== 0 && slot !== 2 && slot !== 4) return
+  if (!getMachineCapabilities(machineName).hasVeraCard) {
+    // Preferences keep a classic VERA slot across machine switches, but the
+    // IIgs has no slot card bus position for it. Clearing it here must not
+    // mutate the GS Control Panel's built-in slot assignments.
+    if (veraSlot !== 0) {
+      veraSlot = 0
+      didConfiguration = false
+      configureMachine()
+      updateExternalMachineState()
+    }
+    return
+  }
   if (veraSlot === slot) return
   veraSlot = slot
   if (slot === 2) {

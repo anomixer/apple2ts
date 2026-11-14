@@ -324,7 +324,7 @@ export const setPreferenceSlotConfig = (
 
 export const SPEED_MODE_MACHINE_KEY = "speedModeMachineName"
 const SPEED_FAMILIES = (machineName: string | null) =>
-  machineName === "APPLE2GS" ? "GS" : "CLASSIC"
+  getMachineProfile((machineName || "APPLE2EE") as MACHINE_NAME).family === "gs" ? "GS" : "CLASSIC"
 
 const savePreferenceSpeedMode = (mode: number) => {
   if (mode === 0) {

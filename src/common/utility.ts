@@ -1,5 +1,6 @@
 import { KeyboardEvent } from "react"
 import { convertwoz2dsk } from "./convertwoz2dsk"
+import { CLASSIC_PROFILE, GS_PROFILE, getMachineCapabilities, getProfileDefaultSlotConfig } from "./machine_profile"
 
 // Be sure to update this version whenever the save state format changes.
 export const SAVE_STATE_VERSION = 2.0
@@ -143,15 +144,10 @@ export enum MSG_MAIN {
   VERA_SD_CLEAR_CHANGES,
 }
 
-export const DEFAULT_SLOT_CONFIG: SlotConfig = {
-  1: "ssc",
-  2: "none",
-  3: "aux",
-  4: "mockingboard",
-  5: "mouse",
-  6: "disk2",
-  7: "smartport",
-}
+// Compatibility exports for legacy callers. The source of truth now lives in
+// machine_profile.ts, keyed by the actual machine.
+export const DEFAULT_SLOT_CONFIG: SlotConfig =
+  getProfileDefaultSlotConfig(CLASSIC_PROFILE, "APPLE2EE")
 
 export enum AUTO_SNAPSHOT {
   AUTO_OFF,
