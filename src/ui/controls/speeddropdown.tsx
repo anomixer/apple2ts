@@ -7,7 +7,8 @@ import {
 } from "@fortawesome/free-solid-svg-icons"
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome"
 import PopupMenu from "./popupmenu"
-import { handleGetSpeedMode } from "../main2worker"
+import { handleGetMachineName, handleGetSpeedMode } from "../main2worker"
+
 import { setPreferenceSpeedMode } from "../localstorage"
 import { snailIcon } from "../img/icon_snail"
 import { turtleIcon } from "../img/icon_turtle"
@@ -28,8 +29,17 @@ export const SPEED_MODES = [-2, -1, 0, 1, 2, 3, 4] as const
 const speedBindings: RetroControlBindings = {
   "options.speed": {
     ...choiceBinding({
-      options: context => SPEED_LABEL_KEYS.map(key => ({ label: context.t(key) })),
-      currentIndex: () => SPEED_MODES.indexOf(handleGetSpeedMode() as typeof SPEED_MODES[number]),
+      options: context => {
+        const profile = getMachineProfile(handleGetMachineName())
+        return getProfileSpeedOptions(profile).map(option => ({
+          label: getProfileSpeedLabel(profile, option.mode, context.t),
+        }))
+      },
+      currentIndex: () => {
+        const profile = getMachineProfile(handleGetMachineName())
+        return getProfileSpeedOptions(profile).findIndex(option =>
+          option.mode === handleGetSpeedMode())
+      },
       select: (context, index) => {
         const profile = getMachineProfile(handleGetMachineName())
         const option = getProfileSpeedOptions(profile)[index]

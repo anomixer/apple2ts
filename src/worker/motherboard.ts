@@ -3,6 +3,8 @@ import { FrameClock } from "./frameclock"
 import { passMachineState, passSoftSwitchDescriptions, passWorkerOperationResult } from "./worker2main"
 import { s6502, setState6502, reset6502, setCycleCount, setPC, getStackString, get6502Instructions } from "./instructions"
 import { hiresAddressToLine, RUN_MODE, TEST_DEBUG, DEFAULT_SLOT_CONFIG, MEMORY_DUMP_STATE, AUTO_SNAPSHOT } from "../common/utility"
+import { getMachineCapabilities, getMachineProfile, getProfileDefaultSlotConfig, getProfileSlotChoices } from "../common/machine_profile"
+import { sanitizeSlotConfig } from "../common/slot_options"
 import { resetFloppyDrives, doPauseDrive, getHardDriveState } from "./devices/drivestate"
 // import { slot_omni } from "./roms/slot_omni_cx00"
 import { SWITCHES, overrideSoftSwitch, resetSoftSwitches, setVideo7Override,
@@ -578,6 +580,7 @@ export const doLoadBinary = (
 
 export const doSetMachineName = (name: MACHINE_NAME, reset = true, publishState = true) => {
   machineName = name
+  const profile = getMachineProfile(name)
   if (name === "APPLE2P") {
     if (currentSlotConfig[3] !== "none" && currentSlotConfig[3] !== "videoterm" && currentSlotConfig[3] !== "vidhd") {
       currentSlotConfig[3] = "videoterm"

@@ -256,21 +256,16 @@ export function getMCPResource(uri: MCPResourceURI): MCPResource | null {
         const machineName = handleGetMachineName()
         const runMode = handleGetRunMode()
         
-        const speedNames = [
-          "0.1 MHz (Snail)",
-          "0.5 MHz (Slow)",
-          "1 MHz (Normal)",
-          "2 MHz",
-          "3 MHz",
-          "4 MHz (Fast)",
-          "Ludicrous"
-        ]
-        const speedName = speedNames[speedMode + 2]
+        const profile = getMachineProfile(machineName)
+        const speedNames = getProfileSpeedOptions(profile).map(option => option.mcpLabel)
+        const speedName = speedNames[getProfileSpeedOptions(profile)
+          .findIndex(option => option.mode === speedMode)]
         
         const machineNames: Record<MACHINE_NAME, string> = {
           "APPLE2P": "Apple II+",
           "APPLE2EU": "Apple IIe (Unenhanced)",
-          "APPLE2EE": "Apple IIe (Enhanced)"
+          "APPLE2EE": "Apple IIe (Enhanced)",
+          "APPLE2GS": "Apple IIgs"
         }
         const machineDisplayName = machineNames[machineName]
         

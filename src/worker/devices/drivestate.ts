@@ -29,6 +29,16 @@ const initDriveState = (index: number, drive: number, hardDrive: boolean): Drive
     writableFileHandle: null,
     lastAppleWriteTime: -1,
     optimalTiming: 32,  // bits per 125 ns, so 32 = 4 µs
+    // Layer 1 keeps the classic drive model; the GS 3.5" mechanics arrive in
+    // Layer 2. The fields stay at their classic defaults here so the shared
+    // DriveState type can be used without importing GS media helpers.
+    is35: false,
+    blockMedia35: false,
+    spindleOn: false,
+    stepDirection: 0,
+    diskSwitched: false,
+    stepEnd: 0,
+    readyEnd: 0,
   }
 }
 

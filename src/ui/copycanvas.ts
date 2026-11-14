@@ -38,7 +38,7 @@ export const handleCopyToClipboard = () => {
     const hasLowerCase = (ncharsPerLine === 80) || machineTraits.hasLowerCase
     const useApple2PlusMap = (ncharsPerLine !== 80) && machineTraits.usesApple2PlusMap
     let output = ""
-    const hasMouseText = machineName === "APPLE2EE"
+    const hasMouseText = machineTraits.hasMouseText
     const isUnicodePage = textPage instanceof Uint16Array
     for (let j = 0; j < nlines; j++) {
       let line = ""

@@ -1,6 +1,5 @@
 import { Buffer } from "buffer"
 import { MAX_SNAPSHOTS, RamWorksMemoryStart, ROMmemoryStart, RUN_MODE, SAVE_STATE_VERSION } from "../common/utility"
-import { isGSMachine } from "../common/machine_profile"
 import { getDriveSaveState, getDriveSaveStateForLocalStorage, restoreDriveSaveState } from "./devices/drivestate"
 import { handleGameSetup } from "./games/game_mappings"
 import { s6502, getStackDump, setState6502, setStackDump } from "./instructions"
