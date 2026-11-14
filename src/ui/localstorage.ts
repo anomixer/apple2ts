@@ -223,7 +223,7 @@ export const setPreferenceMachineName = (
   name: MACHINE_NAME = "APPLE2EE",
   origin: SettingsChangeOrigin = "external",
 ) => {
-  if (name === "APPLE2EE") {
+  if (name === CLASSIC_PROFILE.defaultMachine) {
     localStorage.removeItem("machineName")
   } else {
     localStorage.setItem("machineName", JSON.stringify(name))
@@ -324,7 +324,9 @@ export const setPreferenceSlotConfig = (
 
 export const SPEED_MODE_MACHINE_KEY = "speedModeMachineName"
 const SPEED_FAMILIES = (machineName: string | null) =>
-  getMachineProfile((machineName || "APPLE2EE") as MACHINE_NAME).family === "gs" ? "GS" : "CLASSIC"
+  getMachineProfile((machineName || CLASSIC_PROFILE.defaultMachine) as MACHINE_NAME).family === "gs"
+    ? "GS"
+    : "CLASSIC"
 
 const savePreferenceSpeedMode = (mode: number) => {
   if (mode === 0) {
@@ -569,7 +571,7 @@ export const loadPreferences = () => {
   if (speedModeMachineRaw) {
     try {
       const savedSpeedMachine = JSON.parse(speedModeMachineRaw) as MACHINE_NAME
-      if (["APPLE2P", "APPLE2EU", "APPLE2EE", "APPLE2GS"].includes(savedSpeedMachine)) {
+      if (ALL_MACHINE_NAMES.includes(savedSpeedMachine)) {
         savedSpeedFamily = SPEED_FAMILIES(savedSpeedMachine)
       }
     } catch {

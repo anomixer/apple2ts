@@ -129,7 +129,7 @@ export const handleInputParams = (paramString = "") => {
   // Apply the URL speed only after the URL machine has been accepted. A
   // rejected ?machine= value must not leave a GS speed index applied to the
   // classic machine that loadPreferences() chose instead.
-  if (urlSpeedMode !== undefined && (!machineName || urlMachine)) {
+  if (urlSpeedMode !== undefined && (!machineParam || urlMachine)) {
     passSpeedMode(urlSpeedMode)
   }
 

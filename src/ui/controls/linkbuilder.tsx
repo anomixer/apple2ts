@@ -170,10 +170,12 @@ const LinkBuilder = () => {
   const [machine, setMachine] = useState("")
   const [ramdisk, setRamdisk] = useState("")
   const [scanlines, setScanlines] = useState(false)
-  const [speed, setSpeed] = useState("")
+  const [speedMode, setSpeedMode] = useState(getProfileDefaultSpeedMode(getMachineProfile(APP_DEFAULT_MACHINE)))
   const [theme, setTheme] = useState("")
   const [tabSection, setTabSection] = useState(TAB.DISK)
-  const [slotConfig, setSlotConfig] = useState<SlotConfig>({ ...DEFAULT_SLOT_CONFIG })
+  const [slotConfig, setSlotConfig] = useState<SlotConfig>(
+    getProfileDefaultSlotConfig(getMachineProfile(APP_DEFAULT_MACHINE), APP_DEFAULT_MACHINE),
+  )
 
   const machineValues = [t("machine.models.apple2ee"), t("machine.models.apple2eu"), t("machine.models.apple2p")]
 
@@ -279,6 +281,7 @@ const LinkBuilder = () => {
 
     // Slot configuration params: emit slotN=card for any non-default slot
     let hasVera = false
+    const profileSlotDefaults = getProfileDefaultSlotConfig(lbProfile, lbMachineName)
     SLOT_NUMBERS.forEach(slot => {
       const card = slotConfig[slot]
       if (card !== DEFAULT_SLOT_CONFIG[slot]) {
@@ -394,9 +397,10 @@ const LinkBuilder = () => {
     setS2d1Url("")
     setS4d1Disk("")
     setS4d1Url("")
-    setSpeed(speedNames[2])
+    const resetProfile = getMachineProfile(APP_DEFAULT_MACHINE)
+    setSpeedMode(getProfileDefaultSpeedMode(resetProfile))
     setTheme(themeValues[0])
-    setSlotConfig({ ...DEFAULT_SLOT_CONFIG })
+    setSlotConfig(getProfileDefaultSlotConfig(resetProfile, APP_DEFAULT_MACHINE))
   }
 
   const retrieveFromEmulatorSettings = () => {
@@ -423,10 +427,11 @@ const LinkBuilder = () => {
     setRamdisk(ramdiskValues[memIndex])
 
     const currentSpeed = handleGetSpeedMode()
+    const retrievedProfile = getMachineProfile(machineName)
     if (currentSpeed >= -2 && currentSpeed <= 4) {
       setSpeed(speedNames[currentSpeed + 2])
     } else {
-      setSpeed("")
+      setSpeedMode(getProfileDefaultSpeedMode(retrievedProfile))
     }
 
     setSelectedDisk("")
@@ -494,14 +499,14 @@ const LinkBuilder = () => {
           setValue={(val: string) => {
             setRamdisk(val)
             const rIdx = ramdiskValues.indexOf(val)
-            if (rIdx > 0 && lbMachineName !== "APPLE2P" && slotConfig[3] !== "aux") {
+            if (rIdx > 0 && canUseAuxSlot3 && slotConfig[3] !== "aux") {
               setSlotConfig(prev => ({ ...prev, 3: "aux" }))
             }
           }} />
         <Droplist name={t("linkBuilder.emulatorSpeed")}
-          value={speed !== "" ? speed : speedNames[2]}
+          value={speedDisplay}
           values={speedNames}
-          setValue={setSpeed} />
+          setValue={(label: string) => setSpeedMode(speedModeForLabel(label))} />
 
         <Droplist name={t("linkBuilder.uiTheme")}
           value={theme !== "" ? theme : themeValues[0]}

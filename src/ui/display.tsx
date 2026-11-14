@@ -212,7 +212,7 @@ const DisplayApple2 = () => {
   }, [isTouchDevice, isLandscape])
   const machineName = handleGetMachineName()
   const slotConfig = handleGetSlotConfig()
-  const isApple2Plus = machineName === "APPLE2P"
+  const isApple2Plus = getMachineTraits(machineName).isApple2Plus
   const hasAuxCard = !isApple2Plus && (slotConfig[3] === "aux" || slotConfig[3] === "vidhd")
   const mem = isApple2Plus ? 64 : (hasAuxCard ? (handleGetMemSize() + 64) : 64)
   const memSize = (mem > 1100) ? ((mem / 1024).toFixed() + " MB") : (mem + " KB")
