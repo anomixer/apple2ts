@@ -31,11 +31,19 @@ loop. Never "improve" a gssquared behaviour by inventing something; port it.
 
 **Machine facts that make sense of everything else**
 
-- 65816 runs at **2.8 MHz in both modes**. `$C036` bit 7 = fast (1) / slow
-  (1.024 MHz). There is no native-mode speed factor (one was added and removed:
-  commit `76d9f58b`). Native code is simply faster because it does more per cycle.
-- One video refresh is always 1/60 s. Speed mode changes how many CPU cycles fit
-  into it; `$C036` changes what a cycle is worth. Both are handled by the video
+- 65816 CPU rate follows the **Settings speed preference** (1.024 / 2.8 / 7.1 /
+  14.3 MHz). `$C036` bit 7 still denotes fast (1) / slow (0) and gates the
+  speed-shadow latch, but the emulator deliberately treats the host speed choice
+  as authoritative: a classic title that drops `$C036` to slow for copy-protected
+  disk I/O must not rescale the CPU back to 1.024 MHz when the user asked for
+  2.8. This **diverges from gssquared's physical clock model**, whose slow pin
+  forces 1.024 MHz regardless of UI speed; the user-reported GS classic-title
+  disk slowness made that override necessary (§8). There is no native-mode speed
+  factor (one was added and removed: commit `76d9f58b`). Native code is simply
+  faster because it does more per cycle.
+- One video refresh is always 1/60 s. The selected speed preference sets how many
+  CPU cycles fit into it; `$C036` changes what a cycle is worth only in gssquared,
+  not in this emulator's speed-override model. Both are handled by the video
   clock (§8), never by changing the frame length mid-flight.
 - Banks `$00-$DF` are RAM, `$D0-$FF` is ROM. `$E0/$E1` are Mega II main/aux.
 - **Two system ROMs.** ROM 01 is 128 KB in banks `$FE-$FF`; ROM 03 is 256 KB
@@ -1043,6 +1051,19 @@ intact. Regression: `save_restore_adb.test.ts`.
     enters async mode. ROM 03's write-handshake self-test waits for bit 6 to
     clear and spins at `$FF:57B7` otherwise. The 3.5" family still owns these
     bits through `iwmReadHandshake35`.
+  - **The 5.25" write path is synchronous, motor-gated and marker-buffered.**
+    `iwmWriteDataRegister525()` loads a byte from an odd `$C0E0-$C0EF` write
+    only with the motor on and Q6+Q7 high; `iwmAdvance525Write()` shifts the bits
+    out on the next access, at the same 4-raw-CPU-cycle bit cell as the read side
+    (no speed scaling). There is **no separate write-enable bit**: the hardware
+    can gate only by motor/Q6/Q7, so the emulator buffers bits from the ROM's
+    power-on write-handshake probe (random bytes with no address marker) and
+    commits them only after the `D5 AA 96` address marker proves a real sector
+    write. A data-register read between latches abandons the burst, so the probe
+    never edits track 0. Write-protected media still shifts the hardware register
+    but leaves the surface untouched. Regression: `gs_iwm_525_write.test.ts`
+    (a marker write mutates the mounted image; a marker-less probe leaves it
+    untouched).
 - **SmartPort** (`src/worker/devices/harddrivedata.ts`): status `$F0` on line,
   `$B4` write-protected, `$E0` offline (returns offline for an empty unit so
   GS/OS skips it instead of offering to initialise it). **Bit 0 is the
@@ -1309,14 +1330,20 @@ intact. Regression: `save_restore_adb.test.ts`.
 
 ## 8. Timing
 
-- **The video beam is a function of machine time only.** `iigsVideoClock`
-  accumulates refresh-relative units; a CPU cycle is worth
-  `frameCycles / 17030`, so slow mode advances the beam 2.74x per cycle and a
-  frame is always 1/60 s. `frameCycles` stays `cpuCyclesPerRefresh` and does
-  **not** follow `$C036`. Using `cycleCount % frameCycles` as the phase meant
-  every `$C036` write moved the beam backwards by up to a whole frame: `$C02E`
-  could go back in time, scanline/VBL windows were re-scanned, and the DOC and
-  mouse anchors inherited the jump. Reset the clock in `doReset()` and
+- **The Settings speed preference is authoritative and overrides `$C036` slow
+  mode.** `iigsVideoClock` advances by the selected speed's CPU cycles
+  (`iigsVideoClock += cycles`); a frame remains 1/60 s because `frameCycles` is
+  the selected `cpuCyclesPerRefresh`. The earlier model scaled cycles by
+  `frameCycles / 17030` and made the selected speed irrelevant inside slow mode,
+  which is why GS-mode classic titles ran their 5.25" read/write loops at 1.024
+  MHz whether the user picked 1.02 or 2.8. This is a deliberate divergence from
+  gssquared's physical clock (`NClockIIgs::slow_incr_cycles` forces 1.024 MHz):
+  the host speed choice is the machine's CPU budget, while the ROM's slow
+  pin still means fast/slow for `$C036`'s other bits and the speed-shadow latch.
+  Using `cycleCount % frameCycles` as the phase meant every `$C036` write moved
+  the beam backwards by up to a whole frame: `$C02E` could go back in time,
+  scanline/VBL windows were re-scanned, and the DOC and mouse anchors inherited
+  the jump. Reset the clock in `doReset()` and
   `doSetSpeedMode()`; the speed-mode reset keeps the captured-row boundary at
   frame 0 (`resetIigsVideoClock(true)`) rather than `-1`, or the next timer
   callback calls `beginShrFrame()` mid-refresh and drops a late SHR draw (§4).
@@ -1361,26 +1388,24 @@ intact. Regression: `save_restore_adb.test.ts`.
   publishes the effective `speedMode` in `MACHINE_STATE`, so the dropdown still
   reads 2.8 MHz. Guard: `gs_speed_default.test.ts` (own module registry, so
   `speedModeExplicit` is still false).
-- **Speed modes 2 and 3 (7.1 / 14.3 MHz) boot no volume at all — open.** Those
-  rows only scale `cpuCyclesPerRefresh`; `$C036` still means exactly what §1
-  says (bit 7 = 1.024 or 2.8 MHz), so a "7.1 MHz" machine presents a CPU that is
-  never faster than 2.8 MHz in the ROM's own units. ROM 01's boot-time speed
-  calibration then never converges and the device scan is abandoned: measured
-  with `SystemDisk.2mg` on ROM 01 (so it is not an image defect), modes 0/1 reach
-  the slot-7 driver (`f=55 s7 pc=$c700` at 1.02 MHz, `f=0` at 2.8 MHz) while modes
-  2/3 **never enter `$C700`** — the first bank-0 slot visit is slot 6 (f=67) then
-  slot 5, preceded by an `INTCXROM` flip storm at `FF:9F8F`/`FF:A94F`/`FF:9FFB`/
-  `FF:A1B7`. The tell is `$C036`: modes 2/3 write `$84` at `FF:FCE9` then `$04` at
-  `FF:FCB2`, **once per refresh for ~90 frames** — that is ROM 01's own TRB-slow /
-  STA-fast pair (`FF:FCAC XBA / FF:FCAD LDA #$80 / FF:FCAF TRB $C036` …
-  `FF:FCDB` countdown … `FF:FCE5 XBA / FF:FCE6 STA $C036`) with the settle loop
-  between, i.e. the ROM keeps asking for slow, waiting, restoring fast, and asking
-  again. Modes 0/1 never issue the `$04` write. After ~90 frames the ROM falls to
-  `$FF:A0D0` → `$FF:A5A3` and parks at "Check startup device!". VBL/refresh
-  cadence is correct in every mode (+51/+51 per 50 frames), so this is not the
-  video clock. gssquared, KEGS and GSplus model no accelerator, so there is
-  nothing to port — making 7.1/14.3 mean anything needs a decision about what
-  `$C036` should offer beyond the two real clock pins (§11.15).
+- **Speed modes 2 and 3 (7.1 / 14.3 MHz) booted no volume under the old clock
+  model — fixed by §8.** Those rows only scale `cpuCyclesPerRefresh`; under the
+  old model `$C036` still meant exactly what §1 says (bit 7 = 1.024 or 2.8 MHz),
+  so a "7.1 MHz" machine presented a CPU that was never faster than 2.8 MHz in
+  the ROM's own units. The speed override in §8 makes the Settings choice
+  authoritative and leaves `$C036` to select only the speed-shadow latch, so
+  the measured boot calibration (`$84` at `FF:FCE9` then `$04` at `FF:FCB2`,
+  once per refresh for ~90 frames, before which modes 2/3 never entered the
+  slot-7 driver) now converges. `Card Cat 1.94.dsk` reaches its `[Q]uit` menu in
+  mode 2 at frame 447 (frame units 118486) and mode 3 at frame 223 (238640);
+  modes 0/1 reach it at frames 3055/1199 (17030/46727), so the high-speed rows
+  are a working accelerator option rather than a dead selection. Regression:
+  the temporary `tmp-gs-cardcat-speed.test.ts` census was the measurement; make
+  a production speed-table boot assertion before the stacked PR lands.
+- gssquared, KEGS and GSplus model no accelerator, so there was nothing to port:
+  making 7.1/14.3 meaningful required the speed-override decision (§8). The old
+  ROM fallback was `$FF:A0D0` → `$FF:A5A3` at "Check startup device!"; VBL/refresh
+  cadence was already correct in every mode (+51/+51 per 50 frames).
 
 ---
 
@@ -1829,10 +1854,10 @@ intact. Regression: `save_restore_adb.test.ts`.
     `$00`'s `$C0xx-$CFxx` window while the stack unwinds, so a keypress changes
     nothing on screen. That is the "卡很久、感覺當住" the user saw, and it is not a
     bad read: nothing in our SmartPort path is failing. The accelerator the volume
-    asks for is speed mode 2 or 3, which currently boots **no** volume at all
-    (§8), so there is no working high-speed option to test it under. Open: whether
-    DOOM's abort is only the missing cycles or also a 65816 feature we model
-    wrong — deciding that needs modes 2/3 to boot first.
+    asks for is speed mode 2 or 3, which under the old clock model booted **no**
+    volume at all (§8). The speed override now lets modes 2/3 boot (§11.15), so
+    DOOM can be retested under those options; whether its abort is only the
+    missing cycles or also a 65816 feature we model wrong stays open.
 16. **TimePilot GS clouds flicker — RESOLVED: the screen was a one-instant
     snapshot of the SHR window.** Nothing was ever skipped for speed (§4): the
     guest *is* drawing every frame. TimePilot schedules against the raster —
