@@ -1059,11 +1059,16 @@ intact. Regression: `save_restore_adb.test.ts`.
     can gate only by motor/Q6/Q7, so the emulator buffers bits from the ROM's
     power-on write-handshake probe (random bytes with no address marker) and
     commits them only after the `D5 AA 96` address marker proves a real sector
-    write. A data-register read between latches abandons the burst, so the probe
-    never edits track 0. Write-protected media still shifts the hardware register
-    but leaves the surface untouched. Regression: `gs_iwm_525_write.test.ts`
-    (a marker write mutates the mounted image; a marker-less probe leaves it
-    untouched).
+    write. The marker flush starts at the D5 byte and discards the probe bits
+    that preceded it, so a real sector is written without dragging stale probe
+    bits into the region just ahead of it. A data-register read between latches
+    abandons the burst, so the probe never edits track 0. Write-protected media
+    still latches and shifts the hardware register but leaves the surface
+    untouched; gssquared's `Floppy_woz::write_pulse` writes regardless of the WP
+    flag, but the real drive's WP circuit gates the pulse, so this is a deliberate
+    hardware correction. Regression: `gs_iwm_525_write.test.ts` (a marker write
+    mutates the mounted image; a marker-less probe leaves it untouched; a
+    protected marker write leaves it untouched).
 - **SmartPort** (`src/worker/devices/harddrivedata.ts`): status `$F0` on line,
   `$B4` write-protected, `$E0` offline (returns offline for an empty unit so
   GS/OS skips it instead of offering to initialise it). **Bit 0 is the
@@ -1400,8 +1405,10 @@ intact. Regression: `save_restore_adb.test.ts`.
   mode 2 at frame 447 (frame units 118486) and mode 3 at frame 223 (238640);
   modes 0/1 reach it at frames 3055/1199 (17030/46727), so the high-speed rows
   are a working accelerator option rather than a dead selection. Regression:
-  the temporary `tmp-gs-cardcat-speed.test.ts` census was the measurement; make
-  a production speed-table boot assertion before the stacked PR lands.
+  `gs_speed_clock.test.ts` pins all four speed rows against a slow `$C036`
+  toggle: the machine keeps its refresh budget and the video clock still advances
+  raw CPU cycles. The Card Cat census was a temporary measurement
+  (`tmp-gs-cardcat-speed.test.ts`, external image), not a CI production test.
 - gssquared, KEGS and GSplus model no accelerator, so there was nothing to port:
   making 7.1/14.3 meaningful required the speed-override decision (§8). The old
   ROM fallback was `$FF:A0D0` → `$FF:A5A3` at "Check startup device!"; VBL/refresh
