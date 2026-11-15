@@ -1804,11 +1804,10 @@ to `$B900`, and the 65816 unconditionally set `PB=0`, so it executed the zero-fi
 bank-0 window as a repeating `00:B900`/`00:BFEB` BRK storm and ended in the monitor
 at `FF:BA01`. Two integration bugs made that happen:
 
-1. The two 6522 VIAs share the card's single slot IRQ line. `handleInterruptFlag`
-   asserted/deasserted that line using only the chip that had just changed, so a
-   second inactive chip could clear an IRQ still active in the first. Compute the
-   slot assertion across both chips' IFR/IER instead (`slotInterruptActive` in
-   `mockingboard.ts`).
+1. The two 6522 VIAs share the card's single slot IRQ line. The save-state
+   restore path must assert/deassert that shared line from both chips' IRQ-summary
+   bits, not from whichever chip was restored last (`slotInterruptActive` in
+   `mockingboard.ts`), while `handleInterruptFlag` remains per-chip (`active`).
 2. The GS ROM vector pull reads Bank `$FF` ROM, and `cpu65816.interrupt` then
    hard-coded `PB=0`. A RAM vector installed by a driver must resume in bank 0
    (MBSI's `$0500` handler), while a vector that is still the ROM copy must resume
