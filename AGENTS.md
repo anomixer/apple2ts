@@ -1142,13 +1142,21 @@ intact. Regression: `save_restore_adb.test.ts`.
   ROM has finished its device scan, so the ROM takes the cold device scan; leave it
   alone otherwise, which is what keeps Ctrl-Reset landing on the Applesoft `]`
   prompt. While the boot scan still holds the provisional `$00/$E0/$45` warm
-  signature, Ctrl-Reset must preserve it: zeroing it there forces a fresh cold
-  scan (239,937 IWM reads measured in the mid-boot probe vs no post-reset scan when
-  preserved) and breaks the boot the disk is already driving. The preserved
-  provisional signature continues the scan; once ProDOS writes `$59/$FF/$5A`,
-  Ctrl-Reset clears it normally. Regression: `gs_reset_signature.test.ts` (5.25
-  and 3.5 timelines, mid-boot preserve, after-boot clear, before-signature and
-  no-media cases).
+  signature, Ctrl-Reset must preserve it: zeroing it there drops the ROM straight
+  into the cold device scan (the measured before-fix 5.25" probe jumped to
+  `$00/$00/$00` immediately and still read 235,648 IWM bytes after reset) and
+  breaks the boot the disk is already driving. Preserving it continues the
+  in-flight boot instead: the same mid-boot probe measured 239,937 IWM reads
+  (5.25") and 1,689 (3.5") after reset, and the signature stayed
+  `$00/$E0/$45`; the current `gs_reset_signature.test.ts` asserts it survives
+  immediately and that ProDOS' `$59/$FF/$5A` signature appears later. Once
+  ProDOS writes `$59/$FF/$5A`, Ctrl-Reset clears it normally; with no media, the
+  ROM's own warm reset keeps the provisional signature and performs no IWM reads
+  (measured 0). Regression: `gs_reset_signature.test.ts` (5.25 and 3.5 timelines,
+  mid-boot preserve, after-boot clear, before-signature and no-media cases).
+  The raw measurements come from `resetIwmReadStats` in `diskdata.ts`; the test
+  prints them as `[reset-sig] ... reads=...` evidence instead of only asserting
+  thresholds.
 - **IWM** (`$C0E0-$C0EF`): even read with Q6=1,Q7=0 (`$C0EE`) returns
   `(mode & 0x1F) | (motor ? 0x20 : 0)`; odd write with Q6=1,Q7=1 (`$C0EF`)
   latches `mode = v & 0x1F`. Without this the ROM's `SELIWM` polls forever.
@@ -1782,14 +1790,41 @@ intact. Regression: `save_restore_adb.test.ts`.
 
 ## 11. Open issues
 
-**Deferred — IIgs Ultima V Mockingboard Activate Music BRK.** Booted from
-`public/disks/Ultima V.hdv` on `APPLE2GS` with slot 4 `mockingboard`; injected
-Return/Down/Return navigation reaches the Music Configuration screen, but the
-reported `00/1D72` BRK was never observed after Activate Music input (the trace
-stayed out of `00:1D00-$1D80`, final PC `00:F0E4`, hires screen). The user
-instructed skipping it (2026-11-16), so no fix or committed test is claimed. The
-diagnostic worker test has been removed; reopen with a live Activate Music path
-and trace `$C070-$C07F` firmware plus the 6522 IRQ vector.
+**RESOLVED — IIgs Ultima IV Mockingboard Activate Music crash.** Booted from
+`public/disks/Ultima IV.hdv` on `APPLE2GS` with slot 4 `mockingboard` and slot 7
+`smartport`. The disk menu itself says "Activate Mockingboard"; the injected key
+sequence A, A, O, 3, 4 (`A` at frames 2601/2610 selects the remastered "Activate
+Sound Board", `O` 2620 one board, `3` 2630 Mockingboard A/C, `4` 2640 slot 4)
+reaches the activation at frame 2700: `$C40E/$C40D = $C0/$C0`,
+`mockingboard_active` becomes `$FF`, and MBSI has run (`00:8000-00:8FFF`). The
+reported literal `00:1D72` never appeared in the trace; the real crash showed the
+firmware IRQ vector path instead: from frame 2700 onward the card's interrupt was
+being serviced through the GS native vector, the ROM copy at Bank `$FF` resolved
+to `$B900`, and the 65816 unconditionally set `PB=0`, so it executed the zero-filled
+bank-0 window as a repeating `00:B900`/`00:BFEB` BRK storm and ended in the monitor
+at `FF:BA01`. Two integration bugs made that happen:
+
+1. The two 6522 VIAs share the card's single slot IRQ line. `handleInterruptFlag`
+   asserted/deasserted that line using only the chip that had just changed, so a
+   second inactive chip could clear an IRQ still active in the first. Compute the
+   slot assertion across both chips' IFR/IER instead (`slotInterruptActive` in
+   `mockingboard.ts`).
+2. The GS ROM vector pull reads Bank `$FF` ROM, and `cpu65816.interrupt` then
+   hard-coded `PB=0`. A RAM vector installed by a driver must resume in bank 0
+   (MBSI's `$0500` handler), while a vector that is still the ROM copy must resume
+   in `PB=$FF` (`$FF:B900`), never execute zero bank-0 RAM. `memory.ts` also
+   forced bank-0 `$FFEE-$FFFF` vector slots to the ROM copy, so MBSI's installed
+   vector could not read back; those slots must expose writable bank-0 RAM.
+
+Activation now stays alive past frame 2700: the card IER/IFR remains `$C0/$C0`,
+`$FFFE` reads the RAM-installed vector (`00:0500`), the trace has zero post-reset
+`00:B900` BRKs, and the CPU stays in the game loop (`PB=0`, final PC `$6FF3`) with
+the title/attract screen instead of the monitor. Regression:
+`gs_ultima_iv_mockingboard.test.ts` (real activation + no `00:B900` BRK storm).
+Ultima III was intended as the control case but is not present in
+`public/disks/` (only IV/V), so the control could not be mounted; the test covers
+the activation crash itself. The card-only slot-OR fix was insufficient alone;
+the CPU/memory integration is required.
 
 1. **MCS (`mcs.2mg`) splash timeout — RESOLVED.** The ProDOS-8 splash
    (`MCS Copyright (c) 1986 Will Harvey` / `PRODOS 8 V1.2 06-SEP-86`) waits at

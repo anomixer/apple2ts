@@ -87,7 +87,17 @@ Apple2TS emulates the 65816 CPU and a substantial part of the IIgs hardware. GS/
 
 **Known gaps**
 
-- **Deferred — Ultima V GS Mockingboard Activate Music.** The reported `00/1D72` BRK after Activate Music could not be reproduced through the Music Configuration screen (final PC `00:F0E4`), so it was skipped rather than claiming a fix; reopen with a live Activate Music trace of the `$C070-$C07F` firmware and 6522 IRQ vector.
+- **Ultima IV GS Mockingboard Activate Music crash.** RESOLVED. Booted from
+  `Ultima IV.hdv` on `APPLE2GS` with slot 4 `mockingboard`; the reported literal
+  `00/1D72` BRK never appeared, but activation produced the real crash: the GS
+  native ROM IRQ vector resolved to bank 0 `$B900` and the 65816 executed the
+  zero-filled window as a BRK storm (`FF:BA01` monitor). The fix derives the
+  interrupt target bank from the vector source (Bank `$FF` ROM vs RAM-installed
+  bank-0 vectors), makes bank-0 `$FFEE-$FFFF` vector slots writable RAM, and
+  asserts the shared Mockingboard slot IRQ across both VIAs. Activation now
+  keeps `IER/IFR=$C0/$C0`, reads the MBSI `$0500` vector and stays in the game
+  loop with no BRK storm; regression `gs_ultima_iv_mockingboard.test.ts`.
+  Ultima III control unavailable (no III image in `public/disks/`).
 - **Events do not reach applications.** The GS/OS Finder cursor does not move and clicks do not select; interactive programs that wait on an event flag (for example Music Construction Set) freeze after their first screen. The ADB data path and the interrupt line are both correct, so the fault is in how the synthesised Bank `$E1` interrupt vector table is populated. See `AGENTS.md` sections 31 and 32 for the measurements and the current theory.
 - Slot 5 (3.5") has no GCR encoder yet, so 3.5" media cannot be read back.
 - Floppy boot in a real browser worker can fail intermittently; the jest harness boots reliably.
