@@ -76,6 +76,11 @@ Apple2TS emulates the 65816 CPU and a substantial part of the IIgs hardware. GS/
 - ADB: keyboard and mouse reports are byte-for-byte equivalent to gssquared
 - Ensoniq ES5503 "DOC": 32 oscillators, 64KB wave RAM, the `$C03C`-`$C03F` Sound GLU interface with its pipelined data read, oscillator interrupts, and per-frame PCM output
 - RTC and 256-byte battery RAM, ADB, VBL/quarter-second interrupts
+- ROM 01 and ROM 03 Ctrl-Reset/warm reset reach Finder, with the RTC transaction and stale `$C041` interrupt enables cleared
+- ADB micro-controller keyboard auto-repeat, with ROM 01/ROM 03 delay/rate tables, legacy `$C000` delivery and host-repeat suppression
+- GS classic-title paddle timing normalised to the guest execution rate (`$C036` slow mode), not the Settings speed
+- Boot/Ctrl-Reset silence Mockingboard, MIDI, VERA PSG/FM/PCM and Ensoniq DOC audio
+- Slot-4 Mockingboard selection survives the GS ROM slot scan and built-in firmware fallback
 
 **Known gaps**
 

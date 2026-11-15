@@ -377,12 +377,33 @@ with gssquared's explicit status bits changed GS/OS's rendered palette (6
 colours instead of >8) and broke six suites; returning floating bus for
 `$C050-$C05F` and 0 for `$C000` were tried and reverted too.
 
+**Slot-card selection on the IIgs** (`src/worker/devices/mockingboard.ts`).
+`$C02D` bit 4 must be set for an installed Mockingboard or the card is invisible.
+The GS ROM's boot slot scan writes `$C02D = $80` and leaves `INTCXROM` set, so
+the slot-4 bit vanishes and the ROM's built-in `$C4xx` no-device stub answers
+instead of the card: the game sees neither the card nor audio. `ensureCardSlotSelected()`
+therefore clears `INTCXROM` (so `$C02D` is authoritative), ORs `1 << slot` into
+`iigsSlotRegister`, mirrors `iigsRegisters[0x2D]` and calls `updateAddressTables()`
+on enable and from each cycle callback; built-in slot functions keep their bits
+clear. Regression: `gs_slots_mockingboard.test.ts` (CPU-visible `$C403` readback
+plus `passMockingboard`, and a 600-frame boot keeps slot 4's bit) and
+`mockingboard.test.ts`.
+
 **RTC / battery RAM** (`src/worker/iigs_clock.ts`, ported from
 `RTC_PRAM.hpp`): two-byte command framing for 256 bytes of BRAM, a real seconds
 counter from Unix epoch, and the warm-reset signature
 `CB D2 C7 C2 10 A2 E8 03` seeded at BRAM `$B0-$B7`. `reset(coldBoot)` must clear
 the transaction state, or a reboot mid-transaction fails BRAM framing and the
-ROM takes the fatal-error path.
+ROM takes the fatal-error path. `resetMachine()` calls `iigsClock.reset(false)`
+on the GS after `resetSerial()`; cold boot reseeds BRAM via
+`memoryReset()`/`iigsClock.reset(true)`. A Ctrl-Reset also zeroes `$C041 INTEN`
+right after `iigsClearInterrupts()`: GS/OS keeps its VBL enable there, and the
+first post-reset VBL re-raises `$C046` bit 7 if stale. Without both, ROM 03 in
+particular falls into the diagnostic self-test (`System Bad: FFFF0000`) instead
+of reaching Finder. `gs_rom03_reset.test.ts` drives both ROMs through real GS/OS
+boot + Ctrl-Reset and asserts a repaint, desktop return, no bad frame, an idle
+clock, and INTEN zero sampled immediately at reset (before Finder legitimately
+re-enables VBL).
 
 **Interrupt dispatchers** installed by `iigsInitInterrupts()`: the ROM overwrites
 them with its own (`$E1:0010 = JML $FFB7CC`, the full manager), so the
@@ -597,6 +618,18 @@ Rules that are easy to get wrong:
   hysteresis already handles a dry queue. Regression:
   `src/ui/devices/audio/ensoniq_resample.test.ts` (fails on the old code: the buffer
   comes back at 26320 instead of the device rate).
+- **Boot / Ctrl-Reset silence every scheduled transport.** `resetMachine()` clears
+  worker Mockingboard slot ROMs and the GS DOC chip; `doReset()` (also reached by
+  `doBoot()`) calls `passAudioReset()` after it. The UI's `MSG_WORKER.AUDIO_RESET`
+  handler runs `stopMidiAudio()` (CC 123/120 all channels, parser reset and
+  soft-synth close), `stopMockingboardAudio()` (stop/disconnect oscillators,
+  envelope, noise and graph, close the context), `stopVeraPsgAudio()` (close
+  context/worklet, generation guard for in-flight module loads) and
+  `resetEnsoniqAudio()`. Worker-side reset clears slot ROM and DOC oscillators;
+  without the UI stop, notes and noise already scheduled on the audio thread ring
+  after the reset. Regression: `audio_reset_worker.test.ts` (exactly one reset
+  notification per Boot/Reset), `audio_reset.test.ts` and
+  `main2worker_audio_reset.test.ts`.
 - Open: `$00-$FF` of DOC RAM must be non-zero before the Note Synthesizer path is
   used (TN #23).
 
@@ -696,6 +729,19 @@ guest could never have been sent.
   the Finder **consumes `$C000`**, polls `$C025` ~1.1 times per frame, and **never
   polls ADB device 2**. So `$C000` carries the key and `$C025` carries the chord —
   neither pipeline is optional.
+- **Keyboard auto-repeat belongs to the ADB micro** (`src/worker/iigs_adb.ts`).
+  The host's `e.repeat` timer is no longer the GS source: one key-down arms the
+  micro's `dncntr` delay-to-repeat (configuration byte high nibble) and repeat
+  rate (low nibble) tables, ROM 01 fastest-to-slowest vs ROM 03 reverse plus two
+  extra-slow slots. `repeatTick()` runs on the 60 Hz frame in the run loop; at zero
+  it latches a fresh ADB keyboard report with bit 7 clear and drives the legacy
+  `$C000` strobe via the registered sink at the ASCII mapped at the original
+  key-down, then reloads `dncntr` from `repeatFrames()`. The key-up stops it;
+  modifiers do not reset it; `repeatTick()` returns the ASCII for diagnostics only
+  (the strobe already fired, so never strobe it again). Host repeat is suppressed
+  for GS ADB keys so browser timers cannot duplicate the micro state. Regression:
+  `iigs_adb.test.ts` (delay/rate tables per ROM, start/stop, SRQ report, reset)
+  and `keyboard.test.ts` (host repeat suppression plus micro ticks on `$C000`).
 - **The ROM's Desk Accessories menu is the ADB micro's own report, not a key.**
   `Ctrl + Open Apple + Esc` never reaches the guest as a keystroke: KEGS `adb.c:1687`
   and gssquared `ADB_Micro.hpp:1026` (`desktop_manager_key_sequence`) intercept the
@@ -1485,6 +1531,19 @@ intact. Regression: `save_restore_adb.test.ts`.
   making 7.1/14.3 meaningful required the speed-override decision (§8). The old
   ROM fallback was `$FF:A0D0` → `$FF:A5A3` at "Check startup device!"; VBL/refresh
   cadence was already correct in every mode (+51/+51 per 50 frames).
+- **Paddle timing must follow the guest's execution rate, not the Settings speed.**
+  The classic joystick timeout constants are calibrated in 17030 cycles per 1/60 s
+  refresh (`MAX_TIMEOUT_CYCLES = 0.00278 * 1.020484e6`). A classic title launched in
+  GS mode may set `$C036` bit 7 clear for its own code while the user selected 2.8 MHz;
+  normalising against `46727` then makes a centred stick read as full deflection, so
+  the game cursor drifts right/down. `devices/joystick.ts` therefore registers a live
+  `JoystickClockSource` in `doSetMachineName` returning the current
+  `cpuCyclesPerRefresh` plus `slowMode: isGSMachine(machineName) && isIigsSlowMode()`.
+  `checkJoystickValues` scales raw cycles by `17030 / effective`, where
+  `effective = slowMode ? 17030 : cyclesPerRefresh`; a Settings change or a guest
+  `$C036` transition takes effect on the next read. Do not use the Settings budget
+  alone. Regression: `joystick_timing.test.ts` (8 cases, including a real
+  `doSetMachineName("APPLE2GS")` + `$C036` integration pin).
 
 ---
 
