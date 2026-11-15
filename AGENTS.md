@@ -630,6 +630,16 @@ Rules that are easy to get wrong:
   after the reset. Regression: `audio_reset_worker.test.ts` (exactly one reset
   notification per Boot/Reset), `audio_reset.test.ts` and
   `main2worker_audio_reset.test.ts`.
+- **Queued VERA AudioWorklet posts must not cross a reset.** `stopVeraPsgAudio()`
+  closes the graph, but an async play call that began before the reset can reopen
+  a new `AudioWorkletNode` and post the stale PCM/PSG/FM batch into it if the call
+  only checks node/context presence after `initVeraPsgAudio()`. Every play entry
+  therefore captures `generation` at entry and re-checks it after each await; posts
+  are queued with that generation and drained by `flushWorkletPosts()`, which drops
+  posts from an older generation. A reset increments the generation and empties
+  the queue before closing the context. Regression:
+  `vera_psg_audio_reset.test.ts` (a stalled pre-reset call cannot install its node)
+  plus `vera_psg_audio.test.ts`.
 - Open: `$00-$FF` of DOC RAM must be non-zero before the Note Synthesizer path is
   used (TN #23).
 
@@ -1073,6 +1083,17 @@ intact. Regression: `save_restore_adb.test.ts`.
   the capacity independent of the media, so `hasSmartPortDrive` /
   `getSmartPortDataLength` answer offline for the empty units whatever is
   mounted.
+- **A boot rebuilds the slot layout after `memoryReset()`.** `doBoot()` runs
+  `configureMachine()` for a mounted image, but `memoryReset()` has just wiped
+  every peripheral-card window. When the reset handler asks the ROM to reboot,
+  `didConfiguration` is still set, the second `configureMachine()` returns
+  immediately, and the slot ROM stays at the power-up fill; VERA, serial, and
+  the other cards vanish until the next `doSetSlotConfig()`. `doBoot()` now
+  clears `didConfiguration` immediately before that second configure pass so
+  the rebooted game can initialize the card whose reset handler asked for the
+  reboot. Regression: `boot_slot_config.test.ts` (classic VERA `$C200-$C20F`
+  and GS slot-4 `$C400-$C40F` are not blank after boot).
+
 - **A configure pass taken for another machine must not reach the IIgs boot.**
   A fresh profile's browser order is `loadPreferences()` (posts the stored slot
   config - classic IIe defaults, because the worker itself starts as APPLE2EE)
@@ -1117,9 +1138,17 @@ intact. Regression: `save_restore_adb.test.ts`.
   generated driver can branch on standard/extended correctly; do not reintroduce
   a fixed `INC` count.
 - **Ctrl-Reset**: clear the `$03F2-$03F4` signature (`$03F3 ^ $A5 == $03F4`) when
-  any media is mounted (floppy *or* hard drive, `iigsHasAnyDiskMedia()`), so the
-  ROM takes the cold device scan; leave it alone otherwise, which is what keeps
-  Ctrl-Reset landing on the Applesoft `]` prompt.
+  any media is mounted (floppy *or* hard drive, `iigsHasAnyDiskMedia()`) and the
+  ROM has finished its device scan, so the ROM takes the cold device scan; leave it
+  alone otherwise, which is what keeps Ctrl-Reset landing on the Applesoft `]`
+  prompt. While the boot scan still holds the provisional `$00/$E0/$45` warm
+  signature, Ctrl-Reset must preserve it: zeroing it there forces a fresh cold
+  scan (239,937 IWM reads measured in the mid-boot probe vs no post-reset scan when
+  preserved) and breaks the boot the disk is already driving. The preserved
+  provisional signature continues the scan; once ProDOS writes `$59/$FF/$5A`,
+  Ctrl-Reset clears it normally. Regression: `gs_reset_signature.test.ts` (5.25
+  and 3.5 timelines, mid-boot preserve, after-boot clear, before-signature and
+  no-media cases).
 - **IWM** (`$C0E0-$C0EF`): even read with Q6=1,Q7=0 (`$C0EE`) returns
   `(mode & 0x1F) | (motor ? 0x20 : 0)`; odd write with Q6=1,Q7=1 (`$C0EF`)
   latches `mode = v & 0x1F`. Without this the ROM's `SELIWM` polls forever.
@@ -1752,6 +1781,15 @@ intact. Regression: `save_restore_adb.test.ts`.
 ---
 
 ## 11. Open issues
+
+**Deferred — IIgs Ultima V Mockingboard Activate Music BRK.** Booted from
+`public/disks/Ultima V.hdv` on `APPLE2GS` with slot 4 `mockingboard`; injected
+Return/Down/Return navigation reaches the Music Configuration screen, but the
+reported `00/1D72` BRK was never observed after Activate Music input (the trace
+stayed out of `00:1D00-$1D80`, final PC `00:F0E4`, hires screen). The user
+instructed skipping it (2026-11-16), so no fix or committed test is claimed. The
+diagnostic worker test has been removed; reopen with a live Activate Music path
+and trace `$C070-$C07F` firmware plus the 6522 IRQ vector.
 
 1. **MCS (`mcs.2mg`) splash timeout — RESOLVED.** The ProDOS-8 splash
    (`MCS Copyright (c) 1986 Will Harvey` / `PRODOS 8 V1.2 06-SEP-86`) waits at
