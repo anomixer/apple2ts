@@ -1185,6 +1185,33 @@ intact. Regression: `save_restore_adb.test.ts`.
   branches in `decodedisk.ts` are skipped and `driveBitstream` *is* the same
   `Uint8Array` as `driveData` — a write edits the captured image in place, and
   `iwmFlushWrites35` only has to raise `diskHasChanges`).
+- **GS-only Aztec loader delay fast-forward.** The decoded Aztec 5.25" sectors
+  carry a copy-protection timer at `$BD9E..$BDAA`, reached from the `$BD00`
+  loader; the classic II never executes it. The emulator checks the 13-byte
+  live-RAM signature (`A0 12 88 D0 FD E6 46 D0 F7 E6 47 D0 F3`) with PB `$00`
+  and PC `$BD9E`, plus EN35 clear, motor on, and mounted media in the selected
+  built-in slot-6 drive. It then zeroes the direct-page `$46/$47` counters, sets
+  PC `$BDAB` (the caller's `LDY #$0C` continuation), and advances
+  `s6502.cycleCount`, `cycleTotal` and `iigsVideoClock` by the measured delay
+  span. Advancing those clocks is what keeps the 5.25" **raw-cycle** IWM position
+  correct: `getNextByte`'s `optimalTiming=32` / `bitTiming=4` path sees the delay
+  time exactly as if the loop had run. Classic code paths are untouched.
+  The span formula is `(outer - block47) * 99 + (block47 - 1) * 106 + 105`,
+  where `block46 = x46 === 0 ? 256 : 256 - x46`, `block47 = y47 === 0 ? 256 :
+  256 - y47`, and `outer = block46 + (block47 - 1) * 256`. Measured cases: `99DF`
+  is 821435 cycles, `FEFF` 204, `FFFE` 25456, `FFFF` 105. On the real Aztec boot
+  the first three direct-CPU measurements (99 cycle normal iteration, 106 wraps,
+  105 final) are pinned by `gs_disk_load_accel.test.ts`; the same file proves the
+  integration path (PC `$BDAB`, counters zero, exactly 821435 cycles added) and
+  that the skip is disabled by default under Jest. The GS title's legacy hires
+  buffer is byte-identical with and without the skip (`260b302e…`), and
+  `aztec_classic_s6.test.ts` keeps the classic II title loading at its Settings
+  speed. Measurements at GS 2.8 MHz: title frame 1747 / 83,268,512 cycles / ~84 s
+  wall before, 637 / 83,283,534 / ~27 s after; at GS 1.024 MHz the accelerated
+  load is 1698 / 83,241,175 / ~32 s. The delay's cycles still belong to the
+  emulated machine clock, so this accelerates wall time without shortening the
+  machine's elapsed loader time; the 1 MHz wall time is bounded by the remaining
+  emulated loader, not by the delay loop.
 - **The 3.5" track number is 7 bits, and the write-back decoder has to rebuild
   it.** The nibblizer writes six bits into the address field's low-track byte and
   puts bit 6 of the cylinder in **bit 0 of the side byte** (gssquared
