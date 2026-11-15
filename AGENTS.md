@@ -2281,9 +2281,10 @@ intact. Regression: `save_restore_adb.test.ts`.
 
 Known failures that are not this branch's last change. A clean `npm ci` dependency
 run finished the full Jest suite at 7457s: **187 suites passed, 1 skipped, 8 failed
-(195 of 196)** and **1493 tests passed, 9 failed, 9 skipped (1511 total)**. Six of
-the eight are pre-existing and reproduced byte-identically at baseline
-`2b5741a5`; the GS work is not their cause:
+(195 of 196)** and **1493 tests passed, 9 failed, 9 skipped (1511 total)**. Seven
+of the eight are pre-existing or environmental failures — six reproduce
+byte-identically at baseline `2b5741a5`, and `gs_freegemas` fails because its
+external disk is absent. The GS work is not their cause:
 
 - `gs_trace_boot.test.ts` (slot-7 `A2DeskTop-VERA.hdv`): its first check, the
   ProDOS 8 MACHID byte at `$BF98`, reads `$55` where `$2A` is expected, so none
