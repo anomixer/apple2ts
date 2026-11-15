@@ -2279,13 +2279,35 @@ intact. Regression: `save_restore_adb.test.ts`.
   `adbmodifiers` (which host key carries which IIgs Apple-key role — Alt / Meta /
   numpad bindings, so a Windows user can actually press a chord, §6)
 
-Known failures that are not this branch's last change: `gs_silky.test.ts`, whose
-SHR byte count is 2874 against a `> 5000` assertion. The latter was measured
-identical at `HEAD` with the ADB work reverted, so it is a pre-existing coverage
-regression, not a desk-panel one: SHR mode is on and more than 100 scanlines carry
-bytes, but the title screen is far sparser than when the test was written (§11.7).
-Also `gs_trace_boot.test.ts` (slot-7 `A2DeskTop-VERA.hdv`): its first check, the
-ProDOS 8 MACHID byte at `$BF98`, reads `$55` where `$2A` is expected, so none of the
-A2DeskTop/DHIRES assertions below it ever run. Measured byte-identical with the
-swapper work reverted, and the test file itself has not been touched since
-`ab11575f`. `vera.test.ts`, previously listed here, now passes.
+Known failures that are not this branch's last change. A clean `npm ci` dependency
+run finished the full Jest suite at 7457s: **187 suites passed, 1 skipped, 8 failed
+(195 of 196)** and **1493 tests passed, 9 failed, 9 skipped (1511 total)**. Six of
+the eight are pre-existing and reproduced byte-identically at baseline
+`2b5741a5`; the GS work is not their cause:
+
+- `gs_trace_boot.test.ts` (slot-7 `A2DeskTop-VERA.hdv`): its first check, the
+  ProDOS 8 MACHID byte at `$BF98`, reads `$55` where `$2A` is expected, so none
+  of the A2DeskTop/DHIRES assertions below it ever run. Measured byte-identical
+  with the swapper work reverted, and the test file itself has not been touched
+  since `ab11575f`.
+- `gs_timepilot_flicker.test.ts`: boots the external `timepilot_gs_v1.6.po` into
+  all-zero SHR buffers (`framesDiffering=0`, displayed and raw).
+- `gs_freegemas.test.ts`: mounts external `freegemas.2mg`, so a checkout without
+  that media fails its mount with `ENOENT`.
+- `gs_acs_musique.test.ts`: same missing-media gap for `acs musique disk (1989)
+  (apple chemical software).2mg` (`ENOENT`).
+- `gs_ctrl_reset.test.ts` and `gs_basic_sound.test.ts`: their boot ends at
+  `Check startup device!` instead of a BASIC prompt containing `]`, so the
+  Applesoft/DOC assertions never run. `gs_basic_sound` and `classic_s6_boot` use
+  the same boot-state shape; all three fail identically at baseline.
+- `classic_s6_boot.test.ts`: a classic IIe ProDOS 8 v2.4.2 boot reaches the
+  ProDOS banner but never prints `S6,D1:/SPEEDTEST` or `QUIT.SYSTEM`.
+
+`gs_silky.test.ts`, previously listed here, now passes in the clean dependency
+run. `vera.test.ts`, previously listed here, now passes. The eighth suite,
+`src/ui/controls/machinemenu_target.test.tsx`, was a stale full-suite read: the
+suite started before the staged UI expectation was fixed, so Jest loaded the old
+file; the same test passes standalone (`1 passed`), and
+`machinemenu_target_gts.test.tsx` passed in the full run. The new GS regression
+(`gs_disk_load_accel.test.ts`) and classic control (`aztec_classic_s6.test.ts`)
+both passed inside that full run.
