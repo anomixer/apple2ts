@@ -1,6 +1,6 @@
 import { FrameClock } from "./frameclock"
 // Chris Torrence, 2022
-import { passAudioReset, passMachineState, passSoftSwitchDescriptions, passWorkerOperationResult } from "./worker2main"
+import { passAudioReset, passClickSpeaker, passMachineState, passSoftSwitchDescriptions, passWorkerOperationResult } from "./worker2main"
 import { setCpuPcGetter } from "./cpu_pc"
 import { s6502, setState6502, setCycleCount, setPC, getStackString, get6502Instructions } from "./instructions"
 import { hiresAddressToLine, RUN_MODE, TEST_DEBUG, DEFAULT_SLOT_CONFIG, MEMORY_DUMP_STATE, AUTO_SNAPSHOT } from "../common/utility"
@@ -815,26 +815,6 @@ export const disableVidHD = () => {
   vidhd.reset()
 }
 
-const iigsHasHardDriveMedia = () => {
-  return getHardDriveState(1).filename !== "" || getHardDriveState(2).filename !== ""
-}
-
-// True when the Apple IIgs has a disk image in either of its built-in floppy
-// bays: slot 6 (5.25", drive-state indices 2/3) or slot 5 (3.5", indices 4/5).
-// Tests for actual media the same way the IWM data path does
-// (iigsFloppyHasMedia), so the two can never disagree about whether a drive is
-// loaded. Also covers the Slot 7 SmartPort hard drives, so that mounting a
-// hard-disk image and pressing Ctrl-Reset re-runs the full device scan
-// (matching section 26a's floppy fix).
-const iigsHasFloppyMedia = () => {
-  for (const index of [2, 3, 4, 5]) {
-    if (iigsFloppyHasMedia(index)) return true
-  }
-  return false
-}
-
-const iigsHasAnyDiskMedia = () => iigsHasFloppyMedia() || iigsHasHardDriveMedia()
-
 const resetMachine = () => {
   softCard.reset()
   videoTerm.reset()
@@ -881,6 +861,14 @@ const resetMachine = () => {
 export const doBoot = () => {
   setCycleCount(0)
   memoryReset()
+  // Power-on is a cold start: invalidate the warm-start signature before the
+  // ROM starts. A Ctrl-Reset deliberately keeps it (see doReset); gssquared's
+  // computer_t::reset(cold_start) only zeroes $03F2-$03F4 for a cold start.
+  if (isGSMachine(machineName)) {
+    memSet24(0x03f2, 0x00)
+    memSet24(0x03f3, 0x00)
+    memSet24(0x03f4, 0x00)
+  }
   if (isGSMachine(machineName)) iigsEnsoniq.reset()
   doSetRom(machineName)
   // memoryReset() wipes the peripheral-card windows, so a boot has to rebuild
@@ -930,7 +918,50 @@ export const doBoot = () => {
   }
 }
 
+// On a real IIgs the ROM's Ctrl-Reset handler beeps before it looks at the
+// warm-start signature: FF:FA87 does JSR $F89A (the tone call) and only then
+// FF:FA8A runs the $03F3 ^ $A5 == $03F4 check and FF:FADE does JMP ($03F2).
+// When that signature is valid doReset jumps straight through $03F2, so the
+// handler never runs and Ctrl-Reset would be silent. Replay the ROM's tone with
+// the number of toggles and the $C030 cadence its speaker loop drives (FF:A0AF
+// LDA $C030: three ~1612-cycle iterations then one ~2014-cycle iteration): a
+// single 93-toggle beep.
+//
+// The tone is delivered 24 toggles per frame instead of all at once. A reset
+// posts AUDIO_RESET, and the UI tears its speaker worklet down on that message,
+// so a single batch would be dropped while the graph rebuilds. Spreading the
+// batches lets the later ones land in the live worklet, the way the ROM's own
+// frame-spread beep survives the same teardown.
+const iigsResetBeepToggles = 93
+const iigsResetBeepPattern = [1612, 1612, 1612, 2014]
+const iigsResetBeepBatch = 24
+const iigsResetBeepFrameMs = 17
+const playIigsResetBeep = () => {
+  // The cadence is deliberately not tied to the CPU's real cycle counter: the
+  // worklet only plays the spacing between toggles, and keeping this sequence
+  // contiguous means a batch boundary cannot change the tone's pitch.
+  let cycle = s6502.cycleCount + iigsResetBeepPattern[0]
+  let toggle = 0
+  const postBatch = () => {
+    const end = Math.min(toggle + iigsResetBeepBatch, iigsResetBeepToggles)
+    while (toggle < end) {
+      passClickSpeaker(cycle)
+      cycle += iigsResetBeepPattern[toggle % iigsResetBeepPattern.length]
+      toggle++
+    }
+    if (toggle < iigsResetBeepToggles) setTimeout(postBatch, iigsResetBeepFrameMs)
+  }
+  postBatch()
+}
+
 export const doReset = () => {
+  // The Programmer's Guide warm-start signature lives at $03F2-$03F4:
+  // $03F2/$03F3 are the little-endian warm-start address, and $03F4 is the
+  // checksum ($03F3 ^ $A5). Capture it before any reset state is torn down so a
+  // valid signature can survive a Ctrl-Reset and be honoured below.
+  const gsWarmSignature = isGSMachine(machineName)
+    ? [(memGet24(0x03f2) & 0xff), (memGet24(0x03f3) & 0xff), (memGet24(0x03f4) & 0xff)]
+    : null
   clearInterrupts()
   resetSoftSwitches()
   resetIigsVideoClock()
@@ -960,29 +991,12 @@ export const doReset = () => {
     // follow a long pause (breakpoint, menu), so restart its timing rather
     // than letting it shift thousands of idle bits into the data register.
     iwmResetTiming()
-    // The IIgs ROM decides cold boot vs warm reset with
-    //   LDA $03F3 / EOR #$A5 / CMP $03F4
-    // and the boot sequence writes that signature into $03F2-$03F4 as it goes.
-    // Once it is there, a reset is treated as "warm": the ROM walks the slots
-    // but never touches the IWM (measured: 0 $C0E0-$C0EF reads after a
-    // Ctrl-Reset, against 399,707 during the cold boot that does find the
-    // disk), so inserting a floppy and pressing Ctrl-Reset could never boot it.
-    //
-    // Clear the signature whenever media is present, including while the ROM is
-    // still publishing the provisional $00/$E0/$45 value. The ROM's warm path
-    // jumps through that provisional value to the device-scan code, but a reset
-    // has already torn down the scan's state: measured, preserving it + the warm
-    // ADB marker leaves the ROM idling on the copyright screen with zero IWM
-    // reads. Zeroing it makes the ROM re-run the scan, which with the warm ADB
-    // marker reaches ProDOS again in ~175 frames (5.25") without clearing the
-    // ADB RAM, so repeated Ctrl-Reset presses behave like a warm reset rather
-    // than a power-on cold start. With no media the warm path is kept, which is
-    // what makes Ctrl-Reset land on the Applesoft prompt (gs_ctrl_reset.test.ts).
-    if (iigsHasAnyDiskMedia()) {
-      memSet24(0x000000 + 0x03f2, 0x00)
-      memSet24(0x000000 + 0x03f3, 0x00)
-      memSet24(0x000000 + 0x03f4, 0x00)
-    }
+    // The Programmer's Guide warm-start signature lives at $03F2-$03F4:
+    //   $03F2/$03F3 = little-endian warm target, $03F4 = checksum ($03F3 ^ $A5)
+    // A warm Ctrl-Reset must preserve it; only power-on/cold start invalidates it
+    // (gssquared's computer_t::reset(cold_start) clears $03F2-$03F4 only for a
+    // cold start). Zeroing it on Ctrl-Reset turned every reset with media into
+    // the cold device-scan path.
     // A hardware reset clears SLTROMSEL; the machine then re-applies the
     // Control Panel assignment.
     applyIigsSlotConfig()
@@ -991,11 +1005,38 @@ export const doReset = () => {
     iigsADB.setRom03(isIigsRom03())
   }
   resetMachine()
+  let iigsWarmStarted = false
+  if (gsWarmSignature) {
+    const [sigLow, sigHigh, sigChecksum] = gsWarmSignature
+    const signatureValid = ((sigHigh ^ 0xa5) & 0xff) === sigChecksum
+    // $00/$E0/$45 and the $03/$E0/$45 tail the ROM writes on its provisional
+    // warm path (the startup slot lands in the low byte) are the device-scan
+    // marker family. Their target is not the guide's generic JMP ($03F2) entry
+    // unless the ROM's provisional path (FF:FADB LDY #3 / JMP FEE6) decides so;
+    // leave the whole family to the ROM instead of jumping the classic vector.
+    const provisionalSignature = sigHigh === 0xe0 && sigChecksum === 0x45
+    if (signatureValid && !provisionalSignature) {
+      // A valid Programmer's Guide signature is a warm start: the ROM's reset
+      // handler jumps through $03F2/$03F3. The target is always read from the
+      // signature ($03F3<<8 | $03F2), never a fixed address, so every OS's own
+      // warm entry works: DOS 3.3 uses $9DBF ($03F2=$BF,$03F3=$9D,$03F4=$38),
+      // ProDOS uses $BE00 ($03F2=$00,$03F3=$BE,$03F4=$1B), and others differ.
+      // This ROM's reset path never takes that branch (its code invalidates the
+      // signature at FF:8055/59), so honour the book's warm start here.
+      const warmStart = (sigHigh << 8) | sigLow
+      ;(cpu as CPU65816).PC = warmStart & 0xffff
+      // The ROM beeps from the same handler we skipped to get here; sound it
+      // after the audio-reset signal below so the tone reaches the worklet that
+      // reset rebuilds.
+      iigsWarmStarted = true
+    }
+  }
   // Boot and Ctrl-Reset must silence transports that hold already-scheduled
   // audio (Mockingboard oscillators/envelopes, MIDI notes, the VERA PSG/FM/PCM
   // queue, and DOC buffers). resetMachine() clears the worker-side sound-chip
   // state; this companion signal clears the UI-side scheduling graphs.
   passAudioReset()
+  if (iigsWarmStarted) playIigsResetBeep()
   // Otherwise Heat Map data survives a reset/reboot indefinitely (it was
   // previously cleared only by doSetCycleCount, a time-travel-only path),
   // so PC/memory activity from before this reboot stays mixed in with the

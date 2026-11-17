@@ -1,5 +1,5 @@
 import { doSetMachineName, doSetRunMode, doReset, resetCpuSpeedForTesting } from "./motherboard"
-import { memGet24 } from "./memory"
+import { memGet24, getTextPageAsString } from "./memory"
 import { iigsADB } from "./iigs_adb"
 import { doSetEmuDriveNewData } from "./devices/drivestate"
 import { getIwmReadStats, resetIwmReadStats, type IwmReadStats } from "./devices/diskdata"
@@ -9,25 +9,24 @@ import * as fs from "fs"
 
 // Bug 3 regression: the IIgs Ctrl-Reset signature ($03F2-$03F4) is written
 // twice during a cold boot. The ROM device scan initially writes the warm
-// signature $00/$E0/$45 (complement-valid: $E0 ^ $A5 == $45); that signature
-// points the warm reset vector at the boot/device-scan code. Only after the
-// boot completes does ProDOS write its normal signature $59/$FF/$5A.
+// signature $00/$E0/$45 (complement-valid: $E0 ^ $A5 == $45); after the boot
+// completes the startup OS writes its booted warm signature $59/$FF/$5A.
 //
-// Ctrl-Reset while that provisional signature is still current must stay warm:
-// the ADB micro-controller's uC RAM $51 marker ($A5) must survive, and the
-// signature is zeroed so the ROM re-runs the device scan instead of entering the
-// provisional warm vector after its scan state was already torn down (measured:
-// preserving the provisional signature + warm ADB idles on the copyright screen
-// with zero IWM reads). The mid-boot cases below press Ctrl-Reset twice and check
-// that the ADB marker survives both presses, that the boot still reaches the
-// ProDOS signature, and therefore that repeated resets do not feel like a
-// power-on cold start. With floppy media attached, Ctrl-Reset after boot also
-// zeroes the signature so the disk is rescanned; with no media the ROM's warm
-// signature is kept and the machine lands on the Applesoft prompt
-// (gs_ctrl_reset.test.ts). doBoot() is the only path that cold-resets the ADB.
+// Per the Apple II/IIgs Programmer's Guide, $03F2/$03F3 are the little-endian
+// warm-start target and $03F4 is the checksum ($03F3 ^ $A5). A Ctrl-Reset is a
+// warm reset: it must preserve $03F2-$03F4, not zero them. Only power-on is a
+// cold start that invalidates the signature. The mid-boot cases below press
+// Ctrl-Reset twice and check that the ADB marker survives, that the signature
+// stays checksum-valid after each press, and that the machine ends on the
+// Applesoft prompt the way a real Ctrl-Reset aborts a boot; repeated resets must
+// not feel like a power-on cold start. With floppy media attached, Ctrl-Reset
+// after boot keeps the signature and warm starts instead of replaying the cold
+// device scan (gs_warm_start_signature.test pins the DOS $9DBF and ProDOS $BE00
+// vectors). doBoot() remains the only path that cold-resets the ADB and clears
+// the signature.
 //
 // The after-boot and no-media cases protect the intended paths; the two
-// *_during_boot cases pin the mid-boot warm-ADB/rescan behavior.
+// *_during_boot cases pin the mid-boot warm-ADB/warm-signature behavior.
 
 const DISK_525_PATH =
   process.env.GS_RESET_SIG_525_PATH || "public/disks/A2DeskTop-VERA.po"
@@ -154,7 +153,7 @@ afterEach(() => {
 })
 
 if (HAS_525) {
-  test("5.25 boot writes provisional device-scan signature then ProDOS signature", () => {
+  test("5.25 boot writes provisional device-scan signature then booted warm signature", () => {
     boot(2, DISK_525_PATH)
     const transitions = signatureTimeline(180)
     expect(transitions.length).toBeGreaterThanOrEqual(2)
@@ -166,7 +165,7 @@ if (HAS_525) {
     console.log(`[reset-sig] 5.25 transitions=${JSON.stringify(transitions)}`)
   }, TEST_TIMEOUT)
 
-  test("Ctrl-Reset during 5.25 boot stays warm and reboots", () => {
+  test("Ctrl-Reset during 5.25 boot stays warm and lands at the prompt", () => {
     boot(2, DISK_525_PATH)
     runFrames(45)
     expect(isProvisional()).toBe(true)
@@ -177,40 +176,48 @@ if (HAS_525) {
     doReset()
     const immediate = sigBytes()
     console.log(`[reset-sig] 5.25-during before=${JSON.stringify(before)} immediate=${JSON.stringify(immediate)} adb51=${warmAdb}`)
-    // A real Ctrl-Reset keeps the ADB micro's RAM, so the ROM sees a warm boot.
-    // The provisional signature is cleared because its warm vector needs the
-    // scan state a reset just discarded; the ROM rescans and boots again.
-    expect(immediate).toEqual([0, 0, 0])
+    // A real Ctrl-Reset keeps the ADB micro's RAM and the Programmer's Guide
+    // signature: the provisional $00/$E0/$45 is still checksum-valid, so the
+    // warm reset must preserve it rather than zero it into the cold scan path.
+    expect(immediate).toEqual([0, 0xe0, 0x45])
     expect(adbWarmMarker()).toBe(warmAdb)
-    // Press Ctrl-Reset a second time while the rescan is still in flight: the
-    // warm marker must survive and the boot must still complete. This is the
-    // "holding Reset does not feel like a full cold start every time" case.
+    // Press Ctrl-Reset a second time while the provisional warm entry is still
+    // in flight: the warm marker must survive. This is the "holding Reset does
+    // not feel like a full cold start every time" case.
     doSetRunMode(RUN_MODE.RUNNING, false)
     runFrames(30)
     doReset()
     expect(adbWarmMarker()).toBe(warmAdb)
-    expect(sigBytes()).toEqual([0, 0, 0])
-    resetStats()
+    // The ROM's provisional warm path stores the startup slot in $03F2
+    // (FF:FEE6 with Y=3), so the low byte becomes 3 while the checksum-valid
+    // $E0/$45 tail survives. The signature is still warm, not cold-zeroed.
+    expect(sigBytes()[1]).toBe(0xe0)
+    expect(sigBytes()[2]).toBe(0x45)
+    expect(warmComplementValid()).toBe(true)
+    // A Ctrl-Reset during boot aborts the boot the way real hardware does: the
+    // ROM enters the provisional warm path (startup slot 3 is the text card) and
+    // lands on the Applesoft prompt instead of replaying the cold device scan.
     doSetRunMode(RUN_MODE.RUNNING, false)
     runFrames(220)
-    expect(isBooted()).toBe(true)
-    expect(getIwmReadStats().reads).toBeGreaterThan(1000)
+    expect(getTextPageAsString()).toContain("]")
     logEvidence("5.25-during post-reset", getIwmReadStats())
   }, TEST_TIMEOUT)
 
-  test("Ctrl-Reset after 5.25 boot zeroes signature and cold-scans", () => {
+  test("Ctrl-Reset after 5.25 boot keeps signature and warm-starts", () => {
     boot(2, DISK_525_PATH)
     runFrames(180)
     expect(isBooted()).toBe(true)
     const before = getIwmReadStats().reads
     doReset()
-    expect(sigBytes()).toEqual([0, 0, 0])
+    expect(sigBytes()).toEqual([0x59, 0xff, 0x5a])
     expect(adbWarmMarker()).toBe(0xa5)
     resetStats()
     doSetRunMode(RUN_MODE.RUNNING, false)
     runFrames(240)
     const stats = getIwmReadStats()
-    expect(stats.reads).toBeGreaterThan(1000)
+    // The guide's warm vector ($59/$FF/$5A -> $FF59) resumes the booted OS
+    // without the cold device scan.
+    expect(stats.reads).toBe(0)
     logEvidence("5.25-after post-reset", stats)
     expect(isBooted()).toBe(true)
     console.log(`[reset-sig] 5.25-after boot reads=${before}`)
@@ -237,7 +244,7 @@ if (HAS_525) {
 }
 
 if (HAS_35) {
-  test("3.5 boot writes provisional device-scan signature then ProDOS signature", () => {
+  test("3.5 boot writes provisional device-scan signature then booted warm signature", () => {
     boot(4, DISK_35_PATH)
     const transitions = signatureTimeline(300)
     expect(transitions.length).toBeGreaterThanOrEqual(2)
@@ -247,7 +254,7 @@ if (HAS_35) {
     console.log(`[reset-sig] 3.5 transitions=${JSON.stringify(transitions)}`)
   }, TEST_TIMEOUT)
 
-  test("Ctrl-Reset during 3.5 boot stays warm and reboots", () => {
+  test("Ctrl-Reset during 3.5 boot stays warm and lands at the prompt", () => {
     boot(4, DISK_35_PATH)
     runFrames(60)
     expect(isProvisional()).toBe(true)
@@ -258,34 +265,39 @@ if (HAS_35) {
     doReset()
     const immediate = sigBytes()
     console.log(`[reset-sig] 3.5-during before=${JSON.stringify(before)} immediate=${JSON.stringify(immediate)} adb51=${warmAdb}`)
-    expect(immediate).toEqual([0, 0, 0])
+    expect(immediate).toEqual([0, 0xe0, 0x45])
     expect(adbWarmMarker()).toBe(warmAdb)
     doSetRunMode(RUN_MODE.RUNNING, false)
     runFrames(20)
     doReset()
     expect(adbWarmMarker()).toBe(warmAdb)
-    expect(sigBytes()).toEqual([0, 0, 0])
-    resetStats()
+    // Same provisional ROM warm path as the 5.25 case: startup slot goes into
+    // $03F2 while $E0/$45 stay warm, never zeroed into the cold scan.
+    expect(sigBytes()[1]).toBe(0xe0)
+    expect(sigBytes()[2]).toBe(0x45)
+    expect(warmComplementValid()).toBe(true)
+    // Ctrl-Reset during boot aborts the boot into the Applesoft prompt instead
+    // of replaying the cold device scan, matching real Ctrl-Reset behavior.
     doSetRunMode(RUN_MODE.RUNNING, false)
     runFrames(320)
-    expect(isBooted()).toBe(true)
+    expect(getTextPageAsString()).toContain("]")
     logEvidence("3.5-during post-reset", getIwmReadStats())
   }, TEST_TIMEOUT)
 
-  test("Ctrl-Reset after 3.5 boot zeroes signature and cold-scans", () => {
+  test("Ctrl-Reset after 3.5 boot keeps signature and warm-starts", () => {
     boot(4, DISK_35_PATH)
     runFrames(300)
     expect(isBooted()).toBe(true)
     doReset()
-    expect(sigBytes()).toEqual([0, 0, 0])
+    expect(sigBytes()).toEqual([0x59, 0xff, 0x5a])
     expect(adbWarmMarker()).toBe(0xa5)
     resetStats()
     doSetRunMode(RUN_MODE.RUNNING, false)
     runFrames(320)
     const stats = getIwmReadStats()
-    // The 3.5 driver can resume from its in-memory state after a warm reset, so
-    // this count is small; the boot must still complete.
-    expect(stats.reads).toBeGreaterThan(0)
+    // The guide's warm vector ($59/$FF/$5A -> $FF59) resumes the booted OS
+    // without a cold device scan, so this count is zero.
+    expect(stats.reads).toBe(0)
     logEvidence("3.5-after post-reset", stats)
     expect(isBooted()).toBe(true)
   }, TEST_TIMEOUT)
