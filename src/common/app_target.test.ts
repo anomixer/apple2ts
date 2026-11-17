@@ -73,6 +73,30 @@ describe("target machine menus", () => {
     expect(getAppMachineNamesForBuild("apple2gts", true)).toEqual(allMachines)
   })
 
+  test("the Cloudflare Pages build exposes classic and IIgs machines together", () => {
+    const allMachines = ["APPLE2P", "APPLE2EU", "APPLE2EE", "APPLE2GS"]
+    expect(getAppMachineNamesForBuild("apple2ts", false, true)).toEqual(allMachines)
+    expect(getAppMachineNameOrDefault("APPLE2GS", "apple2ts", false, true)).toBe("APPLE2GS")
+    expect(getAppMachineNameOrDefault("APPLE2EE", "apple2ts", false, true)).toBe("APPLE2EE")
+  })
+
+  test("the Cloudflare build flag exposes all four machines at module load", () => {
+    const previous = process.env.A2TS_CLOUDFLARE_MACHINES
+    process.env.A2TS_CLOUDFLARE_MACHINES = "true"
+    try {
+      jest.isolateModules(() => {
+        const freshTarget = require("./app_target") as typeof import("./app_target")
+        expect(freshTarget.APP_MACHINE_NAMES).toEqual([
+          "APPLE2P", "APPLE2EU", "APPLE2EE", "APPLE2GS",
+        ])
+        expect(freshTarget.getAppMachineNameOrDefault("APPLE2GS")).toBe("APPLE2GS")
+      })
+    } finally {
+      if (previous === undefined) delete process.env.A2TS_CLOUDFLARE_MACHINES
+      else process.env.A2TS_CLOUDFLARE_MACHINES = previous
+    }
+  })
+
   test("local dev accepts a IIgs URL machine instead of falling back to a classic IIe", () => {
     expect(getAppMachineNameOrDefault("APPLE2GS", "apple2ts", true)).toBe("APPLE2GS")
     expect(getAppMachineNameOrDefault("APPLE2GS", "apple2ts", false)).toBe("APPLE2EE")

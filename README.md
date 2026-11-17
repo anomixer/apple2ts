@@ -157,7 +157,7 @@ npm run build:apple2ts   # BUILD_TARGET=apple2ts, output: dist/apple2ts
 npm run build:apple2gts  # BUILD_TARGET=apple2gts, output: dist/apple2gts
 ```
 
-The target selects the default machine (Apple IIe for `apple2ts`, Apple IIgs for `apple2gts`), the page title / description / favicon, the PWA manifest name and description, and the `CNAME` (`apple2ts.com` or `apple2gts.com`). Both builds still contain the full emulator; the Settings droplist is target-filtered, while explicit title links and URL `?machine=` parameters deliberately resolve against every profile machine so each site can link a title from the other family. A plain `npm run build` remains available and writes the generic `dist` used by the optional Cloudflare Pages workflow.
+The target selects the default machine (Apple IIe for `apple2ts`, Apple IIgs for `apple2gts`), the page title / description / favicon, the PWA manifest name and description, and the `CNAME` (`apple2ts.com` or `apple2gts.com`). Both builds still contain the full emulator; the Settings droplist is target-filtered, while explicit title links and URL `?machine=` parameters deliberately resolve against every profile machine so each site can link a title from the other family. A plain `npm run build` remains available and writes the generic `dist` used by the optional Cloudflare Pages workflow. That workflow's build deliberately opts into a cross-family menu (see Cloudflare Pages below); an ordinary target build stays target-filtered.
 
 For local development with the IIgs identity, set the variable before `npm start`:
 
@@ -292,6 +292,8 @@ The optional Cloudflare Pages workflow is opt-in and requires the following repo
 - **Optional repository variable:** `CLOUDFLARE_PAGES_PROJECT`, containing the existing Cloudflare Pages project name; it defaults to `apple2ts`
 
 The Cloudflare Pages project must be created in the specified Cloudflare account before the workflow runs. The API token and account ID are configured in GitHub under **Settings → Secrets and variables → Actions**. The enable flag and project name are repository variables; the API token and account ID are repository secrets. Repositories that do not set `CLOUDFLARE_PAGES_ENABLED=true` skip the Cloudflare deployment and are unaffected.
+
+The Cloudflare Pages build keeps the Apple2TS identity and classic default machine, but exposes the four-machine menu so the deployed site can boot both families: Apple II+, IIe (unenhanced), IIe (enhanced), and IIgs. This cross-family menu is enabled by `npm run build:cloudflare` (or by the workflow's `A2TS_CLOUDFLARE_MACHINES=true` build environment), while `npm run build` outside Cloudflare stays target-filtered. A project named `a2ts` deploys this build at `a2ts.pages.dev`.
 
 1. Refresh the browser, click on floppy/hard drive, choose _Load Disk from DemoZoo_, and verify that the DemoZoo production list opens immediately with screenshots, page navigation, and a `Snapshot at YYYY/MM/DD` badge in the header.
 1. Use the type filters (All, Demo, Intro, Cracktro, and Music) or search query, then open a production and verify that its disk image loads and boots.

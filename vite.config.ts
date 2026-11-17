@@ -157,6 +157,13 @@ export default defineConfig(({ command }) => {
     // The UI reads this string instead of Vite's dev-only import.meta flag, so
     // Jest and worker bundles use the same production filtering path.
     "process.env.A2TS_DEV_MACHINES": JSON.stringify(isLocalDevServer ? "true" : "false"),
+    // Cloudflare Pages builds expose all four machine profiles. Set this from
+    // the workflow or in tools/build-cloudflare.mjs; Cloudflare's own build
+    // environment supplies CF_PAGES=1 as a fallback.
+    "process.env.A2TS_CLOUDFLARE_MACHINES": JSON.stringify(
+      process.env.A2TS_CLOUDFLARE_MACHINES ?? ""
+    ),
+    "process.env.CF_PAGES": JSON.stringify(process.env.CF_PAGES ?? ""),
     "process.env.BUILD_TARGET": JSON.stringify(APP_TARGET),
   }
   }

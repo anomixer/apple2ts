@@ -28,6 +28,10 @@ jobs:
         run: npm run lint
 
       - name: Build
+        env:
+          # The Pages site keeps the Apple2TS (classic) identity but exposes the
+          # four-machine menu: II+, IIe (unenhanced), IIe (enhanced), IIgs.
+          A2TS_CLOUDFLARE_MACHINES: "true"
         run: npm run build:cloudflare
 
       - name: Verify Cloudflare project setting

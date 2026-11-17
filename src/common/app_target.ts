@@ -60,15 +60,23 @@ export const getAppManifestDescription = (target: AppTarget): string =>
 export const getAppMachineNames = (target: AppTarget): MACHINE_NAME[] =>
   target === GTS_TARGET ? [...GS_PROFILE.machines] : [...CLASSIC_PROFILE.machines]
 
+const getAllMachineNames = (): MACHINE_NAME[] => [
+  ...CLASSIC_PROFILE.machines,
+  ...GS_PROFILE.machines,
+]
+
 // Local development is one checkout serving both families, so `npm start`
 // exposes every machine profile. A target build still gets the production
-// filtering above; this only affects the Vite dev server with BUILD_TARGET unset.
+// filtering above unless the Cloudflare build deliberately opts into the
+// combined menu: the Pages deployment is one site serving classic and IIgs
+// titles, so its Apple2TS identity keeps all four machine rows.
 export const getAppMachineNamesForBuild = (
   target: AppTarget,
   localDevelopment: boolean,
+  allFamilies = false,
 ): MACHINE_NAME[] =>
-  localDevelopment
-    ? [...CLASSIC_PROFILE.machines, ...GS_PROFILE.machines]
+  localDevelopment || allFamilies
+    ? getAllMachineNames()
     : getAppMachineNames(target)
 
 export const APP_TARGET = parseAppTarget(process.env.BUILD_TARGET)
@@ -78,9 +86,17 @@ export const IS_APPLE2GTS = APP_TARGET === GTS_TARGET
 // Vite sets this only for the un-targeted local dev server (npm start).
 export const IS_LOCAL_DEV_MACHINES = process.env.A2TS_DEV_MACHINES === "true"
 
+// Cloudflare Pages builds (both the GitHub workflow and a build driven by
+// Cloudflare itself, where CF_PAGES=1) expose the four-machine menu. Keep the
+// plain local `npm run build` target-filtered; only Pages opts into both families.
+const IS_CLOUDFLARE_BUILD =
+  process.env.A2TS_CLOUDFLARE_MACHINES === "true" ||
+  process.env.CF_PAGES === "1"
+
 export const APP_MACHINE_NAMES = getAppMachineNamesForBuild(
   APP_TARGET,
   IS_LOCAL_DEV_MACHINES,
+  IS_CLOUDFLARE_BUILD,
 )
 
 export const APP_NAME = getAppName(APP_TARGET)
@@ -100,7 +116,8 @@ export const getAppMachineNameOrDefault = (
   name: MACHINE_NAME | undefined,
   target: AppTarget = APP_TARGET,
   localDevelopment: boolean = IS_LOCAL_DEV_MACHINES,
+  allFamilies: boolean = IS_CLOUDFLARE_BUILD,
 ): MACHINE_NAME => {
-  const allowed = getAppMachineNamesForBuild(target, localDevelopment)
+  const allowed = getAppMachineNamesForBuild(target, localDevelopment, allFamilies)
   return name && allowed.includes(name) ? name : getAppDefaultMachine(target)
 }
