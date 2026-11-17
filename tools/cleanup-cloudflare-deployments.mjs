@@ -49,7 +49,7 @@ const listDeployments = async () => {
   let page = 1
   for (;;) {
     const body = await request(
-      `/deployments?page=${page}&per_page=100`,
+      `/deployments?page=${page}&per_page=20`,
     )
     if (!Array.isArray(body.result)) {
       throw new Error("Cloudflare returned a non-array deployment list")
