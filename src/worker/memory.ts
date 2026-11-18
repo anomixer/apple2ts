@@ -16,7 +16,7 @@ import { adbLogEnabled, noteAdbLog } from "./iigs_adb"
 import { getCpuPc } from "./cpu_pc"
 import { videoTerm } from "./devices/videoterm"
 import { vidhd } from "./devices/vidhd"
-import { isDebugging, setIigsSpeedRegister, getIigsVideoClock, getIigsFrameUnits, isIigsSlowMode } from "./motherboard"
+import { isDebugging, setIigsSpeedRegister, getIigsBeamPos, getIigsVideoClock, getIigsCpuCyclesPerRefresh, VIDEO_CYCLES_PER_LINE, VIDEO_CYCLES_PER_FRAME } from "./motherboard"
 import { iigsClock } from "./iigs_clock"
 import { iigsADB } from "./iigs_adb"
 import { iigsEnsoniq, docAccess } from "./devices/iigs_ensoniq"
@@ -267,29 +267,31 @@ function noteVcountRead(v: number): void {
 }
 
 const readIigsVideoCounter = (wantHorz: boolean): number => {
-  // Video-clock position, not cycleCount: $C036 slow mode changes how many CPU
-  // cycles fit in a frame but must not move the beam (see iigsVideoClock).
-  const frameCycles = getIigsFrameUnits()
-  const vblCycles = Math.round((12460 / 46727) * frameCycles)
-  const cyc = getIigsVideoClock() % frameCycles
+  // One scan index for both counters, exactly like gssquared's VideoScannerII:
+  // 65 video cycles per line, 262 lines per refresh, so $C02E and $C02F are two
+  // views of the same beam position and can never drift out of phase. The old
+  // model rederived them from the CPU-cycle frame with the vertical rows on the
+  // VBL length (178.0 video cycles) and the horizontal counter on the visible
+  // length (178.5): at a VBL row start the hcounter sat nearly a whole line
+  // behind, and beam-racing code (XMAS Demo waits for `$C02E == $F0`, then
+  // branches on $C02F) never saw its window.
+  const scan = Math.max(0, Math.min(VIDEO_CYCLES_PER_FRAME - 1, Math.floor(getIigsBeamPos())))
+  const line = Math.floor(scan / VIDEO_CYCLES_PER_LINE)
+  const hstep = scan - line * VIDEO_CYCLES_PER_LINE // 0..64
+  // Our refresh opens with the 70 VBL rows (see motherboard.ts): rows 192-261,
+  // i.e. $1C0-$1FF for the first 64 and the $0FA wrap for the last six, then the
+  // 192 visible rows ($100-$1BF). gssquared `get_vcounter()` counts the same way.
   let vert: number
-  if (cyc < vblCycles) {
-    // VBL rows 192-261: 64 values at $1C0-$1FF, then the six-row wrap, which
-    // drops the 9th bit and restarts at $0FA (gssquared `vcount == 0 -> 0xFA`).
-    const line = Math.min(70, Math.floor(cyc / (vblCycles / 70)))
+  if (line < 70) {
     vert = line < 64 ? 0x1c0 + line : 0xfa + (line - 64)
   } else {
-    const cyclesPerLine = ((frameCycles - vblCycles) / 192) || 1
-    const line = Math.min(191, Math.floor((cyc - vblCycles) / cyclesPerLine))
-    vert = 0x100 + line
+    vert = 0x100 + (line - 70)
   }
   if (wantHorz) {
-    // Horizontal counter: 65 values per row, $00 then $40-$7F (hbl first).
-    const cyclesPerLine = ((frameCycles - vblCycles) / 192) || 1
-    const h = Math.floor(cyc % cyclesPerLine)
-    const hstep = Math.floor(h * 65 / cyclesPerLine)
-    const horz = hstep === 0 ? 0 : Math.min(0x7f, 0x40 + hstep - 1)
-    const v = ((vert & 1) << 7) | horz
+    // Horizontal counter: 65 values per row, $00 then $40-$7F (hbl first), and
+    // bit 7 carries bit 0 of the vertical counter.
+    const horz = hstep === 0 ? 0 : 0x40 + hstep - 1
+    const v = (((vert & 1) << 7) | horz) & 0xff
     noteVcountRead(v)
     return v
   }
@@ -304,9 +306,13 @@ const readIigsVideoCounter = (wantHorz: boolean): number => {
 // MHz would let the write LSS demand a byte every 16 CPU cycles while the ROM's
 // write loop needs ~45, so every field would be clocked out with zero-filled
 // underrun gaps.
-const iigsDiskBitCellCycles = () => isIigsSlowMode()
-  ? 0.00012 * 17030
-  : 0.00012 * getIigsFrameUnits()
+//
+// The scaling follows the effective CPU clock (getIigsCpuCyclesPerRefresh): a
+// guest that drops to $C036 slow mode runs the ROM's disk driver at 1 MHz, where
+// a 2 µs flux bit cell really is two CPU cycles. Scaling off the Settings (fast)
+// rate instead made the media 2.744x too slow for the CPU and the ROM's disk
+// handshake loop mis-read sectors.
+const iigsDiskBitCellCycles = () => 0.00012 * getIigsCpuCyclesPerRefresh()
 
 // IWM (Integrated Woz Machine) state for Apple IIgs ($C0E0-$C0EF)
 let iwmQ6 = false

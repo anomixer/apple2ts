@@ -1,6 +1,6 @@
 import { doSetMachineName, doSetRunMode, doBoot, resetCpuSpeedForTesting,
   getIigsVblCount, resetIigsVblCount, iigsSpeedRegister, getIigsVideoClock,
-  getIigsFrameUnits } from "./motherboard"
+  getIigsBeamFrameCount } from "./motherboard"
 import { doSetEmuDriveNewData } from "./devices/drivestate"
 import { RUN_MODE } from "../common/utility"
 import { setIsTesting } from "./worker2main"
@@ -38,6 +38,11 @@ test("IIgs: VBL fires once per refresh even while GS/OS toggles $C036", () => {
     doBoot()
     doSetRunMode(RUN_MODE.RUNNING, false)
     resetIigsVblCount()
+    // A "refresh" is the scanner's frame, not the Settings speed budget: with
+    // $C036 bit 7 = 0 honoured the guest runs at 1.020484 MHz, so a refresh is
+    // 17030 CPU cycles and the run loop closes it on the beam position. The beam
+    // frame counter is therefore the authoritative refresh count.
+    const frameStart = getIigsBeamFrameCount()
     const clockStart = getIigsVideoClock()
 
     // Sample $C036 across the whole run: the ROM's own speed-setting code and
@@ -51,10 +56,9 @@ test("IIgs: VBL fires once per refresh even while GS/OS toggles $C036", () => {
 
     const vbls = getIigsVblCount()
     const clockEnd = getIigsVideoClock()
-    const frameUnits = getIigsFrameUnits()
-    const refreshes = Math.floor(clockEnd / frameUnits) - Math.floor(clockStart / frameUnits)
+    const refreshes = getIigsBeamFrameCount() - frameStart
     console.log(`[VBLCADENCE] frames=${FRAMES} vbls=${vbls} refreshes=${refreshes} ` +
-      `videoUnits=${clockEnd - clockStart} $C036 bit7 seen: ` +
+      `cpuCycles=${clockEnd - clockStart} $C036 bit7 seen: ` +
       [...speedValues].map((v) => v ? "fast" : "slow").join("+"))
 
     // The regression only exists if the OS actually toggles the speed register.

@@ -155,7 +155,8 @@ afterEach(() => {
 if (HAS_525) {
   test("5.25 boot writes provisional device-scan signature then booted warm signature", () => {
     boot(2, DISK_525_PATH)
-    const transitions = signatureTimeline(180)
+    // Frame budgets are measured under the honoured $C036 slow clock: the boot's 1 MHz phases execute less guest code per refresh, so the same boot needs more frames (provisional at f=62, booted at f=227 for A2DeskTop-VERA).
+    const transitions = signatureTimeline(260)
     expect(transitions.length).toBeGreaterThanOrEqual(2)
     expect(transitions[0].sig).toBe("$00 $e0 $45")
     expect(transitions.at(-1)!.sig).toBe("$59 $ff $5a")
@@ -167,7 +168,7 @@ if (HAS_525) {
 
   test("Ctrl-Reset during 5.25 boot stays warm and lands at the prompt", () => {
     boot(2, DISK_525_PATH)
-    runFrames(45)
+    runFrames(120)
     expect(isProvisional()).toBe(true)
     expect(warmComplementValid()).toBe(true)
     const before = sigBytes()
@@ -198,14 +199,14 @@ if (HAS_525) {
     // ROM enters the provisional warm path (startup slot 3 is the text card) and
     // lands on the Applesoft prompt instead of replaying the cold device scan.
     doSetRunMode(RUN_MODE.RUNNING, false)
-    runFrames(220)
+    runFrames(420)
     expect(getTextPageAsString()).toContain("]")
     logEvidence("5.25-during post-reset", getIwmReadStats())
   }, TEST_TIMEOUT)
 
   test("Ctrl-Reset after 5.25 boot keeps signature and warm-starts", () => {
     boot(2, DISK_525_PATH)
-    runFrames(180)
+    runFrames(260)
     expect(isBooted()).toBe(true)
     const before = getIwmReadStats().reads
     doReset()
@@ -233,7 +234,7 @@ if (HAS_525) {
     expect(adbWarmMarker()).toBe(warmAdb)
     resetStats()
     doSetRunMode(RUN_MODE.RUNNING, false)
-    runFrames(240)
+    runFrames(320)
     expect(isBooted()).toBe(true)
     logEvidence("5.25-pre-signature post-reset", getIwmReadStats())
   }, TEST_TIMEOUT)
@@ -246,7 +247,8 @@ if (HAS_525) {
 if (HAS_35) {
   test("3.5 boot writes provisional device-scan signature then booted warm signature", () => {
     boot(4, DISK_35_PATH)
-    const transitions = signatureTimeline(300)
+    // Measured under the honoured slow clock: provisional at f=95, booted at f=352 for Tass Times.2mg; the title later reuses $03F2-$03F4 for its own warm-start vector (f=535), so stop the timeline before that.
+    const transitions = signatureTimeline(360)
     expect(transitions.length).toBeGreaterThanOrEqual(2)
     expect(transitions[0].sig).toBe("$00 $e0 $45")
     expect(transitions.at(-1)!.sig).toBe("$59 $ff $5a")
@@ -256,7 +258,7 @@ if (HAS_35) {
 
   test("Ctrl-Reset during 3.5 boot stays warm and lands at the prompt", () => {
     boot(4, DISK_35_PATH)
-    runFrames(60)
+    runFrames(150)
     expect(isProvisional()).toBe(true)
     expect(warmComplementValid()).toBe(true)
     const before = sigBytes()
@@ -279,14 +281,14 @@ if (HAS_35) {
     // Ctrl-Reset during boot aborts the boot into the Applesoft prompt instead
     // of replaying the cold device scan, matching real Ctrl-Reset behavior.
     doSetRunMode(RUN_MODE.RUNNING, false)
-    runFrames(320)
+    runFrames(420)
     expect(getTextPageAsString()).toContain("]")
     logEvidence("3.5-during post-reset", getIwmReadStats())
   }, TEST_TIMEOUT)
 
   test("Ctrl-Reset after 3.5 boot keeps signature and warm-starts", () => {
     boot(4, DISK_35_PATH)
-    runFrames(300)
+    runFrames(380)
     expect(isBooted()).toBe(true)
     doReset()
     expect(sigBytes()).toEqual([0x59, 0xff, 0x5a])
