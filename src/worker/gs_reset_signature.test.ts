@@ -111,17 +111,12 @@ const resetStats = () => resetIwmReadStats()
 
 // Capture device evidence from the IWM registers used by the boot/device scan.
 // These reads are part of the measured behavior, not just a comment.
-const iwmWindow = () => {
-  const bytes: string[] = []
-  for (let i = 0; i < 16; i++) bytes.push(hex(memGet24(0xc0e0 + i) & 0xff))
-  return bytes.join(" ")
-}
 
 const logEvidence = (label: string, stats: IwmReadStats) => {
-  console.log(`[reset-sig] ${label} signature=${sigText()} ` +
-    `warm=${warmComplementValid()} reads=${stats.reads} ` +
-    `gapCycles=${stats.totalGapCycles} maxBits=${stats.maxBitsPerRead} ` +
-    `iwm=$C0E0-$C0EF=${iwmWindow()}`)
+  // console.log(`[reset-sig] ${label} signature=${sigText()} ` +
+    // `warm=${warmComplementValid()} reads=${stats.reads} ` +
+    // `gapCycles=${stats.totalGapCycles} maxBits=${stats.maxBitsPerRead} ` +
+    // `iwm=$C0E0-$C0EF=${iwmWindow()}`)
 }
 
 const signatureTimeline = (frames: number) => {
@@ -163,7 +158,7 @@ if (HAS_525) {
     expect(transitions[0].frame).toBeLessThan(transitions.at(-1)!.frame)
     expect(transitions.at(-1)!.reads).toBeGreaterThan(1000)
     expect(isBooted()).toBe(true)
-    console.log(`[reset-sig] 5.25 transitions=${JSON.stringify(transitions)}`)
+    // console.log(`[reset-sig] 5.25 transitions=${JSON.stringify(transitions)}`)
   }, TEST_TIMEOUT)
 
   test("Ctrl-Reset during 5.25 boot stays warm and lands at the prompt", () => {
@@ -171,20 +166,19 @@ if (HAS_525) {
     runFrames(120)
     expect(isProvisional()).toBe(true)
     expect(warmComplementValid()).toBe(true)
-    const before = sigBytes()
     const warmAdb = adbWarmMarker()
     expect(warmAdb).toBe(0xa5)
     doReset()
     const immediate = sigBytes()
-    console.log(`[reset-sig] 5.25-during before=${JSON.stringify(before)} immediate=${JSON.stringify(immediate)} adb51=${warmAdb}`)
     // A real Ctrl-Reset keeps the ADB micro's RAM and the Programmer's Guide
     // signature: the provisional $00/$E0/$45 is still checksum-valid, so the
     // warm reset must preserve it rather than zero it into the cold scan path.
-    expect(immediate).toEqual([0, 0xe0, 0x45])
+    expect(immediate).toEqual([...PROVISIONAL_SIGNATURE])
     expect(adbWarmMarker()).toBe(warmAdb)
     // Press Ctrl-Reset a second time while the provisional warm entry is still
     // in flight: the warm marker must survive. This is the "holding Reset does
     // not feel like a full cold start every time" case.
+    resetStats()
     doSetRunMode(RUN_MODE.RUNNING, false)
     runFrames(30)
     doReset()
@@ -208,7 +202,6 @@ if (HAS_525) {
     boot(2, DISK_525_PATH)
     runFrames(260)
     expect(isBooted()).toBe(true)
-    const before = getIwmReadStats().reads
     doReset()
     expect(sigBytes()).toEqual([0x59, 0xff, 0x5a])
     expect(adbWarmMarker()).toBe(0xa5)
@@ -221,7 +214,7 @@ if (HAS_525) {
     expect(stats.reads).toBe(0)
     logEvidence("5.25-after post-reset", stats)
     expect(isBooted()).toBe(true)
-    console.log(`[reset-sig] 5.25-after boot reads=${before}`)
+    // console.log(`[reset-sig] 5.25-after boot reads=${before}`)
   }, TEST_TIMEOUT)
 
   test("Ctrl-Reset before signature is written rescans and boots", () => {
@@ -240,7 +233,7 @@ if (HAS_525) {
   }, TEST_TIMEOUT)
 } else {
   test("5.25 reset signature scenarios skipped (set GS_RESET_SIG_525_PATH)", () => {
-    console.log(`[reset-sig] missing 5.25 image ${DISK_525_PATH}`)
+    // console.log(`[reset-sig] missing 5.25 image ${DISK_525_PATH}`)
   })
 }
 
@@ -253,7 +246,7 @@ if (HAS_35) {
     expect(transitions[0].sig).toBe("$00 $e0 $45")
     expect(transitions.at(-1)!.sig).toBe("$59 $ff $5a")
     expect(isBooted()).toBe(true)
-    console.log(`[reset-sig] 3.5 transitions=${JSON.stringify(transitions)}`)
+    // console.log(`[reset-sig] 3.5 transitions=${JSON.stringify(transitions)}`)
   }, TEST_TIMEOUT)
 
   test("Ctrl-Reset during 3.5 boot stays warm and lands at the prompt", () => {
@@ -261,14 +254,13 @@ if (HAS_35) {
     runFrames(150)
     expect(isProvisional()).toBe(true)
     expect(warmComplementValid()).toBe(true)
-    const before = sigBytes()
     const warmAdb = adbWarmMarker()
     expect(warmAdb).toBe(0xa5)
     doReset()
     const immediate = sigBytes()
-    console.log(`[reset-sig] 3.5-during before=${JSON.stringify(before)} immediate=${JSON.stringify(immediate)} adb51=${warmAdb}`)
-    expect(immediate).toEqual([0, 0xe0, 0x45])
+    expect(immediate).toEqual([...PROVISIONAL_SIGNATURE])
     expect(adbWarmMarker()).toBe(warmAdb)
+    resetStats()
     doSetRunMode(RUN_MODE.RUNNING, false)
     runFrames(20)
     doReset()
@@ -305,7 +297,7 @@ if (HAS_35) {
   }, TEST_TIMEOUT)
 } else {
   test("3.5 reset signature scenarios skipped (set GS_RESET_SIG_35_PATH)", () => {
-    console.log(`[reset-sig] missing 3.5 image ${DISK_35_PATH}`)
+    // console.log(`[reset-sig] missing 3.5 image ${DISK_35_PATH}`)
   })
 }
 

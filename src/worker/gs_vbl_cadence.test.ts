@@ -1,5 +1,6 @@
+﻿import { testWithFixtures } from "../test/fixture_test"
 import { doSetMachineName, doSetRunMode, doBoot, resetCpuSpeedForTesting,
-  getIigsVblCount, resetIigsVblCount, iigsSpeedRegister, getIigsVideoClock,
+  getIigsVblCount, resetIigsVblCount, iigsSpeedRegister,
   getIigsBeamFrameCount } from "./motherboard"
 import { doSetEmuDriveNewData } from "./devices/drivestate"
 import { RUN_MODE } from "../common/utility"
@@ -22,7 +23,7 @@ import * as fs from "fs"
 const FRAMES = Number(process.env.GSVBL_FRAMES || 4000)
 const PO_PATH = process.env.GSVBL_PO || "C:\\dev\\emu\\ap2\\GSOS601.po"
 
-test("IIgs: VBL fires once per refresh even while GS/OS toggles $C036", () => {
+testWithFixtures(PO_PATH)("IIgs: VBL fires once per refresh even while GS/OS toggles $C036", () => {
   jest.useFakeTimers()
   setIsTesting()
   try {
@@ -43,7 +44,6 @@ test("IIgs: VBL fires once per refresh even while GS/OS toggles $C036", () => {
     // 17030 CPU cycles and the run loop closes it on the beam position. The beam
     // frame counter is therefore the authoritative refresh count.
     const frameStart = getIigsBeamFrameCount()
-    const clockStart = getIigsVideoClock()
 
     // Sample $C036 across the whole run: the ROM's own speed-setting code and
     // its interrupt manager write the register during boot and while 8-bit
@@ -55,11 +55,11 @@ test("IIgs: VBL fires once per refresh even while GS/OS toggles $C036", () => {
     }
 
     const vbls = getIigsVblCount()
-    const clockEnd = getIigsVideoClock()
     const refreshes = getIigsBeamFrameCount() - frameStart
-    console.log(`[VBLCADENCE] frames=${FRAMES} vbls=${vbls} refreshes=${refreshes} ` +
-      `cpuCycles=${clockEnd - clockStart} $C036 bit7 seen: ` +
-      [...speedValues].map((v) => v ? "fast" : "slow").join("+"))
+    // getIigsVideoClock() counts CPU cycles, and a refresh is 17030 of them in
+    // slow mode but the Settings budget in fast mode, so dividing it by a frame
+    // budget no longer counts refreshes. The beam frame counter is the one index
+    // the run loop, the VBL and $C02E/$C02F all close on.
 
     // The regression only exists if the OS actually toggles the speed register.
     expect(speedValues.size).toBe(2)
