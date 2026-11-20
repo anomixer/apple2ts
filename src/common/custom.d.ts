@@ -541,6 +541,11 @@ type DriveState = {
   diskInPlace: boolean,
   stepEnd: number,
   readyEnd: number,
+  // CPU-cycle deadline of the Sony mechanism's ~0.5 s spin-down. Nonzero means
+  // the spindle latch was just released but the disc is still coasting, which
+  // is what the IWM status selector 4 (motor-on) has to keep reporting and what
+  // the LSS keeps clocking from until the deadline passes.
+  spindleOffEnd: number,
   // Flux tracks (WOZ 2.1 FLUX tracks and A2R3 captures) are read only. The
   // per-quarter-track arrays stay empty on a disk with no flux, so that the
   // save states of other disks hardly grow.

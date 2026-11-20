@@ -53,6 +53,7 @@ export const blankFluxDriveState = (psPerTick: number): DriveState => ({
   diskInPlace: false,
   stepEnd: 0,
   readyEnd: 0,
+  spindleOffEnd: 0,
   fluxKind: FLUX_KIND.WOZ,
   fluxPsPerTick: psPerTick,
   fluxLapStart: Array<number>(160).fill(0),

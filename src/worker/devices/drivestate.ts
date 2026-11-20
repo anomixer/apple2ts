@@ -46,6 +46,7 @@ const initDriveState = (index: number, drive: number, hardDrive: boolean): Drive
     diskInPlace: false,
     stepEnd: 0,
     readyEnd: 0,
+    spindleOffEnd: 0,
     fluxKind: FLUX_KIND.NONE,
     fluxPsPerTick: 0,
     // These stay empty until a flux disk is decoded, so that the save states

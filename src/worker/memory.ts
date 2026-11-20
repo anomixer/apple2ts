@@ -333,6 +333,46 @@ let iwmDiskRegister = 0
 const IWM_FLOPPY_BASE = { 5: 4, 6: 2 }
 export const iigsGetIwmDriveSelect = () => iwmDriveSelect
 export const iigsGetIwmMotorOn = () => iwmMotorOn
+// MC14536 motor-off holdover. The IIgs IWM does not drop /ENBL the instant the
+// ENABLE softswitch is released: as long as MODE.M (bit 2) is clear it keeps the
+// selected drive asserted for one more second so the media can spin down under
+// its own timer. gssquared models exactly this (IWM2::mark_cycles_turnoff, one
+// second of the 14.318 MHz clock) and records why it is mandatory: the
+// firmware's SELIWM sequence and the ROM 03 POST self-test both poll status bit
+// 5 (which is this line, not the ENABLE latch) waiting for it to drop, so
+// without the holdover they spin forever on a bit that can never change, and a
+// read in flight is cut off the moment the driver releases ENABLE.
+let iwmEnblHoldoverEnd = 0
+const iwmEnblAsserted = () => {
+  if (iwmMotorOn) return true
+  if (iwmEnblHoldoverEnd === 0) return false
+  // Measured in CPU cycles, so it follows the effective clock: a $C036 slow
+  // phase has to hold /ENBL for the same wall time, not the same cycle count.
+  if (s6502.cycleCount < iwmEnblHoldoverEnd) return true
+  iwmEnblHoldoverEnd = 0
+  return false
+}
+// ENABLE ($C0E8/$C0E9) edge. Only a real 1->0 transition arms the timer, and
+// MODE.M=1 means "no holdover"; anything that asserts ENABLE cancels it.
+const iwmSetEnableSwitch = (on: boolean) => {
+  if (iwmMotorOn === on) return
+  if (on) {
+    iwmEnblHoldoverEnd = 0
+  } else if ((iwmMode & 0x04) === 0) {
+    iwmEnblHoldoverEnd = s6502.cycleCount + getIigsCpuCyclesPerRefresh() * 60
+  } else {
+    iwmEnblHoldoverEnd = 0
+  }
+  iwmMotorOn = on
+}
+// Spindle/LSS gate. The MC14536 holdover keeps the 3.5" drive clocked, as it
+// does in gssquared (IWM2::sync_drive_enables pushes the /ENBL line into the
+// drive's enable latch). The 5.25" family stays on the raw ENABLE latch: with
+// the holdover applied there too, the IIgs 5.25" boot derails - the boot
+// signature flips and the machine ends up in a Ctrl-Reset loop. Reads issued
+// after the driver releases ENABLE return a live bit stream for a second
+// instead of the idle 0x80 the ROM's driver is written around.
+const iwmSpindleEnable = () => iwmEnable35 ? iwmEnblAsserted() : iwmMotorOn
 // True when the given drive-state index holds decodable floppy media.
 export const iigsFloppyHasMedia = (index: number) => {
   const ds = getDriveStateByIndex(index)
@@ -359,6 +399,7 @@ export const iigsResetIwm = () => {
   iwmQ6 = false
   iwmQ7 = false
   iwmMotorOn = false
+  iwmEnblHoldoverEnd = 0
   iwmDriveSelect = 0
   iwmMode = 0
   iwmEnable35 = false
@@ -1440,8 +1481,8 @@ const memGetSoftSwitch = (addr: number): number => {
   if (currentMachineName === "APPLE2GS" && addr >= 0xC0E0 && addr <= 0xC0EF) {
     const reg = addr & 0x0F
     switch (reg) {
-      case 0x08: iwmMotorOn = false; break
-      case 0x09: iwmMotorOn = true; break
+      case 0x08: iwmSetEnableSwitch(false); break
+      case 0x09: iwmSetEnableSwitch(true); break
       case 0x0A: iwmDriveSelect = 0; break
       case 0x0B: iwmDriveSelect = 1; break
       case 0x0C: iwmQ6 = false; break
@@ -1468,20 +1509,21 @@ const memGetSoftSwitch = (addr: number): number => {
     // status or mode access still lets the disc rotate under the head.
     if (iwmEnable35) {
       iwmAdvance35(iwmDriveIndex,
-        iwmFloppySpinning(iwmDriveIndex, iwmMotorOn), iigsDiskBitCellCycles())
+        iwmFloppySpinning(iwmDriveIndex, iwmEnblAsserted()), iigsDiskBitCellCycles())
     }
     // $C0E0-$C0E7 are the head stepper lines (CA0-CA2 plus LSTRB). They apply on
     // every access, not just reads, because firmware strobes them either way.
     if (reg <= 7) {
-      iwmStepHead(iwmDriveIndex, reg, iwmMotorOn, iwmHdsel)
+      iwmStepHead(iwmDriveIndex, reg, iwmEnblAsserted(), iwmHdsel)
     }
     if (!iwmQ7) {
       if (iwmQ6) {
-        // Read status register: bits 0-4 mode, bit 5 motor/enable. On a 3.5"
-        // drive bit 7 is the selected status function's output, not the 5.25
-        // write-protect sense.
+        // Read status register: bits 0-4 mode, bit 5 is the IWM's /ENBL output
+        // (ENABLE or the MC14536 holdover), not the ENABLE latch itself. On a
+        // 3.5" drive bit 7 is the selected status function's output, not the
+        // 5.25 write-protect sense.
         let status = iwmMode & 0x1F
-        if (iwmMotorOn) status |= 0x20
+        if (iwmEnblAsserted()) status |= 0x20
         if (iwmEnable35) {
           status |= iwmGetSense35(iwmDriveIndex, iwmHdsel) << 7
           // The ROM reads the status register once after its final write
@@ -1506,7 +1548,7 @@ const memGetSoftSwitch = (addr: number): number => {
         // stream there derails the boot (see gssquared IWM2.hpp on the ROM03
         // power-on disk self-test).
         if (iigsFloppyHasMedia(iwmDriveIndex)) {
-          const spinning = iwmFloppySpinning(iwmDriveIndex, iwmMotorOn)
+          const spinning = iwmFloppySpinning(iwmDriveIndex, iwmSpindleEnable())
           // The 5.25" Logic State Sequencer is clocked by the CPU, not by wall
           // time: gssquared's Floppy525_woz counts 4 CPU cycles per bit cell in
           // every speed mode (only the 3.5" drive, which uses get_vid_cycles(),
@@ -1536,7 +1578,7 @@ const memGetSoftSwitch = (addr: number): number => {
         // spins at $FF:57B7 if it reads the 0xC0 the 3.5" sync path used to
         // return here.
         if (iwmEnable35) {
-          const spinning = iwmFloppySpinning(iwmDriveIndex, iwmMotorOn)
+          const spinning = iwmFloppySpinning(iwmDriveIndex, iwmEnblAsserted())
           return iwmReadHandshake35(iwmDriveIndex, spinning, iigsDiskBitCellCycles())
         }
         return 0x80
@@ -1830,8 +1872,8 @@ const memSetSoftSwitch = (addr: number, value: number) => {
     if (currentMachineName === "APPLE2GS" && addr >= 0xC0E0 && addr <= 0xC0EF) {
         const reg = addr & 0x0F
         switch (reg) {
-            case 0x08: iwmMotorOn = false; break
-            case 0x09: iwmMotorOn = true; break
+            case 0x08: iwmSetEnableSwitch(false); break
+            case 0x09: iwmSetEnableSwitch(true); break
             case 0x0A: iwmDriveSelect = 0; break
             case 0x0B: iwmDriveSelect = 1; break
             case 0x0C: iwmQ6 = false; break
@@ -1850,10 +1892,10 @@ const memSetSoftSwitch = (addr: number, value: number) => {
         if (!iwmEnable35 && (reg === 0x08 || reg === 0x09)) iwmRebase525Timing()
         const iwmDriveIndex = IWM_FLOPPY_BASE[iwmEnable35 ? 5 : 6] + iwmDriveSelect
         if (reg <= 7) {
-            iwmStepHead(iwmDriveIndex, reg, iwmMotorOn, (iwmDiskRegister >> 7) & 1)
+            iwmStepHead(iwmDriveIndex, reg, iwmEnblAsserted(), (iwmDiskRegister >> 7) & 1)
         }
         if (iwmQ6 && iwmQ7 && (reg & 1)) {
-            if (!iwmMotorOn) {
+            if (!iwmEnblAsserted()) {
                 // Mode register: only writable while ENABLE is released
                 // (gssquared IWM2::write). Switching out of async mode ends a
                 // write session, so persist anything the burst wrote.
@@ -1863,7 +1905,7 @@ const memSetSoftSwitch = (addr: number, value: number) => {
                 // 3.5" async write: queue the byte; the LSS clocks it out at
                 // the disk bit rate (MODE.H=1).
                 iwmWriteDataRegister35(iwmDriveIndex, value,
-                    iwmFloppySpinning(iwmDriveIndex, iwmMotorOn),
+                    iwmFloppySpinning(iwmDriveIndex, iwmEnblAsserted()),
                     iigsDiskBitCellCycles())
             } else if (!iwmEnable35) {
                 // 5.25" sync write: load one byte into the shift register. The

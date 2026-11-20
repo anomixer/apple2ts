@@ -1,4 +1,4 @@
-import { doSetMachineName, doSetRunMode, doReset, resetCpuSpeedForTesting } from "./motherboard"
+﻿import { doSetMachineName, doSetRunMode, doReset, resetCpuSpeedForTesting } from "./motherboard"
 import { memGet24, getTextPageAsString } from "./memory"
 import { iigsADB } from "./iigs_adb"
 import { doSetEmuDriveNewData } from "./devices/drivestate"
@@ -241,7 +241,8 @@ if (HAS_35) {
   test("3.5 boot writes provisional device-scan signature then booted warm signature", () => {
     boot(4, DISK_35_PATH)
     // Measured under the honoured slow clock: provisional at f=95, booted at f=352 for Tass Times.2mg; the title later reuses $03F2-$03F4 for its own warm-start vector (f=535), so stop the timeline before that.
-    const transitions = signatureTimeline(360)
+    // Our IWM /ENBL latch and Sony spin-down model make the 3.5-inch boot about a second longer than the forced fast clock did: the booted signature lands near frame 411, so budget past it.
+    const transitions = signatureTimeline(470)
     expect(transitions.length).toBeGreaterThanOrEqual(2)
     expect(transitions[0].sig).toBe("$00 $e0 $45")
     expect(transitions.at(-1)!.sig).toBe("$59 $ff $5a")
@@ -280,7 +281,7 @@ if (HAS_35) {
 
   test("Ctrl-Reset after 3.5 boot keeps signature and warm-starts", () => {
     boot(4, DISK_35_PATH)
-    runFrames(380)
+    runFrames(470)
     expect(isBooted()).toBe(true)
     doReset()
     expect(sigBytes()).toEqual([0x59, 0xff, 0x5a])

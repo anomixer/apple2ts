@@ -123,6 +123,7 @@ export const doResetDiskDrive = (driveState: DriveState, driveData?: Uint8Array)
   // latched by a CONT35 command, not by /ENBL, and the head springs back to
   // track 0 side 0 on reset. gssquared's Floppy35_woz::reset() does the same.
   driveState.spindleOn = false
+  driveState.spindleOffEnd = 0
   driveState.stepDirection = 0
   driveState.diskSwitched = false
   driveState.stepEnd = 0
@@ -1077,6 +1078,12 @@ const FLOPPY35_MAX_TRACK = 79
 const update35Timers = (ds: DriveState) => {
   if (ds.stepEnd !== 0 && s6502.cycleCount >= ds.stepEnd) ds.stepEnd = 0
   if (ds.readyEnd !== 0 && s6502.cycleCount >= ds.readyEnd) ds.readyEnd = 0
+  // The Sony mechanism coasts: MOTOR OFF schedules a spin-down instead of
+  // stopping the disc on the strobe (gssquared schedule_motor_off()).
+  if (ds.spindleOffEnd !== 0 && s6502.cycleCount >= ds.spindleOffEnd) {
+    ds.spindleOffEnd = 0
+    ds.spindleOn = false
+  }
 }
 
 // Angular-preserving track/side switch. A 3.5" track's bit count varies by
@@ -1139,13 +1146,14 @@ const triggerControl35 = (ds: DriveState, hdsel: number) => {
     }
     case 0x4: // spindle motor on
       ds.spindleOn = true
+      ds.spindleOffEnd = 0
       // The disc was stationary; start the media clock clean.
       headRemainder35 = 0
       headPending35 = 0
       ds.readyEnd = s6502.cycleCount + 5000
       break
-    case 0xC: // spindle motor off
-      ds.spindleOn = false
+    case 0xC: // spindle motor off: the disc coasts for half a second
+      ds.spindleOffEnd = s6502.cycleCount + MOTOR_OFF_CYCLES / 2
       headRemainder35 = 0
       headPending35 = 0
       ds.readyEnd = 0
