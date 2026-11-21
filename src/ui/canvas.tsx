@@ -210,7 +210,20 @@ const Apple2Canvas = (props: DisplayProps) => {
   const isClosedApple = (e: keyEvent) =>
     isClosedAppleCode(e.code, getUIStateBoolean("useOpenAppleKey"))
 
+  // The IIgs keyboard is an ADB device and Open Apple is a real guest modifier
+  // there: on Windows it is bound to Alt, so Alt+1..5, Alt+B, Alt+S and the rest
+  // are chords the guest may be waiting for (game setup screens use them). The
+  // host shortcut table used to swallow them before they reached the ADB path -
+  // pressing Alt+1..5 also changed the CPU speed behind the game's back, which
+  // shifts the machine to a rate the title's own timing loops were not written
+  // for. On the GS let every meta sequence reach the guest; speed, boot, reset,
+  // save state and the like stay available from the controls and menus.
+  const metaKeysBelongToGuest = () => getMachineCapabilities(handleGetMachineName()).isGS
+
   const isMetaSequence = (e: keyEvent): boolean => {
+    if (metaKeysBelongToGuest()) {
+      return false
+    }
     if (e.shiftKey) {
       return false
     }
