@@ -20,7 +20,7 @@ import { isDebugging, setIigsSpeedRegister, getIigsBeamPos, getIigsVideoClock, g
 import { iigsClock } from "./iigs_clock"
 import { iigsADB } from "./iigs_adb"
 import { iigsEnsoniq, docAccess } from "./devices/iigs_ensoniq"
-import { iwmAdvance35, iwmAdvance525Write, iwmFloppySpinning, iwmFlushWrites35, iwmGetSense35, iwmReadDataRegister, iwmReadHandshake35, iwmReadSense525, iwmRebase525Timing, iwmReset35Lines, iwmReset525PendingWrites, iwmResetTiming, iwmStepHead, iwmWriteDataRegister35, iwmWriteDataRegister525 } from "./devices/diskdata"
+import { iwmAdvance35, iwmAdvance525Write, iwmFloppySpinning, iwmFlushWrites35, iwmGetSense35, iwmReadDataRegister, iwmReadHandshake35, iwmReadSense525, iwmRebase525Timing, iwmReset35Lines, iwmReset525PendingWrites, setIigs35TimerScale, iwmResetTiming, iwmStepHead, iwmSyncDriveEnables35, iwmWriteDataRegister35, iwmWriteDataRegister525 } from "./devices/diskdata"
 import { getDriveDataByIndex, getDriveStateByIndex } from "./devices/drivestate"
 
 // 0x00000: main memory
@@ -300,19 +300,31 @@ const readIigsVideoCounter = (wantHorz: boolean): number => {
   return v
 }
 
-// CPU cycles per 3.5" disk bit cell (2 µs). The IWM clocks the media off
-// machine time, not off CPU cycles, so a 2.8 MHz fast-mode CPU gets ~5.6 cycles
-// per bit while the 1.02 MHz clock gets ~2. Using the slow-mode figure at 2.8
-// MHz would let the write LSS demand a byte every 16 CPU cycles while the ROM's
-// write loop needs ~45, so every field would be clocked out with zero-filled
-// underrun gaps.
-//
-// The scaling follows the effective CPU clock (getIigsCpuCyclesPerRefresh): a
-// guest that drops to $C036 slow mode runs the ROM's disk driver at 1 MHz, where
-// a 2 µs flux bit cell really is two CPU cycles. Scaling off the Settings (fast)
-// rate instead made the media 2.744x too slow for the CPU and the ROM's disk
-// handshake loop mis-read sectors.
-const iigsDiskBitCellCycles = () => 0.00012 * getIigsCpuCyclesPerRefresh()
+
+// The Sony 3.5" LSS runs off the machine's video clock, not the CPU clock:
+// gssquared Floppy35_woz::head_advance_per_cycle() advances
+// (4 * POSITION_ADV_PER_CYCLE * 16) / optimal_bit_timing = 1024/opt sixty-fourths
+// of a bit cell per *video* cycle, which is 8/opt bit cells per video cycle
+// (0.5 for the 2 us cell every 3.5" image declares). Converting through the
+// effective CPU clock keeps the media rate exact in every speed mode, including
+// $C036 slow mode where a bit cell really is two CPU cycles.
+const iigsDiskBitCellCycles35 = (driveIndex: number) => {
+  const optimalTiming = getDriveStateByIndex(driveIndex).optimalTiming || 16
+  return (getIigsCpuCyclesPerRefresh() / VIDEO_CYCLES_PER_FRAME) * (optimalTiming / 8)
+}
+
+// The Sony 3.5" mechanism coasts for ~0.5 s of machine time after /ENBL drops
+// (gssquared Floppy35_woz::schedule_motor_off, half a second of the 14.318 MHz
+// clock). Machine time, not CPU cycles, so it is spelled in frames of the
+// effective clock like the IWM's own one-second /ENBL holdover.
+const iigsCoastCycles = () => getIigsCpuCyclesPerRefresh() * 30
+
+// The Sony mechanism's own timers (seek settle, spindle spin-up) are spelled in
+// 1.023 MHz video cycles in gssquared (Floppy35_woz::update_timers compares
+// against clock->get_vid_cycles()), while the drive model latches them in CPU
+// cycles. Install the live ratio so 5000/1000 video cycles really are 5000/1000
+// video cycles in every speed mode instead of settling ~2.7x too early.
+setIigs35TimerScale(() => getIigsCpuCyclesPerRefresh() / VIDEO_CYCLES_PER_FRAME)
 
 // IWM (Integrated Woz Machine) state for Apple IIgs ($C0E0-$C0EF)
 let iwmQ6 = false
@@ -1504,18 +1516,29 @@ const memGetSoftSwitch = (addr: number): number => {
     // $C031 bit 7 is SEL/HDSEL: the fourth bit of the 3.5" status/control
     // selector (the 5.25" family ignores it).
     const iwmHdsel = (iwmDiskRegister >> 7) & 1
+    // Route /ENBL into the 3.5" bays (IWM2::sync_drive_enables): only the
+    // selected bay sees the line, so this is also where a released ENABLE or a
+    // bay switch arms the Sony coast-down.
+    iwmSyncDriveEnables35(iwmEnable35 && iwmEnblAsserted(),
+      IWM_FLOPPY_BASE[5] + iwmDriveSelect, iigsCoastCycles())
     // The 3.5" spindle turns continuously, so the media clock has to be brought
     // up to "now" on every IWM access, not only on data-register ones: a
     // status or mode access still lets the disc rotate under the head.
     if (iwmEnable35) {
       iwmAdvance35(iwmDriveIndex,
-        iwmFloppySpinning(iwmDriveIndex, iwmEnblAsserted()), iigsDiskBitCellCycles())
+        iwmFloppySpinning(iwmDriveIndex, iwmEnblAsserted()), iigsDiskBitCellCycles35(iwmDriveIndex))
     }
     // $C0E0-$C0E7 are the head stepper lines (CA0-CA2 plus LSTRB). They apply on
     // every access, not just reads, because firmware strobes them either way.
     if (reg <= 7) {
       iwmStepHead(iwmDriveIndex, reg, iwmEnblAsserted(), iwmHdsel)
     }
+    // Only even addresses expose a register: gssquared's IWM::read() decodes the
+    // switch (so the latch state still changes) but then falls through to 0 for
+    // an odd address. The ROM's 3.5" firmware walks that sequence at $E1:6A73
+    // (LDA $C0EE,X / LDA $C0ED,X / LDA $C0EE,X / LDA $C0EC,X) and expects the
+    // odd peek to read as zero while the even ones return status/data.
+    let iwmValue = 0
     if (!iwmQ7) {
       if (iwmQ6) {
         // Read status register: bits 0-4 mode, bit 5 is the IWM's /ENBL output
@@ -1536,7 +1559,7 @@ const memGetSoftSwitch = (addr: number): number => {
           // otherwise.
           status |= iwmReadSense525(iwmDriveIndex) << 7
         }
-        return status
+        iwmValue = status
       } else {
         // Data register. The Logic State Sequencer shifts continuously, so
         // advance it to "now" and return whatever it has latched.
@@ -1557,33 +1580,37 @@ const memGetSoftSwitch = (addr: number): number => {
           // to wall time makes the loop re-read each nibble 2.7x before the next
           // bit cell arrives and it never locks on.
           iwmReset525PendingWrites()
-          return iwmReadDataRegister(iwmDriveIndex, spinning,
+          iwmValue = iwmReadDataRegister(iwmDriveIndex, spinning,
             (iwmMode & 1) !== 0, true)
+        } else if (iwmEnable35) {
+          // An empty 3.5" bay reads as zero.
+          iwmValue = 0
+        } else {
+          // Empty 5.25" bay: the data register sits at 0 (gssquared's
+          // Floppy525 read path with no media). ROM 03's power-on disk
+          // self-test reads this register before any drive is enabled, and a
+          // live bit stream there derails the boot (see gssquared IWM2.hpp on
+          // that self-test), so the LSS stays quiet until media is present.
+          checkSlotIO(addr)
+          iwmValue = 0
         }
-        // An empty 3.5" bay reads as zero; the ROM's 5.25" self-test wants the
-        // ROM byte instead.
-        if (iwmEnable35) return 0
-        checkSlotIO(addr)
-        return memory[ROMmemoryStart + addr - 0xC000]
       }
-    } else {
-      if (iwmQ6) {
-        return 0
+    } else if (!iwmQ6) {
+      // Handshake register: bit 7 (ready) | bit 6 (underrun). A 3.5" drive
+      // in async mode owns these bits while it clocks a queued byte onto
+      // the media. The 5.25" family never enters async mode, so the IWM's
+      // idle state is ready with no underrun (gssquared reg_handshake after
+      // reset is 0x80). ROM 03's write-handshake self-test polls bit 6 and
+      // spins at $FF:57B7 if it reads the 0xC0 the 3.5" sync path used to
+      // return here.
+      if (iwmEnable35) {
+        const spinning = iwmFloppySpinning(iwmDriveIndex, iwmEnblAsserted())
+        iwmValue = iwmReadHandshake35(iwmDriveIndex, spinning, iigsDiskBitCellCycles35(iwmDriveIndex))
       } else {
-        // Handshake register: bit 7 (ready) | bit 6 (underrun). A 3.5" drive
-        // in async mode owns these bits while it clocks a queued byte onto
-        // the media. The 5.25" family never enters async mode, so the IWM's
-        // idle state is ready with no underrun (gssquared reg_handshake after
-        // reset is 0x80). ROM 03's write-handshake self-test polls bit 6 and
-        // spins at $FF:57B7 if it reads the 0xC0 the 3.5" sync path used to
-        // return here.
-        if (iwmEnable35) {
-          const spinning = iwmFloppySpinning(iwmDriveIndex, iwmEnblAsserted())
-          return iwmReadHandshake35(iwmDriveIndex, spinning, iigsDiskBitCellCycles())
-        }
-        return 0x80
+        iwmValue = 0x80
       }
     }
+    return (reg & 1) === 0 ? iwmValue : 0
   }
 
   // Apple IIgs STATE register ($C068)
@@ -1891,6 +1918,8 @@ const memSetSoftSwitch = (addr: number, value: number) => {
         }
         if (!iwmEnable35 && (reg === 0x08 || reg === 0x09)) iwmRebase525Timing()
         const iwmDriveIndex = IWM_FLOPPY_BASE[iwmEnable35 ? 5 : 6] + iwmDriveSelect
+        iwmSyncDriveEnables35(iwmEnable35 && iwmEnblAsserted(),
+            IWM_FLOPPY_BASE[5] + iwmDriveSelect, iigsCoastCycles())
         if (reg <= 7) {
             iwmStepHead(iwmDriveIndex, reg, iwmEnblAsserted(), (iwmDiskRegister >> 7) & 1)
         }
@@ -1906,7 +1935,7 @@ const memSetSoftSwitch = (addr: number, value: number) => {
                 // the disk bit rate (MODE.H=1).
                 iwmWriteDataRegister35(iwmDriveIndex, value,
                     iwmFloppySpinning(iwmDriveIndex, iwmEnblAsserted()),
-                    iigsDiskBitCellCycles())
+                    iigsDiskBitCellCycles35(iwmDriveIndex))
             } else if (!iwmEnable35) {
                 // 5.25" sync write: load one byte into the shift register. The
                 // bits leave on the next $C0E0-$C0EF access (iwmAdvance525Write).

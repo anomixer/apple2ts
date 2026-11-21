@@ -39,15 +39,14 @@ let asyncBuffer35 = 0
 let asyncBufferValid35 = false
 let handshake35 = 0x80
 // 3.5" media clock. The spindle rotates continuously while the mechanism is
-// enabled, so the position under the head is a function of machine time alone:
-// `headRemainder35` holds the fraction of a bit cell and `headPending35` the
-// whole cells the LSS has not simulated yet (gssquared's head_position minus
-// read_position). Both live at module scope and are fed by every IWM access,
-// not just data-register ones; a per-phase remainder let the read side fall
-// behind the write side by tens of bit cells and the ROM's rewritten data
-// field landed on top of the next address field.
-let headRemainder35 = 0
-let headPending35 = 0
+// enabled, so the position under the head is a function of machine time alone.
+// Every drive keeps its own fraction of a bit cell, its own pool of cells the
+// LSS has not simulated yet, and the cycle count its clock was last advanced to
+// (gssquared's head_position / read_position / last_cycle on Floppy_woz). They
+// are fed by every IWM access, not just data-register ones, and they cannot be
+// shared: with one pool the cells that accumulated while the *other* bay was
+// selected were handed to the drive the guest had just switched to, so its
+// first byte after the switch came out shifted by a bit or two.
 // Cycles the last iwmAdvance35() accounted for, for the read-cadence sampler.
 let iwmAdvanceCycles35 = 0
 let writeBurst35 = false
@@ -235,6 +234,26 @@ const weakBitWindow = (bit: number) => {
   return bit
 }
 
+// 3.5" drives get the same treatment from gssquared, whose Floppy_woz::read_pulse
+// hands the LSS a fake bit whenever the last four cells were all zero. Both the
+// zero window and the fake-bit generator live on the drive there, and the
+// generator is the rotating 64-bit constant from get_random_bit():
+//   random_bits = (random_bits << 1) | (random_bits >> 63); return random_bits & 1;
+// A rotation preserves the 64 bits, so the sequence it produces is the seed read
+// MSB-first and repeated every 64 fake bits.
+const gsFakeBitSeed = "0101111111001011100111100111011001111101110000110101001000111010"
+const gsFakeBits = Array.from(gsFakeBitSeed, (c) => (c === "1" ? 1 : 0))
+const weakBitWindow35 = (ds: DriveState, bit: number) => {
+  const window = (((ds.weakWindow35 ?? 0) << 1) | bit) & 0x0f
+  ds.weakWindow35 = window
+  if (window === 0x00) {
+    const pos = ds.weakRand35 ?? 0
+    ds.weakRand35 = (pos + 1) & 0xffff
+    return gsFakeBits[pos & 63]
+  }
+  return bit
+}
+
 const pickbit = [128, 64, 32, 16, 8, 4, 2, 1]
 const clearbit = [0b01111111, 0b10111111, 0b11011111, 0b11101111,
   0b11110111, 0b11111011, 0b11111101, 0b11111110]
@@ -257,7 +276,15 @@ const getNextBit = (ds: DriveState, dd: Uint8Array) => {
     const byte = dd[fileOffset]
     const b = ds.trackLocation & 7
     bit = (byte & pickbit[b]) >> (7 - b)
-    bit = weakBitWindow(bit)
+    // WOZ "weak bits": a run of zero cells reads back as noise, not as zeros,
+    // and the head never sees a long run of zeros. gssquared applies this in
+    // Floppy_woz::read_pulse() for every WOZ drive, 5.25" and 3.5" alike
+    // ("Four consecutive zeros: hand the LSS a random fake bit"), and the 3.5"
+    // media in circulation do contain zero-cell runs (inter-sector gaps).
+    // Without the shim the LSS sits on those zeros, the data register never
+    // publishes, and the driver reads $00 instead of the bytes a real drive
+    // produces. The 3.5" generator is per-drive, as in gssquared.
+    bit = ds.is35 ? weakBitWindow35(ds, bit) : weakBitWindow(bit)
   } else {
     // Freak out like a MC3470 and return random bits
     bit = randBit()
@@ -860,8 +887,13 @@ export const resetIwmWrite525Stats = () => {
 export const iwmResetTiming = () => {
   iwmPrevCycleCount = s6502.cycleCount
   cycleRemainder = 0
-  headRemainder35 = 0
-  headPending35 = 0
+  for (let i = 0; i < 6; i++) {
+    const ds = getDriveStateByIndex(i)
+    if (!ds?.is35) continue
+    ds.headRemainder35 = 0
+    ds.headPending35 = 0
+    ds.headCycle35 = s6502.cycleCount
+  }
   dataRegister = 0
   dataRegHold = false
   iwm525WriteLatched = false
@@ -1075,14 +1107,37 @@ export const iwmWriteDataRegister525 = (driveIndex: number, value: number, reg =
 
 const FLOPPY35_MAX_TRACK = 79
 
+// gssquared's Floppy35_woz timers run off the IIgs *video* clock
+// (NClockII::get_vid_cycles, one "vid cycle" per 2.744 CPU cycles in speed mode
+// 1), while this model measures head motion in machine CPU cycles. A raw 5000
+// would therefore settle the head ~2.7x too quickly at 2.8 MHz - early enough
+// that the ROM driver samples the address field of a 3.5" sector at a phase the
+// real drive never reaches (it is still seeking). memory.ts installs the live
+// conversion factor for the current speed mode.
+let iigs35TimerScale = () => 1
+export const setIigs35TimerScale = (fn: () => number) => {
+  iigs35TimerScale = fn
+}
+const settle35 = (videoCycles: number) => Math.round(videoCycles * iigs35TimerScale())
+
 const update35Timers = (ds: DriveState) => {
   if (ds.stepEnd !== 0 && s6502.cycleCount >= ds.stepEnd) ds.stepEnd = 0
-  if (ds.readyEnd !== 0 && s6502.cycleCount >= ds.readyEnd) ds.readyEnd = 0
-  // The Sony mechanism coasts: MOTOR OFF schedules a spin-down instead of
-  // stopping the disc on the strobe (gssquared schedule_motor_off()).
+  if (ds.readyEnd !== 0 && s6502.cycleCount >= ds.readyEnd) {
+    ds.readyEnd = 0
+    // gssquared's update_timers(): the ready flag only latches true when the
+    // seek/motor-on settle timer actually expires (Floppy35_woz.hpp).
+    ds.diskReady = true
+  }
+  // The Sony mechanism coasts: MOTOR OFF or a released /ENBL schedules a
+  // spin-down instead of stopping the disc dead (gssquared schedule_motor_off(),
+  // ~0.5 s of the 14.318 MHz clock). Its callback drops the spindle, the
+  // disk-ready latch and any running seek timer together.
   if (ds.spindleOffEnd !== 0 && s6502.cycleCount >= ds.spindleOffEnd) {
     ds.spindleOffEnd = 0
     ds.spindleOn = false
+    ds.readyEnd = 0
+    ds.diskReady = false
+    ds.stepEnd = 0
   }
 }
 
@@ -1098,8 +1153,8 @@ const moveHead35 = (ds: DriveState, newQuarterTrack: number) => {
   ds.quarterTrack = newQuarterTrack
   // The head is over a different track now; bit phase carried from the old one
   // is meaningless (and the new track can hold a different number of cells).
-  headRemainder35 = 0
-  headPending35 = 0
+  ds.headRemainder35 = 0
+  ds.headPending35 = 0
   if (oldBits > 0 && newBits > 0) {
     ds.trackLocation = Math.floor(ds.trackLocation * (newBits / oldBits))
   }
@@ -1117,6 +1172,27 @@ const setSide35 = (ds: DriveState, side: number) => {
 
 const select35 = (hdsel: number) =>
   (iwmCa35[2] << 3) | (iwmCa35[1] << 2) | (iwmCa35[0] << 1) | (hdsel & 1)
+
+// Push the IWM's /ENBL level into every 3.5" drive's enable latch, the way
+// gssquared IWM2::sync_drive_enables() does: the selected drive sees the line,
+// every other bay reads deasserted. Because Floppy35_woz::set_enable() schedules
+// the coast-down on a 1->0 edge, this is also what spins the motor down when the
+// guest releases ENABLE or selects the other bay - the real Sony mechanism only
+// needs the line to drop, not an explicit MOTOR OFF strobe.
+export const iwmSyncDriveEnables35 = (asserted: boolean, driveIndex: number, coastCycles: number) => {
+  for (let i = 0; i < 6; i++) {
+    const ds = getDriveStateByIndex(i)
+    if (!ds?.is35) continue
+    const want = i === driveIndex && asserted
+    if (ds.enable35 === want) continue
+    ds.enable35 = want
+    if (want) {
+      ds.spindleOffEnd = 0 // asserting /ENBL cancels a pending coast-down
+    } else if (ds.spindleOn && ds.spindleOffEnd === 0) {
+      ds.spindleOffEnd = s6502.cycleCount + coastCycles
+    }
+  }
+}
 
 // LSTRB off->on edge: run the control function selected by CA2|CA1|CA0|SEL.
 // gssquared only honours control strobes while ENABLE is asserted.
@@ -1138,9 +1214,11 @@ const triggerControl35 = (ds: DriveState, hdsel: number) => {
       moveHead35(ds, (track << 1) | (oldQuarterTrack & 1))
       if (ds.quarterTrack !== oldQuarterTrack) {
         // Crossing a zone boundary needs a longer settle than an in-zone step.
+        // gssquared compares track/16 (its track_num is in whole tracks); ours is
+        // a quarter-track index, so the same boundary is quarterTrack/32.
         ds.readyEnd = s6502.cycleCount +
-          (((ds.quarterTrack >> 4) !== (oldQuarterTrack >> 4)) ? 5000 : 1000)
-        ds.stepEnd = s6502.cycleCount + 5000
+          settle35(((ds.quarterTrack >> 5) !== (oldQuarterTrack >> 5)) ? 5000 : 1000)
+        ds.stepEnd = s6502.cycleCount + settle35(5000)
       }
       break
     }
@@ -1148,15 +1226,21 @@ const triggerControl35 = (ds: DriveState, hdsel: number) => {
       ds.spindleOn = true
       ds.spindleOffEnd = 0
       // The disc was stationary; start the media clock clean.
-      headRemainder35 = 0
-      headPending35 = 0
-      ds.readyEnd = s6502.cycleCount + 5000
+      ds.headRemainder35 = 0
+      ds.headPending35 = 0
+      // gssquared sets the settle timer and clears the ready latch here.
+      ds.readyEnd = s6502.cycleCount + settle35(5000)
+      ds.diskReady = false
       break
-    case 0xC: // spindle motor off: the disc coasts for half a second
-      ds.spindleOffEnd = s6502.cycleCount + MOTOR_OFF_CYCLES / 2
-      headRemainder35 = 0
-      headPending35 = 0
+    case 0xC: // spindle motor off: gssquared stops the motor on the strobe
+      // (only a released /ENBL schedules the ~0.5 s coast), and drops the
+      // ready latch with it.
+      ds.spindleOn = false
+      ds.spindleOffEnd = 0
+      ds.headRemainder35 = 0
+      ds.headPending35 = 0
       ds.readyEnd = 0
+      ds.diskReady = false
       break
     case 0xE: // eject - flag only, the media stays mounted for a later swap-in
       // The guest must see an empty drive (disk-in-place = 1); the block image
@@ -1191,7 +1275,7 @@ const refreshSense35 = (ds: DriveState, hdsel: number) => {
     case 0x8: setSide35(ds, 0); sense35 = 0; break
     case 0x9: setSide35(ds, 1); sense35 = 0; break
     case 0xC: sense35 = 1; break // double-sided
-    case 0xD: sense35 = ds.readyEnd ? 1 : 0; break
+    case 0xD: sense35 = ds.diskReady ? 0 : 1; break
     case 0xF: sense35 = 0; break // drive installed
     default: sense35 = 0; break
   }
@@ -1207,8 +1291,19 @@ export const iwmReset35Lines = () => {
   asyncBuffer35 = 0
   asyncBufferValid35 = false
   handshake35 = 0x80
-  headRemainder35 = 0
-  headPending35 = 0
+  for (let i = 0; i < 6; i++) {
+    const ds = getDriveStateByIndex(i)
+    if (!ds?.is35) continue
+    ds.headRemainder35 = 0
+    ds.headPending35 = 0
+    ds.headCycle35 = s6502.cycleCount
+    ds.enable35 = false
+    ds.spindleOn = false
+    ds.spindleOffEnd = 0
+    ds.stepEnd = 0
+    ds.readyEnd = 0
+    ds.diskReady = false
+  }
   writeBurst35 = false
   writeBurstDrive35 = -1
   dirtyTracks35.clear()
@@ -1245,7 +1340,9 @@ export const iwmGetSense35 = (driveIndex: number, hdsel: number) => {
 // (CONT35 $4/$C) and ENABLE only locks the media, so both have to be on.
 export const iwmFloppySpinning = (driveIndex: number, enableLine: boolean) => {
   const ds = getDriveStateByIndex(driveIndex)
-  if (ds.is35) return enableLine && ds.spindleOn
+  // 3.5" bits clock only while this bay is selected by /ENBL AND its own Sony
+  // spindle latch is on (gssquared lss_active() + the drive-level enable).
+  if (ds.is35) return ds.enable35 && ds.spindleOn
   return enableLine
 }
 
@@ -1259,24 +1356,32 @@ export const iwmAdvance35 = (
   driveIndex: number, spinning: boolean, bitCycles: number,
 ) => {
   const now = s6502.cycleCount
-  iwmAdvanceCycles35 = now - iwmPrevCycleCount
-  iwmPrevCycleCount = now
   const ds = getDriveStateByIndex(driveIndex)
   if (!ds.is35 || !spinning || bitCycles <= 0) {
     // Spindle at rest: nothing rotates, and any leftover bit phase belongs to
     // the stopped disc, not the next burst.
-    headRemainder35 = 0
-    headPending35 = 0
-    return iwmAdvanceCycles35
+    ds.headRemainder35 = 0
+    ds.headPending35 = 0
+    ds.headCycle35 = now
+    return 0
   }
-  if (iwmAdvanceCycles35 <= 0) return 0
-  headRemainder35 += iwmAdvanceCycles35
-  const bits = Math.floor(headRemainder35 / bitCycles)
+  // Elapsed time since *this* drive's clock was last advanced. A bay that sat
+  // unselected for a while accumulates the whole gap here and the pending cap
+  // in takePending35() turns it into the same snap gssquared's fast_forward()
+  // does, so its position stays a function of machine time instead of the
+  // other bay's.
+  if (ds.headCycle35 === 0) ds.headCycle35 = now
+  const elapsed = now - ds.headCycle35
+  ds.headCycle35 = now
+  iwmAdvanceCycles35 = elapsed
+  if (elapsed <= 0) return 0
+  ds.headRemainder35 += elapsed
+  const bits = Math.floor(ds.headRemainder35 / bitCycles)
   if (bits > 0) {
-    headRemainder35 -= bits * bitCycles
-    headPending35 += bits
+    ds.headRemainder35 -= bits * bitCycles
+    ds.headPending35 += bits
   }
-  return iwmAdvanceCycles35
+  return elapsed
 }
 
 // Hand the LSS at most the last 32 bit cells of the elapsed rotation. The LSS
@@ -1284,8 +1389,8 @@ export const iwmAdvance35 = (
 // of the rotation still moves the head so the position stays a function of
 // machine time (gssquared's MAX_BITS_TO_SIM snap in Floppy_woz::fast_forward).
 const takePending35 = (ds: DriveState) => {
-  let bits = headPending35
-  headPending35 = 0
+  let bits = ds.headPending35
+  ds.headPending35 = 0
   if (bits <= 0) return 0
   const cap = 32
   if (bits > cap) {
@@ -1304,10 +1409,10 @@ const takePending35 = (ds: DriveState) => {
 // holding latch made the second read return DE again).
 //
 // Every bit cell the head has rotated through since the previous access is
-// clocked through the shift register; the fraction is kept in headRemainder35,
-// never discarded, so the read position tracks machine time exactly like the
-// write clock. The 5.25 peek-hold hack in getNextByte() is a Disk II artefact
-// and must not run here.
+// clocked through the shift register; the fraction is kept on the drive, never
+// discarded, so the read position tracks machine time exactly like the write
+// clock. The 5.25 peek-hold hack in getNextByte() is a Disk II artefact and
+// must not run here.
 const getNextByte35 = (ds: DriveState, dd: Uint8Array) => {
   const bits = takePending35(ds)
   bitsAdvancedLastCall = bits

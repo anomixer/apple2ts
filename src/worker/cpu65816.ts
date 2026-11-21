@@ -1,4 +1,4 @@
-﻿/**
+/**
  * cpu65816.ts - 65C816 CPU emulation skeleton for Apple IIgs
  * 
  * Based on the upstream web-a2e implementation.
@@ -801,14 +801,15 @@ export class CPU65816 implements ICPU {
                 const from = (srcBank << 16) | this.X
                 const to = (destBank << 16) | this.Y
                 this.write8(to, this.read8(from))
-                // The first pass takes two extra cycles (the operand bytes get
-                // re-fetched on every subsequent pass), later ones just one.
-                const isFirstPass = !this.blockMoveFirst
+                // gssquared's move_memory() burns the same seven bus cycles on
+                // every pass: opcode fetch, the two operand fetches, the data
+                // read, the data write, then two phantom reads (cycles 6, 7).
+                // The operand fetches repeat on the pass that re-runs the
+                // instruction, so the count is identical for the first pass and
+                // every following one.
                 this.blockMoveFirst = true
                 this.phantomRead()
-                if (isFirstPass) {
-                    this.phantomRead()
-                }
+                this.phantomRead()
                 if (opcode === 0x54) {
                     this.X = (this.X + 1) & 0xFFFF
                     this.Y = (this.Y + 1) & 0xFFFF
@@ -1361,8 +1362,9 @@ export class CPU65816 implements ICPU {
         }
         this.emulationMode = e
         this.applyWidthConstraints()
-        // XCE into emulation mode clears the direct page register on hardware
-        if (e) this.D = 0
+        // XCE does not clear the direct page register on hardware; only a
+        // reset does. Emulation mode keeps using whatever D is in flight, which
+        // is exactly what the ProDOS 8 3.5" driver relies on (D=$5800).
     }
 
     private applyWidthConstraints() {
@@ -1371,7 +1373,6 @@ export class CPU65816 implements ICPU {
             this.X &= 0x00FF
             this.Y &= 0x00FF
             this.S = 0x0100 | (this.S & 0x00FF)
-            this.D = 0
         } else {
             if (this.P & Status816.X) {
                 this.X &= 0x00FF
@@ -1458,55 +1459,48 @@ export class CPU65816 implements ICPU {
         return (bank << 16) | lo
     }
 
-    // The direct page lives in bank 0 and is forced to page zero while the
-    // processor runs in emulation mode: XCE into emulation mode clears the D
-    // register on hardware, so an 8-bit routine called from 16-bit code always
-    // sees zero page regardless of the D value the native caller left behind.
-    private dpBase(): number {
-        return this.emulationMode ? 0 : this.D
+    // Direct-page addressing always adds the D register, in native *and* in
+    // emulation mode. Emulation mode only forces the program bank to zero and
+    // pins the stack to page one; it does not clear D, so a routine that runs
+    // with D=$5800 (the ProDOS 8 3.5" driver) still addresses $58xx. When D's
+    // low byte is zero an indexed access wraps inside the page, otherwise the
+    // sum is a plain 16-bit add that can leave the page.
+    private directPageAddress(offset: number, index = 0): number {
+        const base = this.D
+        if (this.emulationMode && (base & 0xFF) === 0) {
+            return (base | ((offset + index) & 0xFF)) & 0xFFFF
+        }
+        // An index on a non-page-aligned direct page always costs a cycle on
+        // hardware, because the add may cross into the next page.
+        if ((base & 0xFF) !== 0) this.addrCrossed = true
+        return (base + offset + index) & 0xFFFF
     }
 
     protected addrDirect(): number {
         this.addrMode = ADDR_MODE_816.DIRECT
         const offset = this.fetch8()
-        const addr = (this.dpBase() + offset) & 0xFFFF
         // Direct page is always in Bank 0
-        return addr
+        return this.directPageAddress(offset)
     }
 
     protected addrDirectX(): number {
         this.addrMode = ADDR_MODE_816.DIRECT_X
         const offset = this.fetch8()
-        // Emulation mode wraps around page zero, but native doesn't
-        let addr = this.dpBase() + offset + this.X
-        if (this.emulationMode) {
-            addr = addr & 0x00FF
-        } else {
-            // The 65816 charges an extra cycle whenever the direct page's low
-            // byte is non-zero, because the index add can leave the page.
-            this.addrCrossed = (this.dpBase() & 0xFF) !== 0
-            addr = addr & 0xFFFF
-        }
-        return addr
+        return this.directPageAddress(offset, this.X)
     }
 
     protected addrDirectY(): number {
         this.addrMode = ADDR_MODE_816.DIRECT_Y
         const offset = this.fetch8()
-        let addr = this.dpBase() + offset + this.Y
-        if (this.emulationMode) {
-            addr = addr & 0x00FF
-        } else {
-            this.addrCrossed = (this.dpBase() & 0xFF) !== 0
-            addr = addr & 0xFFFF
-        }
-        return addr
+        return this.directPageAddress(offset, this.Y)
     }
 
     protected addrDirectIndirect(): number {
         this.addrMode = ADDR_MODE_816.DIRECT_INDIRECT
         const dpOffset = this.fetch8()
-        const addrPtr = (this.dpBase() + dpOffset) & 0xFFFF
+        // Pointer fetch: a plain 16-bit add of D and the operand (identical to
+        // the page-aligned OR when D's low byte is zero).
+        const addrPtr = (this.D + dpOffset) & 0xFFFF
 
         const lo = this.read8(addrPtr)
         const hi = this.read8((addrPtr + 1) & 0xFFFF)
@@ -1517,7 +1511,7 @@ export class CPU65816 implements ICPU {
     protected addrDirectIndirectLong(): number {
         this.addrMode = ADDR_MODE_816.DIRECT_INDIRECT_LONG
         const dpOffset = this.fetch8()
-        const addrPtr = (this.dpBase() + dpOffset) & 0xFFFF
+        const addrPtr = (this.D + dpOffset) & 0xFFFF
 
         const lo = this.read8(addrPtr)
         const hi = this.read8((addrPtr + 1) & 0xFFFF)
@@ -1558,12 +1552,15 @@ export class CPU65816 implements ICPU {
         this.addrMode = ADDR_MODE_816.DIRECT_INDEXED_INDIRECT
         // (dp,X)
         const dpOffset = this.fetch8()
-        let ptr = this.dpBase() + dpOffset + this.X
-        if (this.emulationMode) ptr &= 0x00FF
-        else ptr &= 0xFFFF
+        const ptr = this.directPageAddress(dpOffset, this.X)
+        // On the 65816 in emulation mode the pointer's high byte is fetched
+        // with the 6502's page wrap, i.e. from the same 256-byte page.
+        const hiAddr = this.emulationMode
+            ? ((ptr & 0xFF00) | ((ptr + 1) & 0xFF))
+            : ((ptr + 1) & 0xFFFF)
 
         const lo = this.read8(ptr)
-        const hi = this.read8((ptr + 1) & 0xFFFF)
+        const hi = this.read8(hiAddr)
         return (this.DB << 16) | (lo | (hi << 8))
     }
 
@@ -1571,7 +1568,7 @@ export class CPU65816 implements ICPU {
         this.addrMode = ADDR_MODE_816.DIRECT_INDIRECT_INDEXED
         // (dp),Y
         const dpOffset = this.fetch8()
-        const ptr = (this.dpBase() + dpOffset) & 0xFFFF
+        const ptr = (this.D + dpOffset) & 0xFFFF
 
         const lo = this.read8(ptr)
         const hi = this.read8((ptr + 1) & 0xFFFF)
@@ -1586,7 +1583,7 @@ export class CPU65816 implements ICPU {
         this.addrMode = ADDR_MODE_816.DIRECT_INDIRECT_LONG_INDEXED
         // [dp],Y
         const dpOffset = this.fetch8()
-        const ptr = (this.dpBase() + dpOffset) & 0xFFFF
+        const ptr = (this.D + dpOffset) & 0xFFFF
 
         const lo = this.read8(ptr)
         const hi = this.read8((ptr + 1) & 0xFFFF)
