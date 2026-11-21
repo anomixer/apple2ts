@@ -54,6 +54,12 @@ let writeBurst35 = false
 // shared by both 3.5" bays, so a queued byte always belongs to exactly one of
 // them - that is what tells a media change whether it may discard it.
 let writeBurstDrive35 = -1
+// The bay the shared data path is describing: the drive of the most recent 3.5"
+// access. The LSS, its shift register and the async write state exist once for
+// both bays, so a media change may only forget them when it happens in this
+// bay. A disk put into the idle bay must not disturb the bay the machine is
+// booting from.
+let lastAccess35Drive = -1
 // GCR tracks whose bytes were changed, per drive index, still waiting to be
 // spliced into that drive's block image.
 const dirtyTracks35 = new Map<number, Set<number>>()
@@ -1281,7 +1287,12 @@ const refreshSense35 = (ds: DriveState, hdsel: number) => {
   }
 }
 
-export const iwmReset35Lines = () => {
+// The IWM's 3.5" data path: the LSS shift register, the latched byte, the
+// status/control selector latch and the async write state. There is exactly one
+// of these on the machine, serving whichever bay /ENBL selects, so it is reset
+// by a machine reset and by a media change in the bay it is describing - never
+// by a media change in the other bay.
+const reset35DataPath = () => {
   iwmCa35 = [0, 0, 0, 0]
   internalDataRegister35 = 0
   dataRegister35 = 0
@@ -1291,6 +1302,12 @@ export const iwmReset35Lines = () => {
   asyncBuffer35 = 0
   asyncBufferValid35 = false
   handshake35 = 0x80
+  writeBurst35 = false
+  writeBurstDrive35 = -1
+}
+
+export const iwmReset35Lines = () => {
+  reset35DataPath()
   for (let i = 0; i < 6; i++) {
     const ds = getDriveStateByIndex(i)
     if (!ds?.is35) continue
@@ -1304,8 +1321,6 @@ export const iwmReset35Lines = () => {
     ds.readyEnd = 0
     ds.diskReady = false
   }
-  writeBurst35 = false
-  writeBurstDrive35 = -1
   dirtyTracks35.clear()
 }
 
@@ -1318,13 +1333,22 @@ export const iwmReset35Lines = () => {
 // carried it, which is the same durability boundary the firmware's own verify
 // sets. A burst owned by the *other* bay is none of this disk change's business,
 // so only its own pending tracks go.
+//
+// The same holds for the rest of the machine: the Sony mechanism has one motor
+// and one /ENBL per bay and the IWM's LSS serves whichever bay is selected, so
+// changing media in the bay nobody is reading must not touch the shared data
+// path - and above all must not stop the spindle or drop the ready latch of the
+// bay the machine is booting from. That used to park the boot of drive 1 for
+// good when a disk was put into drive 2.
 export const iwmDiskChange35 = (driveIndex: number) => {
   iwmFlushWrites35(driveIndex)
-  if (!writeBurst35 || writeBurstDrive35 === driveIndex) {
-    iwmReset35Lines()
-  } else {
-    dirtyTracks35.delete(driveIndex)
+  dirtyTracks35.delete(driveIndex)
+  if (writeBurst35) {
+    if (writeBurstDrive35 !== driveIndex) return
+  } else if (lastAccess35Drive !== driveIndex) {
+    return
   }
+  reset35DataPath()
 }
 
 // Status register bit 7 for the currently selected 3.5" drive.
@@ -1357,6 +1381,9 @@ export const iwmAdvance35 = (
 ) => {
   const now = s6502.cycleCount
   const ds = getDriveStateByIndex(driveIndex)
+  // This is the bay the shared data path is serving from now on (see
+  // iwmDiskChange35: only a media change here may forget it).
+  if (ds.is35) lastAccess35Drive = driveIndex
   if (!ds.is35 || !spinning || bitCycles <= 0) {
     // Spindle at rest: nothing rotates, and any leftover bit phase belongs to
     // the stopped disc, not the next burst.
@@ -1613,6 +1640,7 @@ export const iwmWriteDataRegister35 = (
 ) => {
   const ds = getDriveStateByIndex(driveIndex)
   if (!ds || !ds.is35) return
+  lastAccess35Drive = driveIndex
   // Clock up to "now" first (gssquared write() runs fast_forward before it
   // queues), so the byte starts on the bit cell the head is over now.
   if (enabled) advanceWrite35(ds, bitCycles, !ds.isWriteProtected)
@@ -1629,6 +1657,7 @@ export const iwmReadHandshake35 = (
 ) => {
   const ds = getDriveStateByIndex(driveIndex)
   if (!ds || !ds.is35) return 0xC0
+  lastAccess35Drive = driveIndex
   if (enabled) advanceWrite35(ds, bitCycles, !ds.isWriteProtected)
   return handshake35
 }
