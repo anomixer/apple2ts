@@ -1260,6 +1260,11 @@ export const doSetMachineName = (name: MACHINE_NAME, reset = true, publishState 
   setJoystickClockSource(() => ({
     cyclesPerRefresh: cpuCyclesPerRefresh,
     slowMode: isGSMachine(machineName) && isIigsSlowMode(),
+    // The IIgs game port keeps paddle timing in the 1.020484 MHz cycle domain so
+    // 1 MHz-calibrated joystick loops (Rastan and the other titles whose PDL
+    // code counts loop passes) read a centred stick as centre at the 2.8 MHz
+    // Settings rate too. See devices/joystick.ts paddleCycleScale().
+    oneShotSlowClock: isGSMachine(machineName),
   }))
 
   if (isGSMachine(machineName)) {

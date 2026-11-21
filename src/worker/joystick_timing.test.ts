@@ -1,5 +1,5 @@
 import { memGetC000, memSet } from "./memory"
-import { doSetMachineName, getCpuCyclesPerRefresh, isIigsSlowMode } from "./motherboard"
+import { doSetMachineName, doSetSpeedMode, getCpuCyclesPerRefresh, isIigsSlowMode } from "./motherboard"
 import { setIsTesting } from "./worker2main"
 import {
   checkJoystickValues,
@@ -7,6 +7,7 @@ import {
   setGamepadValue,
   setJoystickClockSource,
   setJoystickCyclesPerRefresh,
+  setJoystickOneShotSlowClock,
   setJoystickSlowMode,
 } from "./devices/joystick"
 
@@ -15,20 +16,24 @@ const readPaddle0 = () => memGetC000(PADDLE0) & 0x80
 // Half of MAX_TIMEOUT_CYCLES: the centred-stick midpoint in 1.020484 MHz cycles.
 const MIDPOINT = 1418
 // The IIgs 2.8 MHz Settings budget is 46727 cycles per refresh, not the classic
-// 34060 of the 2 MHz mode. Raw counts that cross the calibrated midpoint at
-// that rate are scaled by 17030 / 46727.
+// 34060 of the 2 MHz mode. On a classic machine raw counts that cross the
+// calibrated midpoint at that rate are scaled by 17030 / 46727.
 const GS_FAST_CYCLES_PER_REFRESH = 46727
 const GS_FAST_MIDPOINT = Math.ceil(MIDPOINT * GS_FAST_CYCLES_PER_REFRESH / 17030)
 
 afterEach(() => {
   setJoystickClockSource(null)
   setJoystickSlowMode(false)
+  setJoystickOneShotSlowClock(false)
   setJoystickCyclesPerRefresh(17030)
 })
 
 // A centered stick (value 0) must cross the PDL midpoint after the same real
 // 2.8 ms regardless of the emulated CPU speed. MAX_TIMEOUT_CYCLES is calibrated
 // at 17030 cycles per refresh (1.020484 MHz); the raw diff has to be scaled.
+// This is the classic-machine model (an accelerator card really does shorten the
+// analogue pulse as seen by the guest); the IIgs takes the slow-clock-domain
+// branch tested further down.
 describe("joystick paddle timing across CPU speed modes", () => {
   test("normal speed keeps the centered paddle high at the midpoint", () => {
     setJoystickCyclesPerRefresh(17030)
@@ -69,8 +74,47 @@ describe("joystick paddle timing across CPU speed modes", () => {
   })
 })
 
-// The IIgs PDL timing must follow the rate the guest is actually executing at,
-// not the Settings speed preference alone. The IWM disk bit-cell clock in
+// The IIgs game port keeps the one-shot in the 1.020484 MHz cycle domain; see
+// devices/joystick.ts paddleCycleScale(). The analogue duration is expressed in
+// slow-clock cycles there, so a 1 MHz-calibrated PDL loop reads a centred stick
+// as centre at 1 MHz and at 2.8 MHz alike, which is the reading the joystick
+// software on that machine is written around.
+describe("IIgs one-shot in the 1.020484 MHz cycle domain", () => {
+  test("the live source flag pins the crossing at the calibrated midpoint", () => {
+    const rate = { cyclesPerRefresh: GS_FAST_CYCLES_PER_REFRESH, slowMode: false, oneShotSlowClock: true }
+    setJoystickClockSource(() => rate)
+    setGamepadValue(0, 0)
+
+    resetJoystick(1000)
+    checkJoystickValues(1000 + MIDPOINT - 1, 0)
+    expect(readPaddle0()).toBe(0x80)
+    checkJoystickValues(1000 + MIDPOINT, 0)
+    expect(readPaddle0()).toBe(0)
+
+    // The Settings rate no longer moves the crossing, in either direction.
+    rate.cyclesPerRefresh = 238640
+    resetJoystick(2000)
+    checkJoystickValues(2000 + MIDPOINT - 1, 0)
+    expect(readPaddle0()).toBe(0x80)
+    checkJoystickValues(2000 + MIDPOINT, 0)
+    expect(readPaddle0()).toBe(0)
+  })
+
+  test("the fall-back setter does the same before a source is registered", () => {
+    setJoystickOneShotSlowClock(true)
+    setJoystickCyclesPerRefresh(GS_FAST_CYCLES_PER_REFRESH)
+    setGamepadValue(0, 0)
+
+    resetJoystick(1000)
+    checkJoystickValues(1000 + MIDPOINT - 1, 0)
+    expect(readPaddle0()).toBe(0x80)
+    checkJoystickValues(1000 + MIDPOINT, 0)
+    expect(readPaddle0()).toBe(0)
+  })
+})
+
+// The paddle scale must follow the rate the guest is actually executing at, not
+// the Settings speed preference alone. The IWM disk bit-cell clock in
 // memory.ts normalises through `isIigsSlowMode()` the same way: $C036 bit 7 = 0
 // selects the nominal 1.020484 MHz clock even when Settings says 2.8 MHz. A
 // classic title that drops the slow pin for copy-protected disk I/O then sees
@@ -158,9 +202,10 @@ describe("$C036 slow mode drives the paddle execution rate", () => {
 //   setJoystickClockSource(() => ({
 //     cyclesPerRefresh: cpuCyclesPerRefresh,
 //     slowMode: isGSMachine(machineName) && isIigsSlowMode(),
+//     oneShotSlowClock: isGSMachine(machineName),
 //   }))
 // It drives the real $C036 soft-switch write path in memory.ts through a
-// machine reset, not the synthetic provider used by the unit tests below.
+// machine reset, not the synthetic provider used by the unit tests above.
 describe("motherboard integration registers the live execution rate", () => {
   test("doSetMachineName + $C036 writes drive paddle timing", () => {
     setIsTesting()
@@ -168,17 +213,23 @@ describe("motherboard integration registers the live execution rate", () => {
     expect(getCpuCyclesPerRefresh()).toBe(GS_FAST_CYCLES_PER_REFRESH)
     setGamepadValue(0, 0)
 
-    // Fast mode: the 2.8 MHz Settings budget shrinks 1418 raw cycles below the
-    // calibrated midpoint; the scaled raw crossing is GS_FAST_MIDPOINT.
+    // The IIgs game port counts the one-shot in the 1.020484 MHz cycle domain, so
+    // a centred stick crosses the calibrated midpoint at 1418 raw cycles whether
+    // the 65816 core is at the slow clock or at the 2.8 MHz Settings rate.
+    // 1 MHz-calibrated PDL loops are what the joystick software on this machine
+    // contains: measured in Rastan's in-game $C070/$C064 poll, a centred stick at
+    // 2.8 MHz produced 68 loop passes (full deflection - "the player starts
+    // crouched") where the game's table expects 25, and 25 is exactly what the
+    // same loop counts when the one-shot is calibrated to the slow clock.
     expect(isIigsSlowMode()).toBe(false)
     resetJoystick(1000)
-    checkJoystickValues(1000 + MIDPOINT, 0)
+    checkJoystickValues(1000 + MIDPOINT - 1, 0)
     expect(readPaddle0()).toBe(0x80)
-    checkJoystickValues(1000 + GS_FAST_MIDPOINT, 0)
+    checkJoystickValues(1000 + MIDPOINT, 0)
     expect(readPaddle0()).toBe(0)
 
-    // The guest writes $C036 bit 7 = 0: the source reports slow mode on the
-    // very next paddle read, so a centred paddle crosses at 1418 raw cycles.
+    // $C036 bit 7 = 0 (slow clock): the same raw crossing. The source is re-read
+    // on every paddle access, so no setter call is needed.
     memSet(0xC036, 0)
     expect(isIigsSlowMode()).toBe(true)
     resetJoystick(2000)
@@ -187,13 +238,30 @@ describe("motherboard integration registers the live execution rate", () => {
     checkJoystickValues(2000 + MIDPOINT, 0)
     expect(readPaddle0()).toBe(0)
 
-    // Bit 7 set back to 1 restores the Settings budget again.
+    // Bit 7 set back to 1: still 1418 raw cycles on the IIgs.
     memSet(0xC036, 0x80)
     expect(isIigsSlowMode()).toBe(false)
     resetJoystick(3000)
-    checkJoystickValues(3000 + MIDPOINT, 0)
+    checkJoystickValues(3000 + MIDPOINT - 1, 0)
     expect(readPaddle0()).toBe(0x80)
-    checkJoystickValues(3000 + GS_FAST_MIDPOINT, 0)
+    checkJoystickValues(3000 + MIDPOINT, 0)
+    expect(readPaddle0()).toBe(0)
+  })
+
+  test("a classic machine keeps the wall-clock model at 2 MHz", () => {
+    setIsTesting()
+    doSetMachineName("APPLE2EE")
+    doSetSpeedMode(1) // 34060 cycles per refresh
+    setGamepadValue(0, 0)
+
+    // No oneShotSlowClock: the analogue duration is what the guest counts, so a
+    // centred stick still needs 17030/34060-scaled raw cycles. This is the
+    // accelerator-card behaviour the classic Settings modes describe and it must
+    // not change.
+    resetJoystick(1000)
+    checkJoystickValues(1000 + MIDPOINT, 0)
+    expect(readPaddle0()).toBe(0x80)
+    checkJoystickValues(1000 + GS_FAST_MIDPOINT, 0)
     expect(readPaddle0()).toBe(0)
   })
 })

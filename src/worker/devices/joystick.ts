@@ -46,10 +46,16 @@ export interface JoystickClock {
   // True when $C036 bit 7 is clear on the IIgs, i.e. the guest is executing at
   // the 1.020484 MHz slow clock and expects raw cycles at that rate.
   slowMode?: boolean
+  // IIgs game port: keep the one-shot's duration in the 1.020484 MHz cycle
+  // domain, so the 1 MHz-calibrated PDL loops that joystick software on this
+  // machine uses read a centred stick as centre at every core rate. See
+  // paddleCycleScale().
+  oneShotSlowClock?: boolean
 }
 export type JoystickClockSource = () => JoystickClock
 let joystickCyclesPerRefresh = NOMINAL_CYCLES_PER_REFRESH
 let joystickSlowMode = false
+let joystickOneShotSlowClock = false
 let joystickClockSource: JoystickClockSource | null = null
 
 // Fall-back setter used until a live clock source is registered (and by the
@@ -64,6 +70,12 @@ export const setJoystickCyclesPerRefresh = (cyclesPerRefresh: number) => {
 // wins when it is registered.
 export const setJoystickSlowMode = (slowMode: boolean) => {
   joystickSlowMode = slowMode
+}
+
+// Fall-back for the IIgs game-port clock domain, used only until a live source
+// is registered; see paddleCycleScale().
+export const setJoystickOneShotSlowClock = (oneShotSlowClock: boolean) => {
+  joystickOneShotSlowClock = oneShotSlowClock
 }
 
 // Register / clear the live clock provider. The worker integration belongs in
@@ -91,7 +103,33 @@ const effectiveCyclesPerRefresh = (): number => {
   return slowMode ? NOMINAL_CYCLES_PER_REFRESH : cyclesPerRefresh
 }
 
+// The IIgs game port needs a different calibration, because the paddle one-shots
+// there are read by software written for a 1.020484 MHz CPU: the classic PDL poll
+// loop counts CPU cycles against a fixed bound and a fixed value table, so it only
+// reads the analogue pulse correctly when the CPU really is at the slow clock.
+// Rastan (measured in-game on this emulator at the 2.8 MHz Settings rate) polls
+// $C070/$C064 in 16-bit form and counts loop passes for a centred stick as 68; the
+// same loop on a 1 MHz clock counts 25, which is what its table was built around.
+// Fed 68 a centred stick reads as full deflection, so the player crouches without
+// touching anything, and every other title with an 8-bit-era paddle routine fails
+// the same way.
+//
+// The Settings speed on the IIgs is the machine's fast clock, not a turbo:
+// GS/OS, the ROM and the 3.5" slot-5 driver really need it, and dropping the
+// whole machine to 1 MHz to make the paddles work would break them (that is why
+// a real IIgs has an "Apple II speed" Control Panel switch in the first place).
+// So keep the one-shot's *cycle count* at the 1.020484 MHz calibration on the
+// IIgs: whatever the core rate, a centred stick stays centred and the extremes
+// stay reachable for 1 MHz-calibrated code. Classic machines do not take this
+// branch and keep the wall-clock model below, which is what an accelerator card
+// does and what the 2 MHz / Slow / Warp Settings modes describe.
+const oneShotUsesSlowClock = (): boolean => {
+  if (joystickClockSource) return joystickClockSource().oneShotSlowClock === true
+  return joystickOneShotSlowClock
+}
+
 const paddleCycleScale = (): number => {
+  if (oneShotUsesSlowClock()) return 1
   const effective = effectiveCyclesPerRefresh()
   return effective > 0 ? NOMINAL_CYCLES_PER_REFRESH / effective : 1
 }
