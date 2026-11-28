@@ -1,4 +1,4 @@
-import { memGet, memGetC000, memSet, memSetC000, memoryReset } from "./memory"
+import { doSetRom, memGet, memGetC000, memSet, memSetC000, memoryReset } from "./memory"
 import { getSoftSwitchDescriptions, resetSoftSwitches, setVideo7Override, SWITCHES } from "./softswitches"
 
 const video7Modes: Array<[Video7Mode, keyof typeof SWITCHES]> = [
@@ -140,4 +140,66 @@ test("$C07x returns random noise", () => {
     expect(minn).toBeLessThanOrEqual(0x10)
     expect(maxx).toBeGreaterThanOrEqual(0xA0)
   }
+})
+
+// The IIgs drives $C019 bit 7 high *while* vertical blanking is active, the
+// opposite of the IIe's "high after blanking ends" (gssquared display_read_vbl).
+// Its ROM depends on that: the X-MAS Demo's frame sync waits on $C019 bit 7 and
+// was otherwise left a half-frame out of phase, holding IRQs off across the
+// visible field so the marquee stopped once the decrunch finished. No other
+// status switch inverts, so the IIgs must keep the IIe sense for $C011-$C01F.
+describe("IIgs status switches", () => {
+  const onIigs = (fn: () => void) => {
+    try {
+      doSetRom("APPLE2GS")
+      fn()
+    } finally {
+      doSetRom("APPLE2EE")
+    }
+  }
+
+  test("$C019 reads vertical blanking as active-high", () => {
+    onIigs(() => {
+      // VBLINV is the *inverse* status bit: the run loop sets it when vertical
+      // blanking ends, so a set switch means the beam is in the visible field.
+      SWITCHES.VBLINV.isSet = true
+      expect(memGet(0xC019) & 0x80).toBe(0x00)
+      SWITCHES.VBLINV.isSet = false
+      expect(memGet(0xC019) & 0x80).toBe(0x80)
+    })
+    // The IIe keeps the classic sense, which motherboard.test.ts asserts against
+    // the live run loop: within VBL (VBLINV clear) bit 7 reads as zero.
+    SWITCHES.VBLINV.isSet = false
+    expect(memGet(0xC019) & 0x80).toBe(0x00)
+    SWITCHES.VBLINV.isSet = true
+    expect(memGet(0xC019) & 0x80).toBe(0x80)
+  })
+
+  test("only $C019 inverts on the IIgs; the other status bits keep the IIe sense", () => {
+    const statusSwitches: Array<[keyof typeof SWITCHES, number]> = [
+      ["BSRBANK2", 0xC011], ["BSRREADRAM", 0xC012], ["AUXRAMREAD", 0xC013],
+      ["AUXRAMWRITE", 0xC014], ["INTCXROM", 0xC015], ["ALTZP", 0xC016],
+      ["SLOTC3ROM", 0xC017], ["STORE80", 0xC018], ["TEXT", 0xC01A],
+      ["MIXED", 0xC01B], ["PAGE2", 0xC01C], ["HIRES", 0xC01D],
+      ["ALTCHARSET", 0xC01E], ["COLUMN80", 0xC01F],
+    ]
+    onIigs(() => {
+      for (const [name, addr] of statusSwitches) {
+        SWITCHES[name].isSet = false
+        expect(memGet(addr) & 0x80).toBe(0x00)
+        SWITCHES[name].isSet = true
+        expect(memGet(addr) & 0x80).toBe(0x80)
+      }
+      // $C016 is the one the IIgs ROM's interrupt dispatcher reads
+      // ($FF:B897 LDX $C016 / BPL): bit 7 must follow ALTZP.
+      memSet(0xC008, 0) // ALTZP off
+      expect(SWITCHES.ALTZP.isSet).toBe(false)
+      expect(memGet(0xC016) & 0x80).toBe(0x00)
+      memSet(0xC009, 0) // ALTZP on
+      expect(SWITCHES.ALTZP.isSet).toBe(true)
+      expect(memGet(0xC016) & 0x80).toBe(0x80)
+      memSet(0xC008, 0) // ALTZP off again
+      expect(memGet(0xC016) & 0x80).toBe(0x00)
+    })
+  })
 })

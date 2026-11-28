@@ -354,7 +354,19 @@ export const checkSoftSwitches = (addr: number,
     }
   } else if (addr === sswitch1.isSetAddr) {
     const value = memGetC000(addr)
-    memSetC000(addr, sswitch1.isSet ? (value | 0x80) : (value & 0x7F))
+    // The vertical-blanking status bit has the opposite sense on the IIgs: the
+    // VGC drives $C019 bit 7 high while vertical blanking is active, where the
+    // IIe sets it high only once vertical blanking has ended. VBLINV.isSet keeps
+    // the IIe sense because the run loop uses it to gate the start of VBL, so
+    // flip just the value the guest reads. Software that waits for a VBL edge
+    // ($C019 followed by a video-counter read, as the X-MAS Demo's frame sync
+    // does) otherwise ends up a half-frame out of phase and holds IRQs off
+    // across the visible field; see gssquared display_read_vbl for the same
+    // inversion. Only $C019 is inverted: the other status bits ($C013-$C01F,
+    // including the ALTZP read at $C016) keep the IIe sense on the IIgs too.
+    const inverted = sswitch1 === SWITCHES.VBLINV && getCurrentMachineName() === "APPLE2GS"
+    const bit7 = inverted ? !sswitch1.isSet : sswitch1.isSet
+    memSetC000(addr, bit7 ? (value | 0x80) : (value & 0x7F))
   }
 }
 
