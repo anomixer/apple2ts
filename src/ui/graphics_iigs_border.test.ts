@@ -1,14 +1,16 @@
-import { buildIigsBorderTexture, iigsBorderCycle, iigsBorderRasterLine } from "./graphics"
+import { buildIigsBorderTexture, iigsBorderCycle, iigsBorderLayout, iigsBorderRasterLine } from "./graphics"
 
 // The IIgs border is a raster: $C034's low nibble is the border colour and software
 // paints a picture into it by writing that register at dot-timed positions while the
 // beam is in the border rows. The XMAS Demo's menu marquee lives only in those
-// samples, so the mapping from the worker's per-video-cycle raster to the 53-column
-// texture has to match gssquared's VPP exactly - a row or column off by one looks
-// like "the marquee was not drawn at all", and a vertical stripe of colour is the
-// only thing on screen to compare with.
+// samples, and its first screen paints the side borders too, so the mapping from the
+// worker's per-video-cycle raster to the 53-column texture has to match gssquared's
+// VPP exactly - a row or column off by one looks like "the marquee was not drawn at
+// all", and a band that is half height (or a picture with black sides) is what the
+// screen shows instead.
 const CYCLES_PER_ROW = 65
-const makeRaster = (): Uint8Array => new Uint8Array(70 * CYCLES_PER_ROW)
+const BAND_ROWS = 40
+const makeRaster = (): Uint8Array => new Uint8Array(262 * CYCLES_PER_ROW)
 
 const pixel = (texture: NonNullable<ReturnType<typeof buildIigsBorderTexture>>,
   row: number, column: number): number[] => {
@@ -34,6 +36,9 @@ test("border texture rows are the raster lines right after and right before the 
   expect(iigsBorderRasterLine(20)).toBe(21)
   expect(iigsBorderRasterLine(21)).toBe(51)
   expect(iigsBorderRasterLine(39)).toBe(69)
+  // The side borders are the picture rows: 70-261 follow the bands.
+  expect(iigsBorderRasterLine(BAND_ROWS)).toBe(70)
+  expect(iigsBorderRasterLine(BAND_ROWS + 191)).toBe(261)
 })
 
 test("border texture maps every painted raster sample to its texture pixel", () => {
@@ -50,6 +55,7 @@ test("border texture maps every painted raster sample to its texture pixel", () 
   expect(texture).not.toBeNull()
   expect(texture!.topPainted).toBe(true)
   expect(texture!.bottomPainted).toBe(true)
+  expect(texture!.sidePainted).toBe(false)
 
   // Row 2 of the texture is raster line 3; centre columns 13-52 cover hcount 25-64.
   expect(pixel(texture!, 2, 12)).toEqual([0x00, 0x00, 0x00])  // hcount 24, left border - not painted
@@ -64,14 +70,49 @@ test("border texture maps every painted raster sample to its texture pixel", () 
   for (let row = 21; row < 39; row++) expect(pixel(texture!, row, 7)).toEqual([0x11, 0xdd, 0x00])
 })
 
+test("border texture keeps the side borders of the picture rows", () => {
+  const raster = makeRaster()
+  // The demo's first screen sets a grey border once and leaves it on the wire: the
+  // left and right margins of every picture row carry that colour.
+  for (let line = 70; line < 262; line++) {
+    for (const cycle of [0, 3, 6, 19, 22, 24]) raster[line * CYCLES_PER_ROW + cycle] = 0x0a
+  }
+  // The centre window of a picture row is the picture, not border colour.
+  for (let line = 70; line < 262; line++) raster[line * CYCLES_PER_ROW + 30] = 0x0f
+
+  const texture = buildIigsBorderTexture(raster)
+  expect(texture).not.toBeNull()
+  expect(texture!.sidePainted).toBe(true)
+  // Side rows sit after the bands, one per visible raster line.
+  expect(pixel(texture!, BAND_ROWS, 0)).toEqual([0xaa, 0xaa, 0xaa])
+  expect(pixel(texture!, BAND_ROWS, 7)).toEqual([0xaa, 0xaa, 0xaa])
+  expect(pixel(texture!, BAND_ROWS + 191, 6)).toEqual([0xaa, 0xaa, 0xaa])
+  // Picture pixels are kept out of the side columns' flag: the centre stays picture.
+  // hcount 30 is column 18 (13-52 sample hcount 25-64).
+  expect(pixel(texture!, BAND_ROWS, 18)).toEqual([0xff, 0xff, 0xff])
+})
+
 test("border texture is not drawn when the raster was never painted", () => {
   const texture = buildIigsBorderTexture(makeRaster())
   expect(texture).not.toBeNull()
   expect(texture!.bottomPainted).toBe(false)
   expect(texture!.topPainted).toBe(false)
+  expect(texture!.sidePainted).toBe(false)
 })
 
 test("border texture rejects a raster that is too short", () => {
   expect(buildIigsBorderTexture(new Uint8Array())).toBeNull()
-  expect(buildIigsBorderTexture(new Uint8Array(69 * CYCLES_PER_ROW))).toBeNull()
+  expect(buildIigsBorderTexture(new Uint8Array(261 * CYCLES_PER_ROW))).toBeNull()
+})
+
+test("border bands are one video line per row and start on the window's last lines", () => {
+  // gssquared's VPP: 21 bottom rows on picture lines 192-212, 19 top rows on -19..-1.
+  const layout = iigsBorderLayout(400)
+  expect(layout.rowHeight).toBe(2)
+  expect(layout.bottomTop).toBe(384)
+  expect(layout.topTop).toBe(-38)
+  // One band row is as tall as one SHR line: the 8 lines of overlap the demo relies
+  // on put the marquee's first rows inside the picture instead of under it.
+  expect(layout.bottomTop + 8 * layout.rowHeight).toBe(400)
+  expect(layout.bottomTop + 21 * layout.rowHeight).toBe(426)
 })

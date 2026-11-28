@@ -600,18 +600,28 @@ const drawImage = (ctx: CanvasRenderingContext2D,
 const IIGS_BORDER_COLUMNS = 53
 const IIGS_BORDER_BOTTOM_ROWS = 21
 const IIGS_BORDER_TOP_ROWS = 19
-const IIGS_BORDER_TEXTURE_HEIGHT = IIGS_BORDER_BOTTOM_ROWS + IIGS_BORDER_TOP_ROWS
+const IIGS_BORDER_BAND_ROWS = IIGS_BORDER_BOTTOM_ROWS + IIGS_BORDER_TOP_ROWS
+// The picture rows carry border colour in their left/right margins as well, so the
+// texture also holds the 192 visible rows: the worker's raster rows 70-261.
+const IIGS_BORDER_SIDE_ROWS = 192
+const IIGS_BORDER_SIDE_START = 70
+const IIGS_BORDER_TEXTURE_HEIGHT = IIGS_BORDER_BAND_ROWS + IIGS_BORDER_SIDE_ROWS
 const IIGS_BORDER_RIGHT_COLUMNS = 7
 const IIGS_BORDER_LEFT_COLUMNS = 6
 // apple2ts' refresh starts inside VBL, so its rows 1-21 and 51-69 are the
 // bottom and top border rows (gssquared's border texture rows 193-213, 243-261).
 const IIGS_BORDER_BOTTOM_START = 1
 const IIGS_BORDER_TOP_START = 51
-const IIGS_BORDER_RASTER_ROWS = 70
+const IIGS_BORDER_RASTER_ROWS = 262
 const IIGS_BORDER_CYCLES = 65 // video cycles per raster line
-// gssquared's border geometry around the 640x200 SHR window.
+// gssquared's border geometry around the 640x200 SHR window. One border row is one
+// video line, so on screen it is exactly as tall as one SHR line - two rows of the
+// 640x400 canvas. The bottom band starts on picture line 192: the demo drops SHR
+// there, so those last picture lines really are border colour, and drawing the band
+// immediately under the window (half-height, 8 lines too low) squashes the marquee.
+const IIGS_SHR_LINES = 200
+const IIGS_BORDER_BOTTOM_PICTURE_LINE = 192
 const IIGS_BORDER_SOURCE_WIDTH = 640
-const IIGS_BORDER_SOURCE_HEIGHT = 400
 const IIGS_BORDER_LEFT_WIDTH = 48
 const IIGS_BORDER_RIGHT_WIDTH = 56
 
@@ -624,17 +634,33 @@ iigsBorderCanvas.height = IIGS_BORDER_TEXTURE_HEIGHT
 export const iigsBorderCycle = (column: number): number =>
   column < IIGS_BORDER_RIGHT_COLUMNS ? column : column + 12
 
-// Row r of the texture is raster line 1 + r for the bottom border and
-// 51 + (r - 21) for the top one.
+// Row r of the texture is raster line 1 + r for the bottom border, 51 + (r - 21)
+// for the top one, and the visible picture rows for the side borders.
 export const iigsBorderRasterLine = (row: number): number =>
   row < IIGS_BORDER_BOTTOM_ROWS
     ? IIGS_BORDER_BOTTOM_START + row
-    : IIGS_BORDER_TOP_START + (row - IIGS_BORDER_BOTTOM_ROWS)
+    : row < IIGS_BORDER_BAND_ROWS
+      ? IIGS_BORDER_TOP_START + (row - IIGS_BORDER_BOTTOM_ROWS)
+      : IIGS_BORDER_SIDE_START + (row - IIGS_BORDER_BAND_ROWS)
+
+// Where the bands go on screen, in pixels from the top of the 640x200 window.
+// gssquared's VPP puts the bottom band's raster lines 193-213 on picture lines
+// 192-212 and the 19 top-border rows on -19..-1, which is why the marquee reaches
+// into the last picture lines instead of starting under them.
+export const iigsBorderLayout = (imgHeight: number) => {
+  const rowHeight = imgHeight / IIGS_SHR_LINES
+  return {
+    rowHeight,
+    bottomTop: IIGS_BORDER_BOTTOM_PICTURE_LINE * rowHeight,
+    topTop: -IIGS_BORDER_TOP_ROWS * rowHeight,
+  }
+}
 
 export type IigsBorderTexture = {
   pixels: Uint8ClampedArray
   bottomPainted: boolean
   topPainted: boolean
+  sidePainted: boolean
 }
 
 // Turn the worker's per-video-cycle border samples into the RGBA texture. Exported
@@ -645,13 +671,19 @@ export const buildIigsBorderTexture = (border: Uint8Array): IigsBorderTexture | 
   const pixels = new Uint8ClampedArray(IIGS_BORDER_COLUMNS * IIGS_BORDER_TEXTURE_HEIGHT * 4)
   let bottomPainted = false
   let topPainted = false
+  let sidePainted = false
   for (let row = 0; row < IIGS_BORDER_TEXTURE_HEIGHT; row++) {
     const base = iigsBorderRasterLine(row) * IIGS_BORDER_CYCLES
     for (let column = 0; column < IIGS_BORDER_COLUMNS; column++) {
       const nibble = border[base + iigsBorderCycle(column)] & 0x0f
       if (nibble) {
         if (row < IIGS_BORDER_BOTTOM_ROWS) bottomPainted = true
-        else topPainted = true
+        else if (row < IIGS_BORDER_BAND_ROWS) topPainted = true
+        // Only the side columns are border: the centre columns of a picture row
+        // are the picture itself and must not make the skin's margins get painted.
+        else if (column < IIGS_BORDER_RIGHT_COLUMNS || column >= IIGS_BORDER_RIGHT_COLUMNS + IIGS_BORDER_LEFT_COLUMNS) {
+          sidePainted = true
+        }
       }
       const [red, green, blue] = loresColors[nibble]
       const index = (row * IIGS_BORDER_COLUMNS + column) * 4
@@ -661,14 +693,14 @@ export const buildIigsBorderTexture = (border: Uint8Array): IigsBorderTexture | 
       pixels[index + 3] = 255
     }
   }
-  return { pixels, bottomPainted, topPainted }
+  return { pixels, bottomPainted, topPainted, sidePainted }
 }
 
 const drawIigsBorder = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
   const texture = buildIigsBorderTexture(handleGetBorder())
   // A border band of pure colour 0 is just black, so leave the skin alone unless
   // something actually painted these rows - most IIgs software never touches $C034.
-  if (!texture || (!texture.bottomPainted && !texture.topPainted)) return
+  if (!texture || (!texture.bottomPainted && !texture.topPainted && !texture.sidePainted)) return
   const borderContext = iigsBorderCanvas.getContext("2d")
   if (!borderContext) return
   const image = borderContext.createImageData(IIGS_BORDER_COLUMNS, IIGS_BORDER_TEXTURE_HEIGHT)
@@ -680,28 +712,37 @@ const drawIigsBorder = (ctx: CanvasRenderingContext2D, width: number, height: nu
   const imgWidth = Math.floor(width * (1 - 2 * xmargin))
   const imgHeight = Math.floor(height * (1 - 2 * ymargin))
   const scale = imgWidth / IIGS_BORDER_SOURCE_WIDTH
-  const rowHeight = imgHeight / IIGS_BORDER_SOURCE_HEIGHT
+  const { rowHeight, bottomTop, topTop } = iigsBorderLayout(imgHeight)
   const leftWidth = IIGS_BORDER_LEFT_WIDTH * scale
   const rightWidth = IIGS_BORDER_RIGHT_WIDTH * scale
   ctx.imageSmoothingEnabled = false
-  const strip = (sourceY: number, sourceRows: number, centreY: number, above: boolean) => {
+  const strip = (sourceY: number, sourceRows: number, top: number) => {
     const stripHeight = sourceRows * rowHeight
-    const y = above ? centreY - stripHeight : centreY
     ctx.drawImage(iigsBorderCanvas, IIGS_BORDER_RIGHT_COLUMNS, sourceY,
       IIGS_BORDER_LEFT_COLUMNS, sourceRows,
-      xmarginPx - leftWidth, y, leftWidth, stripHeight)
+      xmarginPx - leftWidth, top, leftWidth, stripHeight)
     ctx.drawImage(iigsBorderCanvas, IIGS_BORDER_RIGHT_COLUMNS + IIGS_BORDER_LEFT_COLUMNS, sourceY,
       IIGS_BORDER_COLUMNS - IIGS_BORDER_RIGHT_COLUMNS - IIGS_BORDER_LEFT_COLUMNS, sourceRows,
-      xmarginPx, y, imgWidth, stripHeight)
+      xmarginPx, top, imgWidth, stripHeight)
     ctx.drawImage(iigsBorderCanvas, 0, sourceY,
       IIGS_BORDER_RIGHT_COLUMNS, sourceRows,
-      xmarginPx + imgWidth, y, rightWidth, stripHeight)
+      xmarginPx + imgWidth, top, rightWidth, stripHeight)
   }
-  // Below the picture and above it: the scan follows the picture in the refresh,
-  // so the bottom border is the rows right after it and the top border the ones
-  // just before it wraps into the next field.
-  if (texture.bottomPainted) strip(0, IIGS_BORDER_BOTTOM_ROWS, ymarginPx + imgHeight, false)
-  if (texture.topPainted) strip(IIGS_BORDER_BOTTOM_ROWS, IIGS_BORDER_TOP_ROWS, ymarginPx, true)
+  // The scan runs bottom border, blanking, top border, then the picture, so the
+  // bottom band sits on the window's last lines and the top band just above it.
+  if (texture.bottomPainted) strip(0, IIGS_BORDER_BOTTOM_ROWS, ymarginPx + bottomTop)
+  if (texture.topPainted) {
+    strip(IIGS_BORDER_BAND_ROWS - IIGS_BORDER_TOP_ROWS, IIGS_BORDER_TOP_ROWS, ymarginPx + topTop)
+  }
+  if (texture.sidePainted) {
+    const sideHeight = IIGS_BORDER_SIDE_ROWS * rowHeight
+    ctx.drawImage(iigsBorderCanvas, IIGS_BORDER_RIGHT_COLUMNS, IIGS_BORDER_BAND_ROWS,
+      IIGS_BORDER_LEFT_COLUMNS, IIGS_BORDER_SIDE_ROWS,
+      xmarginPx - leftWidth, ymarginPx, leftWidth, sideHeight)
+    ctx.drawImage(iigsBorderCanvas, 0, IIGS_BORDER_BAND_ROWS,
+      IIGS_BORDER_RIGHT_COLUMNS, IIGS_BORDER_SIDE_ROWS,
+      xmarginPx + imgWidth, ymarginPx, rightWidth, sideHeight)
+  }
 }
 
 // For the ghosting effect

@@ -1357,7 +1357,7 @@ test("a IIgs border refresh keeps the $C034 colour written at each beam position
     // The first write of the next refresh seals the one that just ended.
     noteBorderColorWrite(0x00, 100)
     const display = getBorderDisplay()
-    expect(display.length).toBe(70 * BORDER_SAMPLES_PER_ROW)
+    expect(display.length).toBe(262 * BORDER_SAMPLES_PER_ROW)
     expect(display[199]).toBe(0x00)
     expect(display[200]).toBe(0x0f)
     expect(display[259]).toBe(0x0f)

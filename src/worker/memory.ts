@@ -317,13 +317,15 @@ const readIigsVideoCounter = (wantHorz: boolean): number => {
 // at three-cycle spacing across the bottom border rows), so an emulator that only
 // stores $C034 loses the message: apple2ts did, and the menu marquee never showed.
 //
-// Only the rows that carry the border are kept. gssquared's border texture is
-// 263 rows x 53 columns with one sample per video cycle: rows 193-213 are the
-// bottom border, 244-262 the top one, and its refresh runs picture rows 0-191
-// first, then those 70 border/VBL rows. Our refresh starts inside the VBL, so the
-// rows right after the picture (0-69) are gssquared's 192-261: bottom border
-// 1-21, blanking, then top border 51-69.
-const BORDER_ROWS = 70
+// The whole refresh is kept, not just the rows that carry the top and bottom
+// bands: the visible picture rows have their own border colour in the left and
+// right margins (the 48/56 pixels beside the 640-pixel SHR window), and the demo's
+// first screen paints those too - a grey picture inside a black frame means the
+// side borders were never sampled. gssquared's border texture is one sample per
+// video cycle, and our refresh runs the 70 border/VBL rows first (gssquared's
+// 192-261: bottom border 1-21, blanking, then top border 51-69) followed by the
+// 192 visible picture rows 70-261, so the raster rows line up one to one.
+const BORDER_ROWS = 262
 // 65 video cycles per line, spelled out instead of read from motherboard: the two
 // modules import each other, so that constant is still undefined while this module
 // initializes and the buffer below would come out empty.
