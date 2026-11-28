@@ -2517,6 +2517,24 @@ let shrCompleteValid = false
 // Rows already captured for this frame. A store reaching one of these rows
 // happens behind the beam: the capture will never see it again this frame.
 const shrCapturedRows = new Uint8Array(SHR_LINES)
+// Which rows of the refresh are drawn by the VGC's SHR scanner (1) and which by
+// the Mega II's IIe scanner (0). A IIgs raster program can drop $C029 bit 7 for
+// part of the field - the XMAS Demo hides SHR for the bottom scanlines so its
+// classic text marquee shows through - so the displayed picture is a mix and the
+// UI needs the map to know which half of a row it is looking at.
+const shrFrameRowShr = new Uint8Array(SHR_LINES)
+const shrCompleteRowShr = new Uint8Array(SHR_LINES)
+// Did the refresh just ending / in progress draw any SHR row at all? This is
+// latched at the refresh boundary rather than sampled at post time: the beam
+// races $C029 inside VBL, so reading the switch when the state is handed to the
+// UI says "SHR off" half the time and makes the window resize every frame.
+let shrFrameHadShr = false
+let shrCompleteHadShr = false
+// Did any visible line of this refresh get looked at, SHR or not? Needed so a
+// refresh that is entirely IIe (the demo's setup pass, where $C029 bit 7 stays
+// clear for the whole field) can flip the display back to the Mega II picture
+// instead of leaving the last SHR frame on screen.
+let shrFrameHadAny = false
 
 // Called from doReset(): the next SHR frame must start from a full window rather
 // than from whatever the previous machine or session left behind.
@@ -2525,6 +2543,10 @@ export const resetShrBeamFrame = () => {
   shrCompleteValid = false
   shrCapturedRows.fill(0)
   shrLatePainted.fill(0)
+  shrFrameRowShr.fill(0)
+  shrCompleteRowShr.fill(0)
+  shrFrameHadShr = false
+  shrCompleteHadShr = false
 }
 
 // Called at the video refresh boundary, before VBL: the rows captured for the
@@ -2538,12 +2560,27 @@ export const beginShrFrame = () => {
   // loop can start inside one refresh and stop inside the next, so the working
   // buffer can hold the tail of one picture and the head of another; posting the
   // sealed frame is what keeps that torn half-picture off the screen.
-  if (shrBeamValid) {
+  //
+  // The seal is gated on "the refresh drew SHR rows", not on shrBeamValid: a
+  // raster program that drops SHR for the tail of the field (XMAS Demo's classic
+  // text marquee under the logo) leaves the last line captured as IIe, so
+  // shrBeamValid is false at every boundary and the seal never runs - the UI
+  // then keeps re-showing one frozen refresh and every moving part of the demo
+  // (scrolling marquee, snow, stars, the mouse-selected band) stands still.
+  if (shrFrameHadShr) {
     shrCompleteFrame.set(shrBeamFrame)
+    shrCompleteRowShr.set(shrFrameRowShr)
+    shrCompleteHadShr = true
     shrCompleteValid = true
     shrBeamFrame.set(shrCompleteFrame)
+  } else if (shrFrameHadAny) {
+    // A refresh that showed no SHR at all: the display is the IIe picture.
+    shrCompleteHadShr = false
   }
+  shrFrameHadShr = false
+  shrFrameHadAny = false
   shrCapturedRows.fill(0)
+  shrFrameRowShr.fill(0)
 }
 
 // Fold one linear run of the window into the frame. A run always starts on an
@@ -2572,9 +2609,20 @@ export const captureShrBeamLine = (beamLine: number): void => {
     shrDbg.events.push({ pc: -2, offset: beamLine, clock: getIigsVideoClock() })
   }
   if (!isIigsShrActive()) {
-    shrBeamValid = false
+    // The VGC is in IIe mode for this line: the picture on it comes from the
+    // Mega II scanner, not the SHR window. Only the row map changes - the SHR
+    // frame keeps the content it captured while the switch was high, and
+    // shrBeamValid stays set so the next SHR line resumes the capture instead of
+    // re-snapshotting the whole window from live memory mid-frame.
+    shrFrameHadAny = true
+    const ly0 = Math.floor((beamLine * SHR_LINES) / SHR_BEAM_LINES)
+    const ly1 = Math.min(SHR_LINES - 1,
+      Math.max(ly0, Math.floor(((beamLine + 1) * SHR_LINES) / SHR_BEAM_LINES) - 1))
+    for (let y = ly0; y <= ly1; y++) shrFrameRowShr[y] = 0
     return
   }
+  shrFrameHadAny = true
+  shrFrameHadShr = true
   if (!shrBeamValid) {
     // First SHR line since power-on / $C029 going high: take the whole window
     // once so no row keeps the previous session's content.
@@ -2594,6 +2642,7 @@ export const captureShrBeamLine = (beamLine: number): void => {
     const scbOff = 0x7d00 + y
     shrBeamFrame[scbOff] = aux[linear ? iigsAuxLinearToPhys(0x9d00 + y) : 0x9d00 + y]
     shrCapturedRows[y] = 1
+    shrFrameRowShr[y] = 1
   }
   // The palette table is re-read at the start of every line by the real VGC, but
   // it belongs to the whole frame in our renderer, so refresh it once per frame
@@ -2687,6 +2736,17 @@ const noteLateShrStore = (cpuOffset: number, data: number): void => {
   }
 }
 
+// Does the picture on screen come from the VGC's SHR scanner at all? Latched per
+// refresh so it does not follow the mid-VBL $C029 race: querying the switch when
+// the state is handed to the UI made the window flip between the 640x400 SHR
+// geometry and the 560x384 IIe one every frame.
+export const isIigsShrFrameActive = (): boolean => shrFrameHadShr || shrCompleteHadShr
+
+// Per-row picture source of the sealed refresh (see shrCompleteRowShr). The UI
+// draws the 0 rows from the IIe text page so a mixed field composites the way
+// the real VGC does - the XMAS Demo hides SHR under its scrolling marquee.
+export const getShrRowMode = (): Uint8Array => shrCompleteRowShr.slice()
+
 // What the screen shows. Falls back to the raw window while SHR is off, so the
 // legacy Mega II display and classic machines are untouched - and so a frame
 // captured by a previous IIgs session cannot outlive the machine switch.
@@ -2698,7 +2758,7 @@ export const getShrDisplayed = (): Uint8Array =>
 // with the head of the next. The working frame is still what tests and probes
 // inspect while a refresh is in progress; getShrDisplayed() keeps that meaning.
 export const getShrCompletedDisplay = (): Uint8Array =>
-  shrCompleteValid && isIigsShrActive() ? shrCompleteFrame.slice() : getShrDisplayed()
+  shrCompleteValid && isIigsShrFrameActive() ? shrCompleteFrame.slice() : getShrDisplayed()
 
 // The 65816 ROM's live mouse position, as the guest sees it. ROM 01 publishes
 // it in the text-page screen holes ($047C/$057C = X, $04FC/$05FC = Y); ROM 03

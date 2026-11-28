@@ -1077,6 +1077,14 @@ export const handleGetShr = () => {
   return machineState.shr || new Uint8Array()
 }
 
+// Per-row picture source of the SHR refresh the renderer just decoded: 1 = the
+// VGC's SHR scanner drew the row, 0 = the Mega II's IIe scanner did (a IIgs raster
+// program can mix the two inside one field, e.g. the XMAS Demo showing its
+// classic-text scroller under the SHR logo).
+export const handleGetShrRowMode = () => {
+  return machineState.shrRowMode || new Uint8Array()
+}
+
 export const handleGetVidhdActive = () => {
   return !!machineState.vidhdActive
 }

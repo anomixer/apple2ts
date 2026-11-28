@@ -18,11 +18,18 @@ import {
   clearSlot,
   setFloatingBus,
   setSlotIOCallback,
+  beginShrFrame,
+  captureShrBeamLine,
+  getShrCompletedDisplay,
+  getShrRowMode,
+  isIigsShrFrameActive,
+  megaIIAux,
+  resetShrBeamFrame,
 } from "./memory"
 import { hiresLineToAddress, RamWorksMemoryStart } from "../common/utility"
 import { setIsTesting } from "./worker2main"
 import { getApple2State, restoreApple2State } from "./save_restore_worker"
-import { SWITCHES } from "./softswitches"
+import { resetSoftSwitches, SWITCHES } from "./softswitches"
 import { setKeyboardState } from "./devices/keyboard"
 import { createMemoryPredicateMatcher, findMemory, getMemoryView } from "./memory_view"
 
@@ -1241,6 +1248,82 @@ test("an empty slot's $C0n0 I/O returns the floating bus on the Apple II+", () =
     expect(memGet(0xC0B6)).toBe(0x42)
   } finally {
     clearSlot(3)
+    doSetRom("APPLE2EE")
+    memoryReset()
+  }
+})
+
+// The IIgs VGC hands each scanline to either the SHR generator or the Mega II one,
+// so a raster program can drop $C029 bit 7 for the tail of a field: the XMAS Demo
+// does exactly that to show its classic-text scroller under the SHR logo. The seal
+// at the refresh boundary has to run for such a field too - if it does not, the UI
+// keeps re-posting a single frozen refresh and everything that moves inside the
+// picture (snow, stars, the scrolling marquee, a mouse-selected band) stands still.
+const SHR_BEAM_LINES = 192
+
+const fillShrWindow = (value: number) => {
+  for (let i = 0; i < 0x8000; i++) megaIIAux[0x2000 + i] = value
+}
+
+test("a IIgs refresh whose tail is IIe scanlines is still sealed for display", () => {
+  setIsTesting()
+  memoryReset()
+  resetSoftSwitches()
+  doSetRom("APPLE2GS")
+  try {
+    resetShrBeamFrame()
+    fillShrWindow(0xAA)
+    SWITCHES.NEWVIDEO.isSet = true
+    for (let line = 0; line < SHR_BEAM_LINES - 1; line++) captureShrBeamLine(line)
+    // $C029 bit 7 goes away under the logo: the last scanlines are the Mega II's.
+    SWITCHES.NEWVIDEO.isSet = false
+    captureShrBeamLine(SHR_BEAM_LINES - 1)
+    // Anything written now is live memory, not what the beam drew this refresh.
+    fillShrWindow(0x55)
+    beginShrFrame()
+
+    expect(isIigsShrFrameActive()).toBe(true)
+    // The display is the sealed picture, not the live window.
+    expect(getShrCompletedDisplay()[0]).toBe(0xAA)
+    // 200 rows, of which the last two were drawn by the IIe scanner.
+    const rowMode = getShrRowMode()
+    expect(rowMode.length).toBe(200)
+    expect(rowMode.subarray(0, 198).every((v) => v === 1)).toBe(true)
+    expect(rowMode[198]).toBe(0)
+    expect(rowMode[199]).toBe(0)
+  } finally {
+    SWITCHES.NEWVIDEO.isSet = false
+    resetShrBeamFrame()
+    doSetRom("APPLE2EE")
+    memoryReset()
+  }
+})
+
+test("a IIgs refresh with no SHR scanlines puts the IIe picture back on screen", () => {
+  setIsTesting()
+  memoryReset()
+  resetSoftSwitches()
+  doSetRom("APPLE2GS")
+  try {
+    resetShrBeamFrame()
+    fillShrWindow(0xAA)
+    SWITCHES.NEWVIDEO.isSet = true
+    for (let line = 0; line < SHR_BEAM_LINES; line++) captureShrBeamLine(line)
+    beginShrFrame()
+    expect(isIigsShrFrameActive()).toBe(true)
+
+    // A refresh with no SHR scanlines at all (the demo's setup pass): the picture
+    // is the Mega II one, so the previous SHR frame must not stay on screen.
+    SWITCHES.NEWVIDEO.isSet = false
+    for (let line = 0; line < SHR_BEAM_LINES; line++) captureShrBeamLine(line)
+    fillShrWindow(0x55)
+    beginShrFrame()
+
+    expect(isIigsShrFrameActive()).toBe(false)
+    expect(getShrCompletedDisplay()[0]).toBe(0x55)
+  } finally {
+    SWITCHES.NEWVIDEO.isSet = false
+    resetShrBeamFrame()
     doSetRom("APPLE2EE")
     memoryReset()
   }

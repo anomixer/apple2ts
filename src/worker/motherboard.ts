@@ -27,6 +27,8 @@ import { memory, memGet, getTextPage, getHires, memoryReset,
   doSetRom,
   getZeroPage,
   getShrCompletedDisplay,
+  getShrRowMode,
+  isIigsShrFrameActive,
   captureShrBeamLine,
   beginShrFrame,
   resetShrBeamFrame,
@@ -1816,6 +1818,7 @@ export const getExternalMachineState = () => {
     s6502: s6502,
     showDebugTab: showDebugTab,
     shr: getShrCompletedDisplay(),
+    shrRowMode: getShrRowMode(),
     slotConfig: currentSlotConfig,
     softSwitches: getSoftSwitches(),
     speedMode: speedMode,
@@ -1824,7 +1827,11 @@ export const getExternalMachineState = () => {
     timeTravelThumbnails: getTimeTravelThumbnails(),
     tracelog: cpuRunMode === RUN_MODE.PAUSED ? getTracelog() : [],
     veraSlot: veraSlot,
-    vidhdActive: vidhd.active || ((gsROM && gsROM.length > 0) ? SWITCHES.NEWVIDEO.isSet : false),
+    // Latched per refresh, not sampled from $C029: a IIgs raster program races
+    // that switch inside VBL (XMAS Demo drops SHR under its classic marquee), so
+    // reading it when the state is handed over flips the window geometry between
+    // the SHR and IIe pictures every frame.
+    vidhdActive: vidhd.active || ((gsROM && gsROM.length > 0) ? isIigsShrFrameActive() : false),
     zeroPage: getZeroPage(),
   }
   return state

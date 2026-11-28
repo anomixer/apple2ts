@@ -388,6 +388,9 @@ type MachineState = {
   s6502: STATE6502,
   showDebugTab: boolean,
   shr?: Uint8Array,
+  // Per-row picture source of the sealed SHR refresh: 1 = VGC SHR scanner,
+  // 0 = Mega II IIe scanner (a IIgs raster program can mix the two per line).
+  shrRowMode?: Uint8Array,
   slotConfig: SlotConfig,
   softSwitches: import("../worker/softswitches").SoftSwitchStates,
   speedMode: number,

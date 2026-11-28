@@ -2,6 +2,7 @@ import { handleGetAltCharSet, handleGetTextPage,
   handleGetLores, handleGetHires, handleGetNoDelayMode, passSetSoftSwitches,
   handleGetMachineName,
   handleGetShr,
+  handleGetShrRowMode,
   handleGetVidhdActive,
   handleGetSoftSwitches } from "./main2worker"
 import { convertTextPageValueToASCII, COLOR_MODE, TEST_GRAPHICS, hiresLineToAddress, toHex, MONITOR_MODE } from "../common/utility"
@@ -856,8 +857,80 @@ const FILLMODE_INIT = [
   0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xa, 0xb, 0xc, 0xd, 0xe, 0xf,
 ]
 
+// The VGC's scanner hands each scanline to either the SHR generator or the Mega II
+// one, so a IIgs raster program can mix the two modes inside a single field. The
+// XMAS Demo does exactly that: it drops $C029 bit 7 under the logo so its
+// high-ASCII scrolling message appears as classic 40-column text while the rest of
+// the screen stays SHR. The worker latches which rows SHR actually drew; this
+// paints the others from the IIe text page in the same 640x400 space the SHR
+// picture uses (40 columns x 24 lines of 16 x 16.67 pixels).
+const drawIieTextRows = (hiddenContext: CanvasRenderingContext2D, colorMode: COLOR_MODE,
+  backgroundCss?: string | null, foreground?: string | null) => {
+  const rowMode = handleGetShrRowMode()
+  if (!rowMode || rowMode.length < SHR_SOURCE_HEIGHT) return
+  let hasIieRow = false
+  for (let y = 0; y < SHR_SOURCE_HEIGHT; y++) {
+    if (!rowMode[y]) { hasIieRow = true; break }
+  }
+  if (!hasIieRow) return
+  const textPage = handleGetTextPage()
+  if (textPage.length === 0 || textPage instanceof Uint16Array) return
+
+  const switches = handleGetSoftSwitches()
+  // Video-7 RGB text keeps its colours in the second half of each line; that is a
+  // legacy-only path and not worth half-implementing in a 640x400 band.
+  if (switches.DHIRES && !switches.COLUMN80 && switches.STORE80) return
+
+  const nchars = (textPage.length === 320 || textPage.length === 1920) ? 80 : 40
+  const traits = getMachineTraits(handleGetMachineName())
+  const isAltCharSet = traits.hasAltCharSet && handleGetAltCharSet()
+  const hasMouseText = traits.hasMouseText
+  const hasLowerCase = nchars === 80 || traits.hasLowerCase
+  const useApple2PlusMap = nchars !== 80 && traits.usesApple2PlusMap
+  const colorFill = foreground ??
+    ["#FFFFFF", "#FFFFFF", TEXT_GREEN, TEXT_AMBER, TEXT_WHITE, TEXT_WHITE][colorMode]
+  const background = backgroundCss ?? "#000000"
+  const cellW = SHR_WIDTH / nchars
+  const cellH = SHR_HEIGHT / 24
+  const doFlashCycle = (Math.trunc(frameCount / 15) % 2) === 0
+  hiddenContext.font = `${cellH}px ${nchars === 80 ? "PRNumber3" : "PrintChar21"}`
+  for (let j = 0; j < 24; j++) {
+    const y0 = Math.floor((j * SHR_SOURCE_HEIGHT) / 24)
+    const y1 = Math.floor(((j + 1) * SHR_SOURCE_HEIGHT) / 24) - 1
+    let lo = -1
+    let hi = -1
+    for (let y = y0; y <= y1; y++) {
+      if (!rowMode[y]) { if (lo < 0) lo = y; hi = y }
+    }
+    if (lo < 0) continue
+    hiddenContext.save()
+    hiddenContext.beginPath()
+    hiddenContext.rect(0, lo * 2, SHR_WIDTH, (hi - lo + 1) * 2)
+    hiddenContext.clip()
+    hiddenContext.fillStyle = background
+    hiddenContext.fillRect(0, j * cellH, SHR_WIDTH, cellH)
+    for (let i = 0; i < nchars; i++) {
+      const value = textPage[j * nchars + i] ?? 0x20
+      let doInverse = value <= 63
+      if (isAltCharSet) {
+        doInverse = hasMouseText ? ((value <= 63) || (value >= 96 && value <= 127)) : (value <= 127)
+      }
+      const glyph = convertTextPageValueToASCII(
+        value, isAltCharSet, hasMouseText, hasLowerCase, useApple2PlusMap
+      )
+      const inverted = doInverse || colorMode === COLOR_MODE.INVERSEBLACKANDWHITE ||
+        (value < 128 && !isAltCharSet && doFlashCycle)
+      hiddenContext.fillStyle = colorFill
+      if (inverted) hiddenContext.fillRect(i * cellW, j * cellH, cellW, cellH)
+      hiddenContext.fillStyle = inverted ? background : colorFill
+      hiddenContext.fillText(glyph, i * cellW, (j + 1) * cellH - 2)
+    }
+    hiddenContext.restore()
+  }
+}
+
 const processSuperHiRes = (hiddenContext: CanvasRenderingContext2D, colorMode: COLOR_MODE,
-  backgroundCss?: string | null): boolean => {
+  backgroundCss?: string | null, foreground?: string | null): boolean => {
   const shrData = handleGetShr()
   if (shrData.length < 0x8000) return false
 
@@ -988,6 +1061,9 @@ const processSuperHiRes = (hiddenContext: CanvasRenderingContext2D, colorMode: C
 
     const imageData = new ImageData(shrRgbaBuffer, outWidth, outHeight)
     hiddenContext.putImageData(imageData, 0, 0)
+    // Rows the VGC handed to the Mega II scanner are not in the SHR window, so
+    // they come from the IIe text page on top of the SHR picture.
+    drawIieTextRows(hiddenContext, colorMode, backgroundCss, foreground)
     return true
 }
 
@@ -1132,7 +1208,7 @@ export const ProcessDisplay = (ctx: CanvasRenderingContext2D,
   let didDraw = false
   let drewShr = false
   if (isVidhdActive) {
-    didDraw = drewShr = processSuperHiRes(hiddenContext, colorMode, effectBackground)
+    didDraw = drewShr = processSuperHiRes(hiddenContext, colorMode, effectBackground, foreground)
   }
   if (effectBackground && !drewShr) {
     const hiddenData = hiddenContext.getImageData(0, 0, hiddenWidth, hiddenHeight)
