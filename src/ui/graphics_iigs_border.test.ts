@@ -46,8 +46,10 @@ test("border texture maps every painted raster sample to its texture pixel", () 
   // A glossy white stroke across the centre window on the third bottom-border row
   // (raster line 3), exactly what the demo's marquee looks like per refresh.
   for (let cycle = 25; cycle < 37; cycle++) raster[3 * CYCLES_PER_ROW + cycle] = 0x0f
-  // The right border column at hcount 2 carries colour 4 on the first row.
-  raster[1 * CYCLES_PER_ROW + 2] = 0x04
+  // The right border column at hcount 2 carries colour 4 on the first row. That
+  // sample is the tail of the previous video line, i.e. raster line 2's leading
+  // cycles, not raster line 1's.
+  raster[2 * CYCLES_PER_ROW + 2] = 0x04
   // The top border starts at raster line 51: colour 12 down the left border.
   for (let row = 21; row < 39; row++) raster[(51 + row - 21) * CYCLES_PER_ROW + 19] = 0x0c
 
@@ -80,6 +82,10 @@ test("border texture keeps the side borders of the picture rows", () => {
   // The centre window of a picture row is the picture, not border colour.
   for (let line = 70; line < 262; line++) raster[line * CYCLES_PER_ROW + 30] = 0x0f
 
+  // The right border of the last picture row comes from the frame's first line, so
+  // the wrap row has to carry the colour too.
+  for (const cycle of [0, 3, 6]) raster[0 * CYCLES_PER_ROW + cycle] = 0x0a
+
   const texture = buildIigsBorderTexture(raster)
   expect(texture).not.toBeNull()
   expect(texture!.sidePainted).toBe(true)
@@ -90,6 +96,29 @@ test("border texture keeps the side borders of the picture rows", () => {
   // Picture pixels are kept out of the side columns' flag: the centre stays picture.
   // hcount 30 is column 18 (13-52 sample hcount 25-64).
   expect(pixel(texture!, BAND_ROWS, 18)).toEqual([0xff, 0xff, 0xff])
+})
+
+test("the right border is the tail of its own video line, not the previous one", () => {
+  // The right margin of a line is emitted after the line's active dots, so its seven
+  // samples sit in the leading cycles of the NEXT line. Reading them from the same
+  // row put the right border one scanline below the picture: on the X-MAS split demo
+  // the full-width colour bars stepped by one line at the right edge only.
+  const raster = makeRaster()
+  // Line 70's leading cycles are line 69's tail; line 71's are the tail of line 70,
+  // the one that belongs beside the first picture row (texture row BAND_ROWS).
+  raster[70 * CYCLES_PER_ROW + 2] = 0x09 // orange, on the wire at line 69's end
+  raster[71 * CYCLES_PER_ROW + 2] = 0x0a // grey, on the wire at line 70's end
+  // The frame wraps: the last picture line's right border is the start of line 0.
+  raster[0 * CYCLES_PER_ROW + 4] = 0x0c // green
+
+  const texture = buildIigsBorderTexture(raster)
+  expect(texture).not.toBeNull()
+  // Last row of the top band is raster line 69, so its right border is line 70's start.
+  expect(pixel(texture!, BAND_ROWS - 1, 2)).toEqual([0xff, 0x66, 0x00])
+  // First picture row (raster line 70) takes line 71's leading cycles.
+  expect(pixel(texture!, BAND_ROWS, 2)).toEqual([0xaa, 0xaa, 0xaa])
+  // Last picture row is raster line 261, whose tail is line 0's leading cycles.
+  expect(pixel(texture!, BAND_ROWS + 191, 4)).toEqual([0x11, 0xdd, 0x00])
 })
 
 test("border texture is not drawn when the raster was never painted", () => {

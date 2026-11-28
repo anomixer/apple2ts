@@ -673,9 +673,17 @@ export const buildIigsBorderTexture = (border: Uint8Array): IigsBorderTexture | 
   let topPainted = false
   let sidePainted = false
   for (let row = 0; row < IIGS_BORDER_TEXTURE_HEIGHT; row++) {
-    const base = iigsBorderRasterLine(row) * IIGS_BORDER_CYCLES
+    const rasterLine = iigsBorderRasterLine(row)
+    const base = rasterLine * IIGS_BORDER_CYCLES
+    // The right margin of a displayed line is painted at the END of that same line,
+    // which in the 65-cycle grid is the first seven cycles of the next line. Reading
+    // them from this row gave the previous line's colour, so a raster effect like the
+    // X-MAS split demo's full-width bars showed the right border one scanline below
+    // the picture while the left border lined up. The grid wraps at the frame end.
+    const tailBase = ((rasterLine + 1) % IIGS_BORDER_RASTER_ROWS) * IIGS_BORDER_CYCLES
     for (let column = 0; column < IIGS_BORDER_COLUMNS; column++) {
-      const nibble = border[base + iigsBorderCycle(column)] & 0x0f
+      const source = column < IIGS_BORDER_RIGHT_COLUMNS ? tailBase : base
+      const nibble = border[source + iigsBorderCycle(column)] & 0x0f
       if (nibble) {
         if (row < IIGS_BORDER_BOTTOM_ROWS) bottomPainted = true
         else if (row < IIGS_BORDER_BAND_ROWS) topPainted = true
