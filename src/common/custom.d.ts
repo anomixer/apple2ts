@@ -379,6 +379,10 @@ type MachineState = {
   iTempState: number,
   isDebugging: boolean,
   isTracing: boolean,
+  // IIgs border colour ($C034 low nibble) sampled per video cycle for the 70 rows
+  // that carry the border around an SHR field, one nibble per sample, 65 samples
+  // per row. See memory.ts's noteBorderColorWrite().
+  border?: Uint8Array,
   lores: Uint8Array,
   machineName: MACHINE_NAME,
   memoryDump: Uint8Array<ArrayBuffer>,  // use ArrayBuffer so it is assignable to BlobPart/BufferSource

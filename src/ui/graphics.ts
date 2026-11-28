@@ -4,6 +4,7 @@ import { handleGetAltCharSet, handleGetTextPage,
   handleGetShr,
   handleGetShrRowMode,
   handleGetVidhdActive,
+  handleGetBorder,
   handleGetSoftSwitches } from "./main2worker"
 import { convertTextPageValueToASCII, COLOR_MODE, TEST_GRAPHICS, hiresLineToAddress, toHex, MONITOR_MODE } from "../common/utility"
 import { convertColorsToRGBA, getHiresColors, getHiresGreen } from "./graphicshgr"
@@ -585,6 +586,122 @@ const drawImage = (ctx: CanvasRenderingContext2D,
     ctx.font = `${cheight}px "PrintChar21"`
     ctx.fillText(`${"HGR Page " + (doPage2 ? "2" : "1")}`, width / 2, height - 2)
   }
+}
+
+// The IIgs border is not decoration: $C034's low nibble is the border colour and
+// software paints it by writing that register at dot-timed positions while the
+// beam is inside the border rows, so a demo's marquee only exists in those
+// samples. The worker hands over one nibble per video cycle for the 70 rows that
+// carry the border (bottom 21, blanking, top 19), and this maps them the way
+// gssquared's VPP does: a 53-column texture where columns 0-6 are the right
+// border (hcount 0-6), 7-12 the left (hcount 19-24) and 13-52 the centre
+// (hcount 25-64, the 640-pixel SHR window). The XMAS Demo's menu marquee is
+// ~300 dot-timed $C034 stores in the bottom rows; without this it is invisible.
+const IIGS_BORDER_COLUMNS = 53
+const IIGS_BORDER_BOTTOM_ROWS = 21
+const IIGS_BORDER_TOP_ROWS = 19
+const IIGS_BORDER_TEXTURE_HEIGHT = IIGS_BORDER_BOTTOM_ROWS + IIGS_BORDER_TOP_ROWS
+const IIGS_BORDER_RIGHT_COLUMNS = 7
+const IIGS_BORDER_LEFT_COLUMNS = 6
+// apple2ts' refresh starts inside VBL, so its rows 1-21 and 51-69 are the
+// bottom and top border rows (gssquared's border texture rows 193-213, 243-261).
+const IIGS_BORDER_BOTTOM_START = 1
+const IIGS_BORDER_TOP_START = 51
+const IIGS_BORDER_RASTER_ROWS = 70
+const IIGS_BORDER_CYCLES = 65 // video cycles per raster line
+// gssquared's border geometry around the 640x200 SHR window.
+const IIGS_BORDER_SOURCE_WIDTH = 640
+const IIGS_BORDER_SOURCE_HEIGHT = 400
+const IIGS_BORDER_LEFT_WIDTH = 48
+const IIGS_BORDER_RIGHT_WIDTH = 56
+
+const iigsBorderCanvas = document.createElement("canvas")
+iigsBorderCanvas.width = IIGS_BORDER_COLUMNS
+iigsBorderCanvas.height = IIGS_BORDER_TEXTURE_HEIGHT
+
+// Column c of the border texture samples hcount c for the right border and
+// hcount c + 12 everywhere else (7 -> 19 is where the left border starts).
+export const iigsBorderCycle = (column: number): number =>
+  column < IIGS_BORDER_RIGHT_COLUMNS ? column : column + 12
+
+// Row r of the texture is raster line 1 + r for the bottom border and
+// 51 + (r - 21) for the top one.
+export const iigsBorderRasterLine = (row: number): number =>
+  row < IIGS_BORDER_BOTTOM_ROWS
+    ? IIGS_BORDER_BOTTOM_START + row
+    : IIGS_BORDER_TOP_START + (row - IIGS_BORDER_BOTTOM_ROWS)
+
+export type IigsBorderTexture = {
+  pixels: Uint8ClampedArray
+  bottomPainted: boolean
+  topPainted: boolean
+}
+
+// Turn the worker's per-video-cycle border samples into the RGBA texture. Exported
+// so the mapping can be checked without a canvas: a row or column off by one would
+// put the marquee in the wrong place, which looks exactly like "no marquee".
+export const buildIigsBorderTexture = (border: Uint8Array): IigsBorderTexture | null => {
+  if (border.length < IIGS_BORDER_RASTER_ROWS * IIGS_BORDER_CYCLES) return null
+  const pixels = new Uint8ClampedArray(IIGS_BORDER_COLUMNS * IIGS_BORDER_TEXTURE_HEIGHT * 4)
+  let bottomPainted = false
+  let topPainted = false
+  for (let row = 0; row < IIGS_BORDER_TEXTURE_HEIGHT; row++) {
+    const base = iigsBorderRasterLine(row) * IIGS_BORDER_CYCLES
+    for (let column = 0; column < IIGS_BORDER_COLUMNS; column++) {
+      const nibble = border[base + iigsBorderCycle(column)] & 0x0f
+      if (nibble) {
+        if (row < IIGS_BORDER_BOTTOM_ROWS) bottomPainted = true
+        else topPainted = true
+      }
+      const [red, green, blue] = loresColors[nibble]
+      const index = (row * IIGS_BORDER_COLUMNS + column) * 4
+      pixels[index] = red
+      pixels[index + 1] = green
+      pixels[index + 2] = blue
+      pixels[index + 3] = 255
+    }
+  }
+  return { pixels, bottomPainted, topPainted }
+}
+
+const drawIigsBorder = (ctx: CanvasRenderingContext2D, width: number, height: number) => {
+  const texture = buildIigsBorderTexture(handleGetBorder())
+  // A border band of pure colour 0 is just black, so leave the skin alone unless
+  // something actually painted these rows - most IIgs software never touches $C034.
+  if (!texture || (!texture.bottomPainted && !texture.topPainted)) return
+  const borderContext = iigsBorderCanvas.getContext("2d")
+  if (!borderContext) return
+  const image = borderContext.createImageData(IIGS_BORDER_COLUMNS, IIGS_BORDER_TEXTURE_HEIGHT)
+  image.data.set(texture.pixels)
+  borderContext.putImageData(image, 0, 0)
+
+  const xmarginPx = xmargin * width
+  const ymarginPx = ymargin * height
+  const imgWidth = Math.floor(width * (1 - 2 * xmargin))
+  const imgHeight = Math.floor(height * (1 - 2 * ymargin))
+  const scale = imgWidth / IIGS_BORDER_SOURCE_WIDTH
+  const rowHeight = imgHeight / IIGS_BORDER_SOURCE_HEIGHT
+  const leftWidth = IIGS_BORDER_LEFT_WIDTH * scale
+  const rightWidth = IIGS_BORDER_RIGHT_WIDTH * scale
+  ctx.imageSmoothingEnabled = false
+  const strip = (sourceY: number, sourceRows: number, centreY: number, above: boolean) => {
+    const stripHeight = sourceRows * rowHeight
+    const y = above ? centreY - stripHeight : centreY
+    ctx.drawImage(iigsBorderCanvas, IIGS_BORDER_RIGHT_COLUMNS, sourceY,
+      IIGS_BORDER_LEFT_COLUMNS, sourceRows,
+      xmarginPx - leftWidth, y, leftWidth, stripHeight)
+    ctx.drawImage(iigsBorderCanvas, IIGS_BORDER_RIGHT_COLUMNS + IIGS_BORDER_LEFT_COLUMNS, sourceY,
+      IIGS_BORDER_COLUMNS - IIGS_BORDER_RIGHT_COLUMNS - IIGS_BORDER_LEFT_COLUMNS, sourceRows,
+      xmarginPx, y, imgWidth, stripHeight)
+    ctx.drawImage(iigsBorderCanvas, 0, sourceY,
+      IIGS_BORDER_RIGHT_COLUMNS, sourceRows,
+      xmarginPx + imgWidth, y, rightWidth, stripHeight)
+  }
+  // Below the picture and above it: the scan follows the picture in the refresh,
+  // so the bottom border is the rows right after it and the top border the ones
+  // just before it wraps into the next field.
+  if (texture.bottomPainted) strip(0, IIGS_BORDER_BOTTOM_ROWS, ymarginPx + imgHeight, false)
+  if (texture.topPainted) strip(IIGS_BORDER_BOTTOM_ROWS, IIGS_BORDER_TOP_ROWS, ymarginPx, true)
 }
 
 // For the ghosting effect
@@ -1225,6 +1342,9 @@ export const ProcessDisplay = (ctx: CanvasRenderingContext2D,
   } else {
     if (didDraw) {
       drawImage(ctx, hiddenContext, width, height)
+      // The border is part of the IIgs raster, and the demo under test paints its
+      // menu marquee into it, so it has to be drawn around the SHR picture.
+      if (drewShr) drawIigsBorder(ctx, width, height)
     }
     // The hidden canvas was causing overlay issues with the text page.
     // So instead, draw the graphics first and then overlay the text chars.

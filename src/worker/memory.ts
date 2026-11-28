@@ -308,6 +308,65 @@ const readIigsVideoCounter = (wantHorz: boolean): number => {
 }
 
 
+// The IIgs border is part of the raster, not a decoration: $C034's low nibble is
+// the border colour, and software paints it by writing that register at dot-timed
+// positions while the beam is inside the border rows. One refresh of writes is
+// therefore the whole picture, and nothing else in the machine can paint it. The
+// XMAS Demo draws its scrolling message under the X-MAS logo exactly this way
+// (bank-0 routine $43BC: wait for `$C02E == $DF`, drop SHR, then ~300 STX/STZ $34
+// at three-cycle spacing across the bottom border rows), so an emulator that only
+// stores $C034 loses the message: apple2ts did, and the menu marquee never showed.
+//
+// Only the rows that carry the border are kept. gssquared's border texture is
+// 263 rows x 53 columns with one sample per video cycle: rows 193-213 are the
+// bottom border, 244-262 the top one, and its refresh runs picture rows 0-191
+// first, then those 70 border/VBL rows. Our refresh starts inside the VBL, so the
+// rows right after the picture (0-69) are gssquared's 192-261: bottom border
+// 1-21, blanking, then top border 51-69.
+const BORDER_ROWS = 70
+// 65 video cycles per line, spelled out instead of read from motherboard: the two
+// modules import each other, so that constant is still undefined while this module
+// initializes and the buffer below would come out empty.
+const BORDER_CYCLES_PER_ROW = 65
+const BORDER_RASTER_SIZE = BORDER_ROWS * BORDER_CYCLES_PER_ROW
+const borderRaster = new Uint8Array(BORDER_RASTER_SIZE) // refresh being scanned
+const borderDisplay = new Uint8Array(BORDER_RASTER_SIZE) // last complete refresh
+let borderLastCycle = 0
+let borderLastColor = 0
+
+const paintBorderSpan = (from: number, to: number, color: number) => {
+  if (to <= from) return
+  borderRaster.fill(color, Math.max(0, from), Math.min(BORDER_RASTER_SIZE, to))
+}
+
+// Every $C034 write on a IIgs: the colour goes on the wire at the beam position of
+// the write and stays there until the next one, so paint span (previous write, this
+// write) with the previous colour before recording the new one. The beam position
+// is passed in rather than read here so the capture can be exercised directly.
+export const noteBorderColorWrite = (nibble: number, beamCycle: number) => {
+  const scan = Math.max(0, Math.min(VIDEO_CYCLES_PER_FRAME - 1, Math.floor(beamCycle)))
+  if (scan < borderLastCycle) {
+    // A refresh boundary. The colour still on the wire runs to the end of the old
+    // refresh; finish it, hand the completed raster to the renderer, then start
+    // the new refresh already carrying that colour (the register did not reset).
+    paintBorderSpan(borderLastCycle, BORDER_RASTER_SIZE, borderLastColor)
+    borderDisplay.set(borderRaster)
+    borderRaster.fill(borderLastColor)
+    borderLastCycle = 0
+  }
+  paintBorderSpan(borderLastCycle, scan, borderLastColor)
+  borderLastColor = nibble
+  borderLastCycle = scan
+}
+
+export const getBorderDisplay = (): Uint8Array => borderDisplay
+const resetBorderRaster = () => {
+  borderRaster.fill(0)
+  borderDisplay.fill(0)
+  borderLastCycle = 0
+  borderLastColor = 0
+}
+
 // The Sony 3.5" LSS runs off the machine's video clock, not the CPU clock:
 // gssquared Floppy35_woz::head_advance_per_cycle() advances
 // (4 * POSITION_ADV_PER_CYCLE * 16) / optimal_bit_timing = 1024/opt sixty-fourths
@@ -1887,6 +1946,7 @@ const memSetSoftSwitch = (addr: number, value: number) => {
             case 0xC034: // Clock Control + Border Color
                 iigsClock.writeControl(value)
                 iigsRegisters[0x34] = value // Also store for border color
+                if (currentMachineName === "APPLE2GS") noteBorderColorWrite(value & 0x0F, getIigsBeamPos())
                 break
 
             case 0xC036: // SPEED register: bit 7 = 1 → fast (2.8 MHz in native mode)
@@ -2547,6 +2607,7 @@ export const resetShrBeamFrame = () => {
   shrCompleteRowShr.fill(0)
   shrFrameHadShr = false
   shrCompleteHadShr = false
+  resetBorderRaster()
 }
 
 // Called at the video refresh boundary, before VBL: the rows captured for the

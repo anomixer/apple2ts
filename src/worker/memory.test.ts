@@ -25,6 +25,8 @@ import {
   isIigsShrFrameActive,
   megaIIAux,
   resetShrBeamFrame,
+  getBorderDisplay,
+  noteBorderColorWrite,
 } from "./memory"
 import { hiresLineToAddress, RamWorksMemoryStart } from "../common/utility"
 import { setIsTesting } from "./worker2main"
@@ -1323,6 +1325,69 @@ test("a IIgs refresh with no SHR scanlines puts the IIe picture back on screen",
     expect(getShrCompletedDisplay()[0]).toBe(0x55)
   } finally {
     SWITCHES.NEWVIDEO.isSet = false
+    resetShrBeamFrame()
+    doSetRom("APPLE2EE")
+    memoryReset()
+  }
+})
+
+// The IIgs border is not a decoration: $C034's low nibble is the border colour and
+// a raster program paints it by writing that register at dot-timed positions while
+// the beam is in the rows after the picture. The XMAS Demo draws its menu marquee
+// there (~300 stores per refresh across the bottom border rows), so the capture has
+// to keep the colour that is on the wire for every video cycle of those rows and
+// hand the completed refresh to the renderer at the boundary - if it does not, the
+// marquee is invisible no matter what the guest draws.
+const BORDER_SAMPLES_PER_ROW = 65
+
+test("a IIgs border refresh keeps the $C034 colour written at each beam position", () => {
+  setIsTesting()
+  memoryReset()
+  resetSoftSwitches()
+  doSetRom("APPLE2GS")
+  try {
+    resetShrBeamFrame()
+    // Paint 0x0F from video cycle 200 to 260 (the demo's band starts in the first
+    // bottom-border row at three-cycles-per-write spacing), then black again.
+    noteBorderColorWrite(0x0f, 200)
+    noteBorderColorWrite(0x00, 260)
+    // Nothing is handed to the renderer while the refresh is still being scanned.
+    expect(getBorderDisplay().every((v) => v === 0)).toBe(true)
+
+    // The first write of the next refresh seals the one that just ended.
+    noteBorderColorWrite(0x00, 100)
+    const display = getBorderDisplay()
+    expect(display.length).toBe(70 * BORDER_SAMPLES_PER_ROW)
+    expect(display[199]).toBe(0x00)
+    expect(display[200]).toBe(0x0f)
+    expect(display[259]).toBe(0x0f)
+    expect(display[260]).toBe(0x00)
+    // The colour ran to the end of the sealed refresh, not just to the last write.
+    expect(display[display.length - 1]).toBe(0x00)
+  } finally {
+    resetShrBeamFrame()
+    doSetRom("APPLE2EE")
+    memoryReset()
+  }
+})
+
+test("a IIgs border refresh starts already carrying the colour left on the wire", () => {
+  setIsTesting()
+  memoryReset()
+  resetSoftSwitches()
+  doSetRom("APPLE2GS")
+  try {
+    resetShrBeamFrame()
+    // Set a colour late in one refresh, then never change it: the colour runs to
+    // the end of that refresh and the next one starts already carrying it (the
+    // register did not reset), which is what a demo relying on a painted border
+    // sees. Two more writes are enough to seal that second refresh.
+    noteBorderColorWrite(0x0c, 1000)
+    noteBorderColorWrite(0x0c, 10)
+    noteBorderColorWrite(0x0c, 2000)
+    noteBorderColorWrite(0x0c, 5)
+    expect(getBorderDisplay().every((v) => v === 0x0c)).toBe(true)
+  } finally {
     resetShrBeamFrame()
     doSetRom("APPLE2EE")
     memoryReset()

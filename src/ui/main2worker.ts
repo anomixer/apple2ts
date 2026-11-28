@@ -1085,6 +1085,12 @@ export const handleGetShrRowMode = () => {
   return machineState.shrRowMode || new Uint8Array()
 }
 
+// IIgs border colour samples ($C034 low nibble per video cycle) for the 70 rows
+// the border occupies around an SHR field; see drawIigsBorder in graphics.ts.
+export const handleGetBorder = () => {
+  return machineState.border || new Uint8Array()
+}
+
 export const handleGetVidhdActive = () => {
   return !!machineState.vidhdActive
 }
